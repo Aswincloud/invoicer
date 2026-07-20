@@ -15,7 +15,7 @@ database_id = "6e9cc928-6f49-4ea6-a59a-f64de796ad01"
 [vars]
 APP_NAME = "Invoicer"
 RESEND_FROM_EMAIL = "notify@aswincloud.com"
-APP_BASE_URL = "https://invoices.aswincloud.com"
+APP_BASE_URL = "https://invoicer.aswincloud.com"
 
 # Secrets (NOT here — set once via API/dashboard, never committed):
 #   RESEND_API_KEY, AUTH_SIGNING_KEY

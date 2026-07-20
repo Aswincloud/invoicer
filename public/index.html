@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,6 +13,7 @@
     <div class="logo-wrap"><span class="logo">₹</span><b>Invoicer</b></div>
     <div class="actions">
       <span id="who" class="who"></span>
+      <button id="btnTheme" class="btn ghost icon-btn" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
       <button id="btnAuth" class="btn ghost" title="Sign in to save & email">Sign in</button>
       <button id="btnReset" class="btn ghost" title="Start a new blank invoice">New</button>
       <button id="btnSave" class="btn ghost" title="Save to your account" hidden>Save</button>
@@ -89,6 +90,29 @@
     <div id="paper" class="paper"><!-- rendered by app.js --></div>
   </section>
 </main>
+
+<!-- ────── SIGN-IN MODAL ────── -->
+<div id="authModal" class="modal-scrim no-print" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div class="modal-head">
+      <div>
+        <h3 id="authTitle">Sign in to Invoicer</h3>
+        <p class="sub">Save invoices &amp; email them to clients.</p>
+      </div>
+      <button class="close" id="authClose" aria-label="Close">×</button>
+    </div>
+
+    <div id="ssoButtons" class="sso"><!-- provider buttons injected by app.js --></div>
+
+    <div class="divider" id="ssoDivider" hidden>or</div>
+
+    <label>Email
+      <input id="magicEmail" type="email" placeholder="you@company.com" autocomplete="email">
+    </label>
+    <button id="magicSend" class="btn primary" style="width:100%;margin-top:10px;justify-content:center">Email me a sign-in link</button>
+    <div id="authMsg" class="msg" role="status" aria-live="polite"></div>
+  </div>
+</div>
 
 <script src="/app.js"></script>
 </body>

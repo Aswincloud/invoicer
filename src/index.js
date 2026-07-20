@@ -4,6 +4,7 @@ import {
   sendEmail, isEmail,
 } from "./lib.js";
 import { renderInvoiceEmail, computeTotals } from "./invoice-html.js";
+import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
 
 const SESSION_COOKIE = "inv_session";
 const TOKEN_TTL = 15 * 60 * 1000;          // magic link valid 15 min
@@ -47,6 +48,14 @@ async function api(request, env, url) {
   if (p === "/api/auth/request" && m === "POST") return authRequest(env, body);
   if (p === "/api/auth/verify"  && m === "GET")  return authVerify(env, url);
   if (p === "/api/auth/logout"  && m === "POST") return authLogout(request, env);
+  if (p === "/api/auth/providers" && m === "GET") return providersResponse(env);
+
+  // OAuth SSO (Google / GitHub / Microsoft) via @aswincloud/auth
+  let om;
+  if ((om = p.match(/^\/api\/auth\/oauth\/(google|github|microsoft)$/)) && m === "GET")
+    return oauthStart(env, om[1]);
+  if ((om = p.match(/^\/api\/auth\/oauth\/(google|github|microsoft)\/callback$/)) && m === "GET")
+    return oauthCallback(env, om[1], request);
 
   // --- everything below requires a session ---
   const user = await currentUser(request, env);

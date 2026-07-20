@@ -176,9 +176,17 @@ function init(){
 }
 document.addEventListener("DOMContentLoaded", init);
 
-/* ── backend integration (auth + save + email) ─────────────────────
-   Degrades gracefully: with no session, Sign in prompts a magic link;
-   Save/Email stay hidden until authenticated. */
+
+/* ── theme (dark default, persisted) ───────────────────────────── */
+const THEME_KEY = "invoicer.theme";
+function applyTheme(t){ document.documentElement.setAttribute("data-theme", t);
+  try{ localStorage.setItem(THEME_KEY, t); }catch(e){} }
+(function initTheme(){
+  let t="dark"; try{ t=localStorage.getItem(THEME_KEY)||"dark"; }catch(e){}
+  applyTheme(t);
+})();
+
+/* ── backend integration (auth modal + save + email) ───────────── */
 const api = (path, opts={}) =>
   fetch("/api"+path, {credentials:"same-origin",
     headers:{"content-type":"application/json"}, ...opts})
@@ -193,6 +201,14 @@ function collect(){
     items:readItems().filter(i=>i.desc||i.amt).map(i=>({description:i.desc,qty:i.qty,rate:i.rate}))};
 }
 
+// brand SVGs (inline, currentColor where sensible)
+const PROVIDER_SVG = {
+  google:'<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.5 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.9a5 5 0 0 1-2.2 3.3v2.7h3.6c2.1-1.9 3.2-4.8 3.2-7.9z"/><path fill="#34A853" d="M12 23c2.9 0 5.4-1 7.2-2.6l-3.6-2.7c-1 .7-2.3 1.1-3.6 1.1-2.8 0-5.1-1.9-6-4.4H2.3v2.8A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M6 14.4a6.6 6.6 0 0 1 0-4.2V7.4H2.3a11 11 0 0 0 0 9.8L6 14.4z"/><path fill="#EA4335" d="M12 5.4c1.6 0 3 .5 4.1 1.6l3.1-3.1A11 11 0 0 0 2.3 7.4L6 10.2c.9-2.6 3.2-4.8 6-4.8z"/></svg>',
+  github:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2A10 10 0 0 0 8.8 21.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .8.1-.6.3-1.1.6-1.4-2.2-.300000000000004-4.5-1.1-4.5-5a4 4 0 0 1 1-2.7c-.1-.3-.5-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .6 1.4.2 2.4.1 2.7a4 4 0 0 1 1 2.7c0 3.9-2.3 4.7-4.5 5 .3.3.6.9.6 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></svg>',
+  microsoft:'<svg viewBox="0 0 24 24"><path fill="#F25022" d="M2 2h9.5v9.5H2z"/><path fill="#7FBA00" d="M12.5 2H22v9.5h-9.5z"/><path fill="#00A4EF" d="M2 12.5h9.5V22H2z"/><path fill="#FFB900" d="M12.5 12.5H22V22h-9.5z"/></svg>',
+};
+const PROVIDER_LABEL = {google:"Continue with Google",github:"Continue with GitHub",microsoft:"Continue with Microsoft"};
+
 let ME=null;
 async function refreshMe(){
   try{ ME=(await api("/me")).user; }catch(e){ ME=null; }
@@ -200,19 +216,50 @@ async function refreshMe(){
   $("who").textContent = on ? ME.email : "";
   $("btnAuth").textContent = on ? "Sign out" : "Sign in";
   $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
-  // hydrate saved business profile from server (overrides localStorage once logged in)
   if(on && ME.biz){ BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; }); saveBiz(); render(); }
 }
 
+async function openAuthModal(){
+  $("authMsg").textContent=""; $("authMsg").className="msg";
+  // load configured providers -> render SSO buttons
+  const box=$("ssoButtons"); box.innerHTML="";
+  let provs=[];
+  try{ provs=(await api("/auth/providers")).providers||[]; }catch(e){}
+  provs.forEach(p=>{
+    const a=document.createElement("a");
+    a.className="btn"; a.href="/api/auth/oauth/"+p;
+    a.innerHTML=(PROVIDER_SVG[p]||"")+"<span>"+(PROVIDER_LABEL[p]||p)+"</span>";
+    box.appendChild(a);
+  });
+  $("ssoDivider").hidden = provs.length===0;
+  $("magicEmail").value = $("bizEmail").value||"";
+  $("authModal").hidden=false;
+  setTimeout(()=>$("magicEmail").focus(),50);
+}
+function closeAuthModal(){ $("authModal").hidden=true; }
+
 function wireBackend(){
+  $("btnTheme").onclick = () =>
+    applyTheme(document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark");
+
   $("btnAuth").onclick = async () => {
     if(ME){ await api("/auth/logout",{method:"POST"}).catch(()=>{}); ME=null; return refreshMe(); }
-    const email = prompt("Email to sign in (we'll send a magic link):", $("bizEmail").value||"");
-    if(!email) return;
-    try{ const r=await api("/auth/request",{method:"POST",body:JSON.stringify({email})});
-      alert(r.message||"Check your email for the sign-in link."); }
-    catch(e){ alert("Could not send link: "+e.message); }
+    openAuthModal();
   };
+  $("authClose").onclick = closeAuthModal;
+  $("authModal").onclick = (e)=>{ if(e.target===$("authModal")) closeAuthModal(); };
+  document.addEventListener("keydown",(e)=>{ if(e.key==="Escape") closeAuthModal(); });
+
+  $("magicSend").onclick = async () => {
+    const email=$("magicEmail").value.trim();
+    const msg=$("authMsg");
+    if(!email){ msg.className="msg err"; msg.textContent="Enter your email."; return; }
+    msg.className="msg"; msg.textContent="Sending…";
+    try{ const r=await api("/auth/request",{method:"POST",body:JSON.stringify({email})});
+      msg.className="msg ok"; msg.textContent=r.message||"Check your email for the link."; }
+    catch(e){ msg.className="msg err"; msg.textContent="Could not send: "+e.message; }
+  };
+
   $("btnSave").onclick = async () => {
     try{ await api("/profile",{method:"PUT",body:JSON.stringify(collect())}).catch(()=>{});
       const r=await api("/invoices",{method:"POST",body:JSON.stringify(collect())});
@@ -227,10 +274,11 @@ function wireBackend(){
       alert("Invoice emailed to "+to+" ✓"); }
     catch(e){ alert("Email failed: "+e.message); }
   };
-  // show a toast if we just came back from a magic link
+
   const q=new URLSearchParams(location.search).get("auth");
   if(q==="ok") history.replaceState({},"","/");
-  if(q==="invalid") alert("That sign-in link was invalid or expired. Try again.");
+  else if(q && q.startsWith("oauth_")) alert("Sign-in failed: "+q.replace("oauth_","OAuth "));
+  else if(q==="invalid") alert("That sign-in link was invalid or expired.");
   refreshMe();
 }
 document.addEventListener("DOMContentLoaded", wireBackend);
