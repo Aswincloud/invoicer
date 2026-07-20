@@ -175,3 +175,62 @@ function init(){
   render();
 }
 document.addEventListener("DOMContentLoaded", init);
+
+/* ── backend integration (auth + save + email) ─────────────────────
+   Degrades gracefully: with no session, Sign in prompts a magic link;
+   Save/Email stay hidden until authenticated. */
+const api = (path, opts={}) =>
+  fetch("/api"+path, {credentials:"same-origin",
+    headers:{"content-type":"application/json"}, ...opts})
+    .then(async r => { const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.error||r.status); return d; });
+
+function collect(){
+  const v=id=>$(id).value;
+  return {number:v("invNo"),issueDate:v("issueDate"),dueDate:v("dueDate"),
+    currency:v("currency"),taxMode:v("taxMode"),taxRate:v("taxRate"),
+    discount:v("discount"),status:v("status"),notes:v("notes"),
+    clName:v("clName"),clEmail:v("clEmail"),clAddr:v("clAddr"),clGst:v("clGst"),
+    items:readItems().filter(i=>i.desc||i.amt).map(i=>({description:i.desc,qty:i.qty,rate:i.rate}))};
+}
+
+let ME=null;
+async function refreshMe(){
+  try{ ME=(await api("/me")).user; }catch(e){ ME=null; }
+  const on=!!ME;
+  $("who").textContent = on ? ME.email : "";
+  $("btnAuth").textContent = on ? "Sign out" : "Sign in";
+  $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
+  // hydrate saved business profile from server (overrides localStorage once logged in)
+  if(on && ME.biz){ BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; }); saveBiz(); render(); }
+}
+
+function wireBackend(){
+  $("btnAuth").onclick = async () => {
+    if(ME){ await api("/auth/logout",{method:"POST"}).catch(()=>{}); ME=null; return refreshMe(); }
+    const email = prompt("Email to sign in (we'll send a magic link):", $("bizEmail").value||"");
+    if(!email) return;
+    try{ const r=await api("/auth/request",{method:"POST",body:JSON.stringify({email})});
+      alert(r.message||"Check your email for the sign-in link."); }
+    catch(e){ alert("Could not send link: "+e.message); }
+  };
+  $("btnSave").onclick = async () => {
+    try{ await api("/profile",{method:"PUT",body:JSON.stringify(collect())}).catch(()=>{});
+      const r=await api("/invoices",{method:"POST",body:JSON.stringify(collect())});
+      alert("Saved ✓  (total "+$("currency").value+" "+r.total+")"); }
+    catch(e){ alert("Save failed: "+e.message); }
+  };
+  $("btnEmail").onclick = async () => {
+    const to = prompt("Send invoice to (client email):", $("clEmail").value||"");
+    if(!to) return;
+    try{ const s=await api("/invoices",{method:"POST",body:JSON.stringify(collect())});
+      await api("/invoices/"+s.id+"/email",{method:"POST",body:JSON.stringify({to})});
+      alert("Invoice emailed to "+to+" ✓"); }
+    catch(e){ alert("Email failed: "+e.message); }
+  };
+  // show a toast if we just came back from a magic link
+  const q=new URLSearchParams(location.search).get("auth");
+  if(q==="ok") history.replaceState({},"","/");
+  if(q==="invalid") alert("That sign-in link was invalid or expired. Try again.");
+  refreshMe();
+}
+document.addEventListener("DOMContentLoaded", wireBackend);
