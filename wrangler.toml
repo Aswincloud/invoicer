@@ -10,7 +10,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "invoicer-db"
-database_id = "ae270cfe-35e1-49cb-8bfb-fa8ed878c2b7"
+database_id = "6e9cc928-6f49-4ea6-a59a-f64de796ad01"
 
 [vars]
 APP_NAME = "Invoicer"
