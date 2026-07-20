@@ -229,9 +229,12 @@ async function openAuthModal(){
   let provs=[];
   try{ provs=(await api("/auth/providers")).providers||[]; }catch(e){}
   provs.forEach(p=>{
+    // broker returns {id,name}; tolerate a bare "id" string too.
+    const id = typeof p==="string" ? p : p.id;
+    const name = (typeof p==="object" && p.name) ? ("Continue with "+p.name) : (PROVIDER_LABEL[id]||id);
     const a=document.createElement("a");
-    a.className="btn"; a.href="/api/auth/oauth/"+p;
-    a.innerHTML=(PROVIDER_SVG[p]||"")+"<span>"+(PROVIDER_LABEL[p]||p)+"</span>";
+    a.className="btn"; a.href="/api/auth/oauth/"+id;
+    a.innerHTML=(PROVIDER_SVG[id]||"")+"<span>"+name+"</span>";
     box.appendChild(a);
   });
   $("ssoDivider").hidden = provs.length===0;

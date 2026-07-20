@@ -23,8 +23,13 @@ export default {
 };
 
 // ── auth helpers ─────────────────────────────────────────────────
+// One session-signing key for BOTH magic-link and broker OAuth, so a session
+// validates no matter how it was created. Prefer the broker-provisioned
+// SESSION_SECRET; fall back to AUTH_SIGNING_KEY where the broker isn't wired.
+const sessionKey = (env) => env.SESSION_SECRET || env.AUTH_SIGNING_KEY;
+
 async function currentUser(request, env) {
-  const secret = env.AUTH_SIGNING_KEY;
+  const secret = sessionKey(env);
   if (!secret) return null;
   const raw = parseCookies(request)[SESSION_COOKIE];
   if (!raw) return null;
@@ -144,7 +149,7 @@ async function authVerify(env, url) {
   await env.DB.prepare(
     "INSERT INTO sessions (id,user_id,created_at,expires_at) VALUES (?,?,?,?)"
   ).bind(sid, user.id, now(), now() + SESSION_TTL).run();
-  const signed = await sign(sid, env.AUTH_SIGNING_KEY);
+  const signed = await sign(sid, sessionKey(env));
 
   return new Response(null, {
     status: 302,
@@ -156,7 +161,7 @@ async function authVerify(env, url) {
 }
 
 async function authLogout(request, env) {
-  const secret = env.AUTH_SIGNING_KEY;
+  const secret = sessionKey(env);
   const raw = parseCookies(request)[SESSION_COOKIE];
   if (raw && secret) {
     const sid = await unsign(raw, secret);
