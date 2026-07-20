@@ -14,6 +14,7 @@
     <div class="actions">
       <span id="who" class="who"></span>
       <button id="btnTheme" class="btn ghost icon-btn" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
+      <button id="btnSettings" class="btn ghost icon-btn" title="Default settings" aria-label="Settings" hidden>⚙</button>
       <button id="btnAuth" class="btn ghost" title="Sign in to save & email">Sign in</button>
       <button id="btnReset" class="btn ghost" title="Start a new blank invoice">New</button>
       <button id="btnSave" class="btn ghost" title="Save to your account" hidden>Save</button>
@@ -111,6 +112,51 @@
     </label>
     <button id="magicSend" class="btn primary" style="width:100%;margin-top:10px;justify-content:center">Email me a sign-in link</button>
     <div id="authMsg" class="msg" role="status" aria-live="polite"></div>
+  </div>
+</div>
+
+<!-- ────── SETTINGS MODAL (defaults for logged-in users) ────── -->
+<div id="setModal" class="modal-scrim no-print" hidden>
+  <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="setTitle">
+    <div class="modal-head">
+      <div>
+        <h3 id="setTitle">Default settings</h3>
+        <p class="sub">Saved to your account and pre-filled on every new invoice.</p>
+      </div>
+      <button class="close" id="setClose" aria-label="Close">×</button>
+    </div>
+
+    <div class="set-section">Business profile</div>
+    <div class="grid2">
+      <label>Business name<input id="setBizName" placeholder="Aswin Cloud Labs"></label>
+      <label>Email<input id="setBizEmail" type="email" placeholder="billing@aswincloud.com"></label>
+      <label class="col2">Address<textarea id="setBizAddr" rows="2"></textarea></label>
+      <label>Phone<input id="setBizPhone"></label>
+      <label>GSTIN / Tax ID<input id="setBizGst"></label>
+      <label class="col2">Payment details<textarea id="setBizPay" rows="2"></textarea></label>
+    </div>
+
+    <div class="set-section">Invoice defaults</div>
+    <div class="grid2">
+      <label>Currency<select id="setCurrency">
+        <option value="">— none —</option><option value="₹">₹ INR</option><option value="$">$ USD</option>
+        <option value="€">€ EUR</option><option value="£">£ GBP</option>
+      </select></label>
+      <label>Invoice # prefix<input id="setPrefix" placeholder="INV"></label>
+      <label>Tax mode<select id="setTaxMode">
+        <option value="">— none —</option><option value="gst">CGST + SGST</option>
+        <option value="single">Single tax</option><option value="none">No tax</option>
+      </select></label>
+      <label>Tax rate %<input id="setTaxRate" type="number" min="0" max="100" step="0.01" placeholder="18"></label>
+      <label>Discount %<input id="setDiscount" type="number" min="0" max="100" step="0.01" placeholder="0"></label>
+      <label>Due in (days)<input id="setDueDays" type="number" min="0" step="1" placeholder="14"></label>
+      <label class="col2">Default notes / terms<textarea id="setNotes" rows="2" placeholder="Net 14 days. Thank you!"></textarea></label>
+    </div>
+
+    <div class="set-actions">
+      <button id="setSave" class="btn primary">Save settings</button>
+      <span id="setMsg" class="msg" role="status" aria-live="polite"></span>
+    </div>
   </div>
 </div>
 

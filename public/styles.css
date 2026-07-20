@@ -136,3 +136,11 @@ table.lines tbody tr:nth-child(even){background:#f8f9fc}
   .paper{border:none;box-shadow:none;border-radius:0;padding:0}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* Settings modal (wider, scrollable) */
+.modal-lg{max-width:560px;max-height:88vh;overflow:auto}
+.set-section{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);
+  font-weight:700;margin:20px 0 2px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.set-section:first-of-type{margin-top:18px}
+.set-actions{display:flex;align-items:center;gap:14px;margin-top:20px}
+.set-actions .btn{min-width:130px;justify-content:center}

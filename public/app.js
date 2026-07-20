@@ -216,7 +216,10 @@ async function refreshMe(){
   $("who").textContent = on ? ME.email : "";
   $("btnAuth").textContent = on ? "Sign out" : "Sign in";
   $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
-  if(on && ME.biz){ BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; }); saveBiz(); render(); }
+  $("btnSettings").hidden = !on;
+  if(on && ME.biz){ BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; }); saveBiz(); }
+  if(on) applyDefaults(ME.defaults);
+  render();
 }
 
 async function openAuthModal(){
@@ -282,3 +285,63 @@ function wireBackend(){
   refreshMe();
 }
 document.addEventListener("DOMContentLoaded", wireBackend);
+
+/* ── settings / per-user invoice defaults ──────────────────────── */
+const SET_FIELDS = {  // modal field id -> defaults key
+  setCurrency:"currency", setPrefix:"prefix", setTaxMode:"taxMode",
+  setTaxRate:"taxRate", setDiscount:"discount", setDueDays:"dueDays", setNotes:"notes",
+};
+const SET_BIZ = { setBizName:"bizName", setBizEmail:"bizEmail", setBizAddr:"bizAddr",
+  setBizPhone:"bizPhone", setBizGst:"bizGst", setBizPay:"bizPay" };
+
+// Apply saved defaults to a fresh invoice. Only fills fields the user left at
+// their generic default, so it never clobbers something already typed.
+function applyDefaults(d){
+  if(!d) return;
+  if(d.currency) $("currency").value = d.currency;
+  if(d.taxMode)  $("taxMode").value  = d.taxMode;
+  if(d.taxRate!=="" && d.taxRate!=null) $("taxRate").value = d.taxRate;
+  if(d.discount!=="" && d.discount!=null) $("discount").value = d.discount;
+  if(d.notes && !$("notes").value) $("notes").value = d.notes;
+  if(d.dueDays!=="" && d.dueDays!=null){
+    const n=parseInt(d.dueDays,10); if(Number.isFinite(n)) $("dueDate").value = todayISO(n);
+  }
+  if(d.prefix){
+    // rewrite the auto invoice number with the user's prefix
+    $("invNo").value = d.prefix + "-" + new Date().getFullYear() + "-" +
+      String(Math.floor(Math.random()*9000)+1000);
+  }
+  render();
+}
+
+function openSettings(){
+  if(!ME) return;
+  $("setMsg").textContent=""; $("setMsg").className="msg";
+  const b=ME.biz||{}, d=ME.defaults||{};
+  for(const [id,k] of Object.entries(SET_BIZ)) $(id).value = b[k]||"";
+  for(const [id,k] of Object.entries(SET_FIELDS)) $(id).value = (d[k]!=null?d[k]:"");
+  $("setModal").hidden=false;
+}
+function closeSettings(){ $("setModal").hidden=true; }
+
+async function saveSettings(){
+  const msg=$("setMsg"); msg.className="msg"; msg.textContent="Saving…";
+  const biz={}; for(const [id,k] of Object.entries(SET_BIZ)) biz[k]=$(id).value;
+  const defaults={}; for(const [id,k] of Object.entries(SET_FIELDS)) defaults[k]=$(id).value;
+  try{
+    await api("/profile",{method:"PUT",body:JSON.stringify({...biz, defaults})});
+    ME.biz={...ME.biz,...biz}; ME.defaults=defaults;
+    // reflect business fields into the live form + localStorage immediately
+    BIZ_FIELDS.forEach(f=>{ if(biz[f]!=null) $(f).value=biz[f]; }); saveBiz(); render();
+    msg.className="msg ok"; msg.textContent="Saved ✓";
+    setTimeout(closeSettings, 700);
+  }catch(e){ msg.className="msg err"; msg.textContent="Save failed: "+e.message; }
+}
+
+function wireSettings(){
+  $("btnSettings").onclick = openSettings;
+  $("setClose").onclick = closeSettings;
+  $("setModal").onclick = (e)=>{ if(e.target===$("setModal")) closeSettings(); };
+  $("setSave").onclick = saveSettings;
+}
+document.addEventListener("DOMContentLoaded", wireSettings);
