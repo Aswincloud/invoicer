@@ -1,0 +1,15 @@
+{
+  "name": "invoicer",
+  "version": "0.1.0",
+  "description": "Simple invoice generator — create, preview, download and email invoices. Cloudflare Pages + Functions + D1.",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler pages dev public --d1=DB=invoicer-db --compatibility-date=2026-07-01",
+    "db:migrate:local": "wrangler d1 migrations apply invoicer-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply invoicer-db --remote",
+    "deploy": "wrangler pages deploy public --project-name=invoicer"
+  },
+  "devDependencies": {
+    "wrangler": "^4.103.0"
+  }
+}

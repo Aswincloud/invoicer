@@ -1,0 +1,16 @@
+name = "invoicer"
+compatibility_date = "2026-07-01"
+pages_build_output_dir = "public"
+
+# D1 database binding (created at deploy time; id filled in after `wrangler d1 create`)
+[[d1_databases]]
+binding = "DB"
+database_name = "invoicer-db"
+database_id = "PLACEHOLDER_SET_AFTER_D1_CREATE"
+
+# Vars (non-secret). Secrets (RESEND_API_KEY, AUTH_SIGNING_KEY) are set via:
+#   wrangler pages secret put RESEND_API_KEY
+[vars]
+APP_NAME = "Invoicer"
+RESEND_FROM_EMAIL = "notify@aswincloud.com"
+APP_BASE_URL = "https://invoices.aswincloud.com"

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invoicer — create invoices easily</title>
+<meta name="description" content="Create, preview, download and email professional invoices in seconds.">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar no-print">
+  <div class="topbar-in">
+    <div class="logo-wrap"><span class="logo">₹</span><b>Invoicer</b></div>
+    <div class="actions">
+      <button id="btnReset" class="btn ghost" title="Start a new blank invoice">New</button>
+      <button id="btnPrint" class="btn primary" title="Download / print as PDF">Download PDF</button>
+    </div>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ────── FORM ────── -->
+  <section class="form no-print" aria-label="Invoice editor">
+    <details open class="grp">
+      <summary>Your business <span class="hint">(saved on this device)</span></summary>
+      <div class="grid2">
+        <label>Business name<input id="bizName" placeholder="Aswin Cloud Labs"></label>
+        <label>Email<input id="bizEmail" type="email" placeholder="billing@aswincloud.com"></label>
+        <label class="col2">Address<textarea id="bizAddr" rows="2" placeholder="Puducherry, India"></textarea></label>
+        <label>Phone<input id="bizPhone" placeholder="+91 90000 00000"></label>
+        <label>GSTIN / Tax ID<input id="bizGst" placeholder="34ABCDE1234F1Z9"></label>
+        <label class="col2">Payment details<textarea id="bizPay" rows="2" placeholder="A/C 1234… · IFSC … · UPI aswincloud@hdfcbank"></textarea></label>
+      </div>
+    </details>
+
+    <details open class="grp">
+      <summary>Bill to</summary>
+      <div class="grid2">
+        <label>Client name<input id="clName" placeholder="Nova Retail Pvt. Ltd."></label>
+        <label>Client email<input id="clEmail" type="email" placeholder="priya@novaretail.com"></label>
+        <label class="col2">Client address<textarea id="clAddr" rows="2" placeholder="14 MG Road, Bengaluru 560001"></textarea></label>
+        <label>Client GSTIN<input id="clGst" placeholder="29ABCDE1234F1Z5"></label>
+      </div>
+    </details>
+
+    <details open class="grp">
+      <summary>Invoice details</summary>
+      <div class="grid2">
+        <label>Invoice #<input id="invNo" placeholder="INV-2026-0042"></label>
+        <label>Currency<select id="currency">
+          <option value="₹">₹ INR</option><option value="$">$ USD</option>
+          <option value="€">€ EUR</option><option value="£">£ GBP</option><option value="">(none)</option>
+        </select></label>
+        <label>Issue date<input id="issueDate" type="date"></label>
+        <label>Due date<input id="dueDate" type="date"></label>
+      </div>
+    </details>
+
+    <details open class="grp">
+      <summary>Line items</summary>
+      <div id="items"></div>
+      <button id="btnAddItem" class="btn ghost sm">+ Add line item</button>
+    </details>
+
+    <details open class="grp">
+      <summary>Totals &amp; tax</summary>
+      <div class="grid2">
+        <label>Discount %<input id="discount" type="number" min="0" max="100" step="0.01" value="0"></label>
+        <label>Tax mode<select id="taxMode">
+          <option value="gst">CGST + SGST (split)</option>
+          <option value="single">Single tax (e.g. IGST/VAT)</option>
+          <option value="none">No tax</option>
+        </select></label>
+        <label>Tax rate %<input id="taxRate" type="number" min="0" max="100" step="0.01" value="18"></label>
+        <label>Status<select id="status">
+          <option>UNPAID</option><option>PAID</option><option>DUE</option><option>DRAFT</option>
+        </select></label>
+        <label class="col2">Notes / terms<textarea id="notes" rows="2" placeholder="Net 14 days. Thank you for your business!"></textarea></label>
+      </div>
+    </details>
+  </section>
+
+  <!-- ────── LIVE PREVIEW ────── -->
+  <section class="preview-wrap" aria-label="Invoice preview">
+    <div id="paper" class="paper"><!-- rendered by app.js --></div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
