@@ -135,13 +135,15 @@ async function authVerify(env, url) {
   await env.DB.prepare("UPDATE login_tokens SET used_at=? WHERE token=?")
     .bind(now(), token).run();
 
-  // find or create user
-  let user = await env.DB.prepare("SELECT * FROM users WHERE email=?")
-    .bind(row.email).first();
+  // find or create user (case-insensitive match; row.email is already lowercased
+  // at request time, and OAuth lowercases too — so both methods share one row).
+  const email = (row.email || "").trim().toLowerCase();
+  let user = await env.DB.prepare("SELECT * FROM users WHERE lower(email)=?")
+    .bind(email).first();
   if (!user) {
     const id = uid();
     await env.DB.prepare("INSERT INTO users (id,email,created_at) VALUES (?,?,?)")
-      .bind(id, row.email, now()).run();
+      .bind(id, email, now()).run();
     user = { id };
   }
 

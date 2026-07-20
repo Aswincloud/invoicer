@@ -111,7 +111,10 @@ export async function oauthCallback(env, provider, request) {
   });
   if (!allowed) return fail("oauth_denied");
 
-  const email = claims.email;
+  // Normalize the email the SAME way magic-link does (trim + lowercase), so a
+  // provider that returns mixed-case (GitHub/Microsoft) still maps to the one
+  // account. Lookups use lower(email) to also match any pre-existing row.
+  const email = (claims.email || "").trim().toLowerCase();
   const provId = claims.provider || provider;
   const providerUserId = claims.providerUserId || email; // fallback keeps link stable
 
@@ -120,9 +123,9 @@ export async function oauthCallback(env, provider, request) {
   let userId = (await env.DB.prepare(
     "SELECT user_id FROM oauth_identities WHERE provider=? AND provider_user_id=?"
   ).bind(provId, providerUserId).first())?.user_id;
-  // 2) match by email?
+  // 2) match by email (case-insensitive)?
   if (!userId) {
-    const u = await env.DB.prepare("SELECT id FROM users WHERE email=?").bind(email).first();
+    const u = await env.DB.prepare("SELECT id FROM users WHERE lower(email)=?").bind(email).first();
     if (u) userId = u.id;
   }
   // 3) brand new?
