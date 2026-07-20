@@ -36,6 +36,16 @@
     <details open class="grp">
       <summary>Your business <span class="hint">(saved on this device)</span></summary>
       <div class="grid2">
+        <div class="col2 logo-field">
+          <span class="logo-lbl">Logo <span class="hint">(shown atop the invoice)</span></span>
+          <div class="logo-row">
+            <img id="logoPreview" class="logo-thumb" alt="" hidden>
+            <div id="logoPlaceholder" class="logo-thumb logo-empty">—</div>
+            <input id="logoFile" type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden>
+            <button type="button" id="logoPick" class="btn ghost sm">Upload logo</button>
+            <button type="button" id="logoClear" class="btn ghost sm" hidden>Remove</button>
+          </div>
+        </div>
         <label>Business name<input id="bizName" placeholder="Aswin Cloud Labs"></label>
         <label>Email<input id="bizEmail" type="email" placeholder="billing@aswincloud.com"></label>
         <label class="col2">Address<textarea id="bizAddr" rows="2" placeholder="Puducherry, India"></textarea></label>

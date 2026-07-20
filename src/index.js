@@ -86,7 +86,8 @@ async function api(request, env, url) {
 const publicUser = (u) => ({
   id: u.id, email: u.email,
   biz: { bizName: u.biz_name, bizEmail: u.biz_email, bizAddr: u.biz_addr,
-         bizPhone: u.biz_phone, bizGst: u.biz_gst, bizPay: u.biz_pay },
+         bizPhone: u.biz_phone, bizGst: u.biz_gst, bizPay: u.biz_pay,
+         bizLogo: u.biz_logo || "" },
   defaults: {
     currency: u.def_currency || "", taxMode: u.def_tax_mode || "",
     taxRate: u.def_tax_rate || "", discount: u.def_discount || "",
@@ -174,10 +175,11 @@ async function authLogout(request, env) {
 async function saveProfile(env, user, b) {
   const d = b.defaults || {};
   await env.DB.prepare(
-    `UPDATE users SET biz_name=?,biz_email=?,biz_addr=?,biz_phone=?,biz_gst=?,biz_pay=?,
+    `UPDATE users SET biz_name=?,biz_email=?,biz_addr=?,biz_phone=?,biz_gst=?,biz_pay=?,biz_logo=?,
        def_currency=?,def_tax_mode=?,def_tax_rate=?,def_discount=?,def_notes=?,def_due_days=?,def_prefix=?
      WHERE id=?`
   ).bind(b.bizName||"", b.bizEmail||"", b.bizAddr||"", b.bizPhone||"", b.bizGst||"", b.bizPay||"",
+         String(b.bizLogo||"").slice(0, 200000),
          d.currency||"", d.taxMode||"", d.taxRate||"", d.discount||"", d.notes||"",
          String(d.dueDays||""), d.prefix||"", user.id).run();
   return json({ ok: true });

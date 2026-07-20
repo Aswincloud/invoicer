@@ -8,6 +8,10 @@ const BIZ_KEY = "invoicer.biz.v1";
 
 // Fields that make up the reusable "your business" profile.
 const BIZ_FIELDS = ["bizName","bizEmail","bizAddr","bizPhone","bizGst","bizPay"];
+
+// Optional business logo (data-URL). Not a form <input>, so it's tracked
+// separately from BIZ_FIELDS and persisted alongside them.
+let BIZ_LOGO = "";
 // All fields we re-render the preview from.
 const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clAddr","clGst",
   "invNo","currency","issueDate","dueDate","discount","taxMode","taxRate","status","notes"];
@@ -89,7 +93,9 @@ function render(){
   $("paper").innerHTML =
 `<div class="ph">
   <div class="brand">
-    <div class="plogo">${esc(initial)}</div>
+    ${BIZ_LOGO
+      ? `<img class="plogo-img" src="${esc(BIZ_LOGO)}" alt="${esc(v("bizName")||"Logo")}">`
+      : `<div class="plogo">${esc(initial)}</div>`}
     <h1>${esc(v("bizName")||"Your Business")}</h1>
     <p>${esc(v("bizAddr"))}</p>
     <p>${esc(v("bizPhone"))}${v("bizPhone")&&v("bizEmail")?" · ":""}${esc(v("bizEmail"))}</p>
@@ -136,15 +142,95 @@ ${v("notes")?`<div class="pfoot"><div class="lbl">Notes / Terms</div><p>${esc(v(
 <div class="pnote">Generated with Invoicer · ${esc(v("bizEmail")||"")}</div>`;
 }
 
+// ── logo upload (downscaled to a data-URL) ───────────────────────
+const LOGO_MAX = 320;         // px — longest edge; keeps the stored string small
+const LOGO_MAX_BYTES = 180000; // ~180KB data-URL ceiling (server caps at 200KB)
+
+// Read a File, downscale via canvas, return a data-URL. SVGs pass through as-is
+// (vector — no raster step) but are still size-checked.
+function fileToLogo(file){
+  return new Promise((resolve, reject) => {
+    if(!file) return reject(new Error("no file"));
+    if(!/^image\//.test(file.type)) return reject(new Error("Please choose an image file."));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the file."));
+    if(file.type === "image/svg+xml"){
+      reader.onload = () => {
+        const s = String(reader.result||"");
+        if(s.length > LOGO_MAX_BYTES) return reject(new Error("SVG is too large (max ~180KB)."));
+        resolve(s);
+      };
+      return reader.readAsDataURL(file);
+    }
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("That image couldn't be loaded."));
+      img.onload = () => {
+        const scale = Math.min(1, LOGO_MAX/Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width*scale));
+        const h = Math.max(1, Math.round(img.height*scale));
+        const c = document.createElement("canvas"); c.width=w; c.height=h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        // PNG preserves transparency; good default for logos.
+        let out = c.toDataURL("image/png");
+        if(out.length > LOGO_MAX_BYTES) out = c.toDataURL("image/jpeg", 0.85); // fallback: smaller
+        if(out.length > LOGO_MAX_BYTES) return reject(new Error("Logo is too large after resizing. Try a simpler image."));
+        resolve(out);
+      };
+      img.src = String(reader.result||"");
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Reflect BIZ_LOGO into the business-form thumbnail + buttons.
+function syncLogoUI(){
+  const img=$("logoPreview"), ph=$("logoPlaceholder"), clr=$("logoClear");
+  if(!img) return;
+  if(BIZ_LOGO){ img.src=BIZ_LOGO; img.hidden=false; ph.hidden=true; clr.hidden=false; }
+  else { img.hidden=true; ph.hidden=false; clr.hidden=true; }
+}
+
+function wireLogo(){
+  const pick=$("logoPick"), file=$("logoFile"), clr=$("logoClear");
+  if(!pick) return;
+  pick.onclick = () => file.click();
+  file.onchange = async () => {
+    const f = file.files && file.files[0];
+    file.value = ""; // allow re-picking the same file
+    if(!f) return;
+    try{
+      BIZ_LOGO = await fileToLogo(f);
+      saveBiz(); syncLogoUI(); render();
+      if(ME) persistLogo();   // logged in → also save to the account
+    }catch(e){ alert(e.message || "Could not use that logo."); }
+  };
+  clr.onclick = () => {
+    BIZ_LOGO = ""; saveBiz(); syncLogoUI(); render();
+    if(ME) persistLogo();
+  };
+}
+
+// Push the current profile (incl. logo) to the account, best-effort.
+async function persistLogo(){
+  if(!ME) return;
+  const biz={}; BIZ_FIELDS.forEach(f=>biz[f]=$(f).value); biz.bizLogo=BIZ_LOGO;
+  try{ await api("/profile",{method:"PUT",body:JSON.stringify({...biz, defaults: ME.defaults||{}})}); }
+  catch(e){ /* non-fatal; stays in localStorage */ }
+}
+document.addEventListener("DOMContentLoaded", wireLogo);
+
 // ── persistence (business profile only) ──────────────────────────
 function saveBiz(){
   const data = {}; BIZ_FIELDS.forEach(f => data[f] = $(f).value);
+  data.bizLogo = BIZ_LOGO;
   try{ localStorage.setItem(BIZ_KEY, JSON.stringify(data)); }catch(e){}
 }
 function loadBiz(){
   try{
     const d = JSON.parse(localStorage.getItem(BIZ_KEY)||"{}");
     BIZ_FIELDS.forEach(f => { if(d[f]!=null) $(f).value = d[f]; });
+    if(typeof d.bizLogo==="string") BIZ_LOGO = d.bizLogo;
   }catch(e){}
 }
 
@@ -152,6 +238,7 @@ function loadBiz(){
 function todayISO(d=0){ const t=new Date(); t.setDate(t.getDate()+d); return t.toISOString().slice(0,10); }
 function init(){
   loadBiz();
+  syncLogoUI();
   if(!$("issueDate").value) $("issueDate").value = todayISO(0);
   if(!$("dueDate").value)   $("dueDate").value   = todayISO(14);
   if(!$("invNo").value)     $("invNo").value = "INV-" + new Date().getFullYear() + "-" +
@@ -217,7 +304,11 @@ async function refreshMe(){
   $("btnAuth").textContent = on ? "Sign out" : "Sign in";
   $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
   $("btnSettings").hidden = !on;
-  if(on && ME.biz){ BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; }); saveBiz(); }
+  if(on && ME.biz){
+    BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; });
+    if(typeof ME.biz.bizLogo==="string" && ME.biz.bizLogo) BIZ_LOGO=ME.biz.bizLogo;
+    saveBiz(); syncLogoUI();
+  }
   if(on) applyDefaults(ME.defaults);
   render();
 }
