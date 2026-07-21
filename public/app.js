@@ -5,6 +5,7 @@
 
 const $ = (id) => document.getElementById(id);
 const BIZ_KEY = "invoicer.biz.v1";
+const LOGIN_EMAIL_KEY = "invoicer.loginEmail.v1"; // last sign-in identity (≠ business email)
 
 // Fields that make up the reusable "your business" profile.
 const BIZ_FIELDS = ["bizName","bizEmail","bizAddr","bizPhone","bizGst","bizPay"];
@@ -300,6 +301,9 @@ let ME=null;
 async function refreshMe(){
   try{ ME=(await api("/me")).user; }catch(e){ ME=null; }
   const on=!!ME;
+  // Remember the identity we're signed in as (covers SSO too), so the login
+  // modal can prefill it next time — independent of the business email.
+  if(on && ME.email){ try{ localStorage.setItem(LOGIN_EMAIL_KEY, ME.email.toLowerCase()); }catch(_){} }
   $("who").textContent = on ? ME.email : "";
   $("btnAuth").textContent = on ? "Sign out" : "Sign in";
   $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
@@ -329,7 +333,10 @@ async function openAuthModal(){
     box.appendChild(a);
   });
   $("ssoDivider").hidden = provs.length===0;
-  $("magicEmail").value = $("bizEmail").value||"";
+  // Prefill the LOGIN email (the identity you sign in as), NOT the business
+  // email printed on invoices — they're different. Use the last email you
+  // logged in with, remembered locally.
+  $("magicEmail").value = (ME && ME.email) || localStorage.getItem(LOGIN_EMAIL_KEY) || "";
   $("authModal").hidden=false;
   setTimeout(()=>$("magicEmail").focus(),50);
 }
@@ -353,6 +360,7 @@ function wireBackend(){
     if(!email){ msg.className="msg err"; msg.textContent="Enter your email."; return; }
     msg.className="msg"; msg.textContent="Sending…";
     try{ const r=await api("/auth/request",{method:"POST",body:JSON.stringify({email})});
+      try{ localStorage.setItem(LOGIN_EMAIL_KEY, email.toLowerCase()); }catch(_){}
       msg.className="msg ok"; msg.textContent=r.message||"Check your email for the link."; }
     catch(e){ msg.className="msg err"; msg.textContent="Could not send: "+e.message; }
   };
