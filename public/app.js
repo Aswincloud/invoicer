@@ -223,12 +223,23 @@ function wireLogo(){
   wireLogoTrio("setLogoPick", "setLogoFile", "setLogoClear"); // settings modal
 }
 
-// Push the current profile (incl. logo) to the account, best-effort.
-async function persistLogo(){
+// Push the current business profile (fields + logo) to the account, best-effort.
+// Defaults are preserved from ME so we never blank them. No-op when signed out.
+async function persistProfile(){
   if(!ME) return;
   const biz={}; BIZ_FIELDS.forEach(f=>biz[f]=$(f).value); biz.bizLogo=BIZ_LOGO;
+  ME.biz = {...(ME.biz||{}), ...biz, bizLogo: BIZ_LOGO}; // keep local mirror fresh
   try{ await api("/profile",{method:"PUT",body:JSON.stringify({...biz, defaults: ME.defaults||{}})}); }
   catch(e){ /* non-fatal; stays in localStorage */ }
+}
+const persistLogo = persistProfile; // logo pick/clear reuse the same push
+
+// Debounced variant for typing in the business form, so we don't PUT on every keystroke.
+let _profileTimer=null;
+function persistProfileDebounced(){
+  if(!ME) return;
+  clearTimeout(_profileTimer);
+  _profileTimer=setTimeout(persistProfile, 800);
 }
 document.addEventListener("DOMContentLoaded", wireLogo);
 
@@ -260,7 +271,10 @@ function init(){
   addItem("Consulting services","10","2500");
 
   ALL_FIELDS.forEach(f => $(f).addEventListener("input", render));
-  BIZ_FIELDS.forEach(f => $(f).addEventListener("input", saveBiz));
+  // Business fields persist locally always, and to the account (debounced) when
+  // signed in — so a logged-in user's profile lives in the cloud DB, not just
+  // this device.
+  BIZ_FIELDS.forEach(f => $(f).addEventListener("input", () => { saveBiz(); persistProfileDebounced(); }));
   $("btnAddItem").onclick = () => { addItem(); render(); };
   $("btnPrint").onclick = () => window.print();
   $("btnReset").onclick = () => {
@@ -320,6 +334,7 @@ async function refreshMe(){
   $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
   $("btnSettings").hidden = !on;
   $("btnInvoices").hidden = !on;
+  $("bizHint").textContent = on ? "(synced to your account)" : "(saved on this device)";
   if(on && ME.biz){
     BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; });
     if(typeof ME.biz.bizLogo==="string" && ME.biz.bizLogo) BIZ_LOGO=ME.biz.bizLogo;
