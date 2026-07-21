@@ -20,6 +20,7 @@
     <div class="actions">
       <span id="who" class="who"></span>
       <button id="btnTheme" class="btn ghost icon-btn" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
+      <button id="btnInvoices" class="btn ghost" title="Your saved invoices" hidden>Invoices</button>
       <button id="btnSettings" class="btn ghost icon-btn" title="Default settings" aria-label="Settings" hidden>⚙</button>
       <button id="btnAuth" class="btn ghost" title="Sign in to save & email">Sign in</button>
       <button id="btnReset" class="btn ghost" title="Start a new blank invoice">New</button>
@@ -173,6 +174,20 @@
       <button id="setSave" class="btn primary">Save settings</button>
       <span id="setMsg" class="msg" role="status" aria-live="polite"></span>
     </div>
+  </div>
+</div>
+
+<!-- ────── MY INVOICES DASHBOARD ────── -->
+<div id="invModal" class="modal-scrim no-print" hidden>
+  <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="invTitle">
+    <div class="modal-head">
+      <div>
+        <h3 id="invTitle">My Invoices</h3>
+        <p class="sub">Saved to your account. Open one to edit, re-download, or email it.</p>
+      </div>
+      <button class="close" id="invClose" aria-label="Close">×</button>
+    </div>
+    <div id="invList" class="inv-list"><!-- rows injected by app.js --></div>
   </div>
 </div>
 

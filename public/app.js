@@ -308,6 +308,7 @@ async function refreshMe(){
   $("btnAuth").textContent = on ? "Sign out" : "Sign in";
   $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
   $("btnSettings").hidden = !on;
+  $("btnInvoices").hidden = !on;
   if(on && ME.biz){
     BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; });
     if(typeof ME.biz.bizLogo==="string" && ME.biz.bizLogo) BIZ_LOGO=ME.biz.bizLogo;
@@ -366,8 +367,10 @@ function wireBackend(){
   };
 
   $("btnSave").onclick = async () => {
-    try{ await api("/profile",{method:"PUT",body:JSON.stringify(collect())}).catch(()=>{});
-      const r=await api("/invoices",{method:"POST",body:JSON.stringify(collect())});
+    // Save = create the invoice only. (Business profile / defaults are owned by
+    // the Settings modal; do NOT PUT /profile here — collect() has no biz fields
+    // and would blank them out.)
+    try{ const r=await api("/invoices",{method:"POST",body:JSON.stringify(collect())});
       alert("Saved ✓  (total "+$("currency").value+" "+r.total+")"); }
     catch(e){ alert("Save failed: "+e.message); }
   };
@@ -447,3 +450,111 @@ function wireSettings(){
   $("setSave").onclick = saveSettings;
 }
 document.addEventListener("DOMContentLoaded", wireSettings);
+
+/* ── My Invoices dashboard ─────────────────────────────────────── */
+function invAmt(cur, total){
+  const n = Number(total)||0;
+  const loc = cur === "₹" ? "en-IN" : "en-US";
+  return (cur ? cur+" " : "") + n.toLocaleString(loc, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function invDate(s){ return s || "—"; }
+
+async function openInvoices(){
+  if(!ME) return;
+  const box = $("invList");
+  box.innerHTML = `<div class="inv-loading">Loading…</div>`;
+  $("invModal").hidden = false;
+  try{
+    const { invoices } = await api("/invoices");
+    renderInvoiceList(invoices || []);
+  }catch(e){
+    box.innerHTML = `<div class="inv-empty">Couldn't load invoices: ${esc(e.message)}</div>`;
+  }
+}
+function closeInvoices(){ $("invModal").hidden = true; }
+
+function renderInvoiceList(list){
+  const box = $("invList");
+  if(!list.length){
+    box.innerHTML = `<div class="inv-empty">No saved invoices yet.<br>Create one, then hit <b>Save</b>.</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  list.forEach(inv => {
+    const st = (inv.status||"").toUpperCase();
+    const row = document.createElement("div");
+    row.className = "inv-row";
+    row.innerHTML =
+      `<div class="inv-main">
+         <div class="inv-num">${esc(inv.number||"(no number)")}</div>
+         <div class="inv-sub">${esc(inv.client_name||"—")} · ${esc(invDate(inv.issue_date))}
+           ${st?` · <span class="inv-badge ${esc(st)}">${esc(st)}</span>`:""}</div>
+       </div>
+       <div class="inv-right">
+         <span class="inv-amt">${esc(invAmt(inv.currency, inv.total))}</span>
+         <div class="inv-acts">
+           <button class="btn ghost open">Open</button>
+           <button class="btn ghost email">Email</button>
+           <button class="btn ghost del">Delete</button>
+         </div>
+       </div>`;
+    row.querySelector(".open").onclick  = () => openInvoiceInEditor(inv.id);
+    row.querySelector(".email").onclick = () => emailSavedInvoice(inv);
+    row.querySelector(".del").onclick   = () => deleteSavedInvoice(inv, row);
+    box.appendChild(row);
+  });
+}
+
+// Load a saved invoice back into the editor form + preview.
+async function openInvoiceInEditor(id){
+  try{
+    const { inv, items } = await api("/invoices/"+id);
+    // client + invoice fields
+    $("invNo").value    = inv.number || "";
+    $("issueDate").value= inv.issue_date || "";
+    $("dueDate").value  = inv.due_date || "";
+    $("currency").value = inv.currency || "₹";
+    $("taxMode").value  = inv.tax_mode || "gst";
+    $("taxRate").value  = inv.tax_rate ?? "";
+    $("discount").value = inv.discount_pct ?? "";
+    $("status").value   = (inv.status || "UNPAID");
+    $("notes").value    = inv.notes || "";
+    $("clName").value   = inv.client_name || "";
+    $("clEmail").value  = inv.client_email || "";
+    $("clAddr").value   = inv.client_addr || "";
+    $("clGst").value    = inv.client_gst || "";
+    // line items
+    $("items").innerHTML = "";
+    (items.length ? items : [{description:"",qty:1,rate:""}]).forEach(it =>
+      addItem(it.description||"", String(it.qty ?? ""), it.rate!=null ? String(it.rate) : ""));
+    render();
+    closeInvoices();
+    window.scrollTo({top:0, behavior:"smooth"});
+  }catch(e){ alert("Couldn't open invoice: "+e.message); }
+}
+
+async function emailSavedInvoice(inv){
+  const to = prompt("Send invoice "+(inv.number||"")+" to (client email):", inv.client_email||"");
+  if(!to) return;
+  try{
+    await api("/invoices/"+inv.id+"/email",{method:"POST",body:JSON.stringify({to})});
+    alert("Invoice emailed to "+to+" ✓");
+  }catch(e){ alert("Email failed: "+e.message); }
+}
+
+async function deleteSavedInvoice(inv, row){
+  if(!confirm("Delete invoice "+(inv.number||"")+"? This can't be undone.")) return;
+  try{
+    await api("/invoices/"+inv.id,{method:"DELETE"});
+    row.remove();
+    if(!$("invList").querySelector(".inv-row"))
+      $("invList").innerHTML = `<div class="inv-empty">No saved invoices yet.</div>`;
+  }catch(e){ alert("Delete failed: "+e.message); }
+}
+
+function wireInvoices(){
+  $("btnInvoices").onclick = openInvoices;
+  $("invClose").onclick = closeInvoices;
+  $("invModal").onclick = (e)=>{ if(e.target===$("invModal")) closeInvoices(); };
+}
+document.addEventListener("DOMContentLoaded", wireInvoices);
