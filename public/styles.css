@@ -156,6 +156,8 @@ table.lines tbody tr:nth-child(even){background:#f8f9fc}
 .logo-thumb{width:46px;height:46px;border-radius:10px;object-fit:contain;
   background:var(--surface-2);border:1px solid var(--line);flex:none}
 .logo-empty{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:18px}
+/* display:flex above beats the default [hidden]; restore hiding for logo tiles */
+.logo-row [hidden]{display:none!important}
 
 /* My Invoices dashboard */
 .inv-list{margin-top:16px;display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow:auto}
