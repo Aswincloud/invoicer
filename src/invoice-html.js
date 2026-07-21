@@ -55,7 +55,7 @@ export function renderInvoiceEmail(inv, items) {
    <td align="right" valign="top" style="padding:16px 0">
      <div style="font-size:26px;font-weight:bold;color:#4f46e5;letter-spacing:2px">INVOICE</div>
      <div style="font-size:12px;color:#374151;margin-top:6px">
-       Invoice # <b>${esc(inv.number)}</b><br>Issue: <b>${esc(inv.issue_date)}</b><br>Due: <b>${esc(inv.due_date)}</b>
+       Invoice # <b>${esc(inv.number)}</b><br>Issue: <b>${esc(inv.issue_date)}</b>${inv.due_date ? `<br>Due: <b>${esc(inv.due_date)}</b>` : ""}
      </div>
    </td></tr>
   </table>

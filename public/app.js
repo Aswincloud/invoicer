@@ -263,7 +263,8 @@ function init(){
   loadBiz();
   syncLogoUI();
   if(!$("issueDate").value) $("issueDate").value = todayISO(0);
-  if(!$("dueDate").value)   $("dueDate").value   = todayISO(14);
+  // Due date is optional — left blank by default. A user's Settings "due in
+  // days" default (applyDefaults) will fill it if they've set one.
   if(!$("invNo").value)     $("invNo").value = "INV-" + new Date().getFullYear() + "-" +
       String(Math.floor(Math.random()*9000)+1000);
 
@@ -282,7 +283,7 @@ function init(){
     ["clName","clEmail","clAddr","clGst","notes"].forEach(f=>$(f).value="");
     $("items").innerHTML=""; addItem();
     $("invNo").value = "INV-"+new Date().getFullYear()+"-"+String(Math.floor(Math.random()*9000)+1000);
-    $("issueDate").value=todayISO(0); $("dueDate").value=todayISO(14);
+    $("issueDate").value=todayISO(0); $("dueDate").value="";  // due date optional
     render();
   };
   render();
