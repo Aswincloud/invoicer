@@ -40,7 +40,7 @@ body{font-family:"Plus Jakarta Sans",system-ui,Arial,sans-serif;font-size:14px;
 .btn.ghost{background:transparent;color:var(--muted)}
 .btn.ghost:hover{color:var(--ink);background:var(--surface-2)}
 .btn.sm{padding:7px 12px;font-size:12.5px}
-.icon-btn{width:38px;height:38px;padding:0;justify-content:center}
+.icon-btn{width:38px;height:38px;padding:0;justify-content:center;font-size:19px;line-height:1}
 
 /* Layout */
 .layout{max-width:1240px;margin:0 auto;padding:22px;display:grid;grid-template-columns:390px 1fr;gap:22px;align-items:start}
