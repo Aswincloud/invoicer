@@ -145,6 +145,16 @@
 
     <div class="set-section">Business profile</div>
     <div class="grid2">
+      <div class="col2 logo-field">
+        <span class="logo-lbl">Logo <span class="hint">(shown atop the invoice)</span></span>
+        <div class="logo-row">
+          <img id="setLogoPreview" class="logo-thumb" alt="" hidden>
+          <div id="setLogoPlaceholder" class="logo-thumb logo-empty">—</div>
+          <input id="setLogoFile" type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden>
+          <button type="button" id="setLogoPick" class="btn ghost sm">Upload logo</button>
+          <button type="button" id="setLogoClear" class="btn ghost sm" hidden>Remove</button>
+        </div>
+      </div>
       <label>Business name<input id="setBizName" placeholder="Aswin Cloud Labs"></label>
       <label>Email<input id="setBizEmail" type="email" placeholder="billing@aswincloud.com"></label>
       <label class="col2">Address<textarea id="setBizAddr" rows="2"></textarea></label>

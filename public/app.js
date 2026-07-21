@@ -184,16 +184,22 @@ function fileToLogo(file){
   });
 }
 
-// Reflect BIZ_LOGO into the business-form thumbnail + buttons.
+// Reflect BIZ_LOGO into a thumbnail + buttons. Runs for BOTH the main business
+// form (logo*) and the settings modal (setLogo*), since either may be present.
 function syncLogoUI(){
-  const img=$("logoPreview"), ph=$("logoPlaceholder"), clr=$("logoClear");
-  if(!img) return;
-  if(BIZ_LOGO){ img.src=BIZ_LOGO; img.hidden=false; ph.hidden=true; clr.hidden=false; }
-  else { img.hidden=true; ph.hidden=false; clr.hidden=true; }
+  [["logoPreview","logoPlaceholder","logoClear"],
+   ["setLogoPreview","setLogoPlaceholder","setLogoClear"]].forEach(([pv,ph,cl])=>{
+    const img=$(pv); if(!img) return;
+    const place=$(ph), clr=$(cl);
+    if(BIZ_LOGO){ img.src=BIZ_LOGO; img.hidden=false; place.hidden=true; clr.hidden=false; }
+    else { img.hidden=true; place.hidden=false; clr.hidden=true; }
+  });
 }
 
-function wireLogo(){
-  const pick=$("logoPick"), file=$("logoFile"), clr=$("logoClear");
+// Wire one pick/file/clear trio to the shared BIZ_LOGO. Both the main form and
+// the settings modal call this with their own element ids.
+function wireLogoTrio(pickId, fileId, clrId){
+  const pick=$(pickId), file=$(fileId), clr=$(clrId);
   if(!pick) return;
   pick.onclick = () => file.click();
   file.onchange = async () => {
@@ -210,6 +216,11 @@ function wireLogo(){
     BIZ_LOGO = ""; saveBiz(); syncLogoUI(); render();
     if(ME) persistLogo();
   };
+}
+
+function wireLogo(){
+  wireLogoTrio("logoPick", "logoFile", "logoClear");        // main business form
+  wireLogoTrio("setLogoPick", "setLogoFile", "setLogoClear"); // settings modal
 }
 
 // Push the current profile (incl. logo) to the account, best-effort.
@@ -425,6 +436,7 @@ function openSettings(){
   const b=ME.biz||{}, d=ME.defaults||{};
   for(const [id,k] of Object.entries(SET_BIZ)) $(id).value = b[k]||"";
   for(const [id,k] of Object.entries(SET_FIELDS)) $(id).value = (d[k]!=null?d[k]:"");
+  syncLogoUI();   // show the current logo in the modal's thumbnail
   $("setModal").hidden=false;
 }
 function closeSettings(){ $("setModal").hidden=true; }
@@ -432,6 +444,7 @@ function closeSettings(){ $("setModal").hidden=true; }
 async function saveSettings(){
   const msg=$("setMsg"); msg.className="msg"; msg.textContent="Saving…";
   const biz={}; for(const [id,k] of Object.entries(SET_BIZ)) biz[k]=$(id).value;
+  biz.bizLogo = BIZ_LOGO;   // include the logo so saving Settings doesn't blank it
   const defaults={}; for(const [id,k] of Object.entries(SET_FIELDS)) defaults[k]=$(id).value;
   try{
     await api("/profile",{method:"PUT",body:JSON.stringify({...biz, defaults})});
