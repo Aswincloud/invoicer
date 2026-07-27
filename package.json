@@ -5,10 +5,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler pages dev public --d1=DB=invoicer-db --compatibility-date=2026-07-01",
+    "dev": "wrangler dev",
     "db:migrate:local": "wrangler d1 migrations apply invoicer-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply invoicer-db --remote",
-    "deploy": "wrangler pages deploy public --project-name=invoicer"
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "^4.103.0"
