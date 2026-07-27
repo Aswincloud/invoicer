@@ -67,10 +67,27 @@ export function cookie(name, value, { maxAge = 60 * 60 * 24 * 30, del = false } 
   return parts.join("; ");
 }
 
+// Build a Resend `from` header. The verified address is fixed (RESEND_FROM_EMAIL);
+// only the display name varies. Strip characters that could break the header or
+// smuggle a second address (quotes, angle brackets, commas, newlines).
+function fromHeader(env, name) {
+  const addr = env.RESEND_FROM_EMAIL || "notify@aswincloud.com";
+  const clean = String(name || "").replace(/[<>",;\r\n]/g, " ").trim().slice(0, 78);
+  return clean ? `${clean} <${addr}>` : addr;
+}
+
 // ── Resend email (NOTE: User-Agent header is REQUIRED or Resend 403s /1010) ──
-export async function sendEmail(env, { to, subject, html, text }) {
+// `fromName` is an optional display name; `attachments` is an optional array of
+// { filename, content } where content is base64 (Resend's attachment format).
+export async function sendEmail(env, { to, subject, html, text, fromName, attachments }) {
   const key = env.RESEND_API_KEY;
   if (!key) return { ok: false, error: "RESEND_API_KEY not set" };
+  const payload = {
+    from: fromHeader(env, fromName),
+    to: Array.isArray(to) ? to : [to],
+    subject, html, text,
+  };
+  if (Array.isArray(attachments) && attachments.length) payload.attachments = attachments;
   const r = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -78,11 +95,7 @@ export async function sendEmail(env, { to, subject, html, text }) {
       "Content-Type": "application/json",
       "User-Agent": "invoicer/1.0 (+cloudflare-worker)",
     },
-    body: JSON.stringify({
-      from: env.RESEND_FROM_EMAIL || "notify@aswincloud.com",
-      to: Array.isArray(to) ? to : [to],
-      subject, html, text,
-    }),
+    body: JSON.stringify(payload),
   });
   if (r.ok) return { ok: true, id: (await r.json().catch(() => ({}))).id };
   return { ok: false, status: r.status, error: await r.text().catch(() => "") };

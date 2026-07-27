@@ -110,6 +110,7 @@ async function authRequest(env, body) {
   const link = `${env.APP_BASE_URL}/api/auth/verify?token=${token}`;
   const res = await sendEmail(env, {
     to: email,
+    fromName: "Invoicer",
     subject: "Your Invoicer sign-in link",
     text: `Sign in to Invoicer:\n${link}\n\nThis link expires in 15 minutes. If you didn't request it, ignore this email.`,
     html: `<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px">
@@ -238,6 +239,7 @@ async function loadInvoice(env, user, id) {
   Object.assign(inv, {
     biz_name: user.biz_name, biz_email: user.biz_email, biz_addr: user.biz_addr,
     biz_phone: user.biz_phone, biz_gst: user.biz_gst, biz_pay: user.biz_pay,
+    biz_logo: user.biz_logo || "",
   });
   return { inv, items: results || [] };
 }
@@ -261,11 +263,25 @@ async function emailInvoice(env, user, id, b) {
   if (!isEmail(to)) return bad("valid recipient email required");
 
   const html = renderInvoiceEmail(r.inv, r.items);
+
+  // Optional PDF, rendered client-side and sent as base64. Accept it only if it
+  // looks like a real base64 PDF within a sane size (Resend caps ~40MB; we keep
+  // it much smaller). If anything's off, drop the attachment and still send.
+  let attachments;
+  const pdf = typeof b.pdfBase64 === "string" ? b.pdfBase64.trim() : "";
+  if (pdf && pdf.length < 8_000_000 && /^[A-Za-z0-9+/=]+$/.test(pdf)) {
+    const safeNum = String(r.inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
+    attachments = [{ filename: `${safeNum}.pdf`, content: pdf }];
+  }
+
+  const bizName = user.biz_name ? user.biz_name.trim() : "";
   const res = await sendEmail(env, {
     to,
-    subject: b.subject || `Invoice ${r.inv.number} from ${user.biz_name || "us"}`,
+    fromName: `${bizName || "Invoicer"} Billing`,
+    subject: b.subject || `Invoice ${r.inv.number} from ${bizName || "us"}`,
     html,
     text: `Invoice ${r.inv.number}. Total ${r.inv.currency} ${r.inv.total}. View the HTML version in an email client.`,
+    attachments,
   });
   if (!res.ok) return bad("email failed: " + (res.error || res.status), 502);
   return json({ ok: true, id: res.id });
