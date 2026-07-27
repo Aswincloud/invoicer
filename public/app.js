@@ -136,7 +136,7 @@ function render(){
 
 <div class="totbox"><table>
   <tr><td>Subtotal</td><td class="r">${fmt(t.subtotal)}</td></tr>
-  ${t.disc?`<tr><td>Discount</td><td class="r">– ${fmt(t.disc)}</td></tr><tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
+  ${t.disc?`<tr><td>Discount (${num($("discount").value)}%)</td><td class="r">– ${fmt(t.disc)}</td></tr><tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
   ${taxHtml}
   <tr class="grand"><td>Total ${cur?`(${cur})`:""}</td><td class="r">${fmt(t.total)}</td></tr>
 </table></div>
@@ -317,6 +317,63 @@ function collect(){
     items:readItems().filter(i=>i.desc||i.amt).map(i=>({description:i.desc,qty:i.qty,rate:i.rate}))};
 }
 
+// ── PDF of the on-screen invoice (for email attachment) ──────────
+// Libs are loaded on first use so the page stays light for everyone who never
+// emails. If the CDN is unreachable or rendering fails, callers fall back to
+// sending the email without the attachment.
+const _scriptCache = {};
+function loadScript(src){
+  return _scriptCache[src] || (_scriptCache[src] = new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.async = true;
+    s.onload = res; s.onerror = () => rej(new Error("Failed to load "+src));
+    document.head.appendChild(s);
+  }));
+}
+async function ensurePdfLibs(){
+  if(!window.html2canvas)
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+  if(!(window.jspdf && window.jspdf.jsPDF))
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+}
+
+// Rasterize #paper and lay it into an A4 PDF, slicing across pages if the
+// invoice is tall. Returns base64 (no data-URL prefix). Throws on failure.
+async function renderInvoicePdfBase64(){
+  await ensurePdfLibs();
+  const canvas = await html2canvas($("paper"),
+    {scale:2, backgroundColor:"#ffffff", useCORS:true, logging:false});
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:"pt", format:"a4"});
+  const margin = 32;
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const imgW = pageW - margin*2;
+  const imgH = canvas.height * imgW / canvas.width;
+  // JPEG, not PNG: the invoice is white with text, so JPEG is ~10× smaller with
+  // no visible loss — keeps the attachment well under the server's size cap.
+  const img = canvas.toDataURL("image/jpeg", 0.92);
+  const usable = pageH - margin*2;
+  let position = 0, heightLeft = imgH;
+  doc.addImage(img, "JPEG", margin, margin, imgW, imgH);
+  heightLeft -= usable;
+  while(heightLeft > 0){
+    position -= usable;
+    doc.addPage();
+    doc.addImage(img, "JPEG", margin, margin + position, imgW, imgH);
+    heightLeft -= usable;
+  }
+  const uri = doc.output("datauristring");     // data:application/pdf;...,<base64>
+  return uri.slice(uri.indexOf(",")+1);
+}
+
+// Soft-fail wrapper: returns base64 PDF, or "" if it couldn't be produced.
+// Server treats an empty/omitted pdfBase64 as "no attachment".
+async function tryRenderPdf(){
+  try{ return await renderInvoicePdfBase64(); }
+  catch(e){ console.warn("PDF render failed; sending without attachment:", e); return ""; }
+}
+
 // brand SVGs (inline, currentColor where sensible)
 const PROVIDER_SVG = {
   google:'<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.5 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.9a5 5 0 0 1-2.2 3.3v2.7h3.6c2.1-1.9 3.2-4.8 3.2-7.9z"/><path fill="#34A853" d="M12 23c2.9 0 5.4-1 7.2-2.6l-3.6-2.7c-1 .7-2.3 1.1-3.6 1.1-2.8 0-5.1-1.9-6-4.4H2.3v2.8A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M6 14.4a6.6 6.6 0 0 1 0-4.2V7.4H2.3a11 11 0 0 0 0 9.8L6 14.4z"/><path fill="#EA4335" d="M12 5.4c1.6 0 3 .5 4.1 1.6l3.1-3.1A11 11 0 0 0 2.3 7.4L6 10.2c.9-2.6 3.2-4.8 6-4.8z"/></svg>',
@@ -406,10 +463,12 @@ function wireBackend(){
   $("btnEmail").onclick = async () => {
     const to = prompt("Send invoice to (client email):", $("clEmail").value||"");
     if(!to) return;
-    try{ const s=await api("/invoices",{method:"POST",body:JSON.stringify(collect())});
-      await api("/invoices/"+s.id+"/email",{method:"POST",body:JSON.stringify({to})});
-      alert("Invoice emailed to "+to+" ✓"); }
-    catch(e){ alert("Email failed: "+e.message); }
+    try{
+      const s=await api("/invoices",{method:"POST",body:JSON.stringify(collect())});
+      const pdfBase64 = await tryRenderPdf();   // attach PDF if it renders
+      await api("/invoices/"+s.id+"/email",{method:"POST",body:JSON.stringify({to, pdfBase64})});
+      alert("Invoice emailed to "+to+" ✓"+(pdfBase64?" (PDF attached)":""));
+    }catch(e){ alert("Email failed: "+e.message); }
   };
 
   const q=new URLSearchParams(location.search).get("auth");
@@ -568,8 +627,12 @@ async function emailSavedInvoice(inv){
   const to = prompt("Send invoice "+(inv.number||"")+" to (client email):", inv.client_email||"");
   if(!to) return;
   try{
-    await api("/invoices/"+inv.id+"/email",{method:"POST",body:JSON.stringify({to})});
-    alert("Invoice emailed to "+to+" ✓");
+    // Load this invoice into the editor so the preview (and thus the attached
+    // PDF) matches exactly what we're emailing, then render + attach.
+    await openInvoiceInEditor(inv.id);
+    const pdfBase64 = await tryRenderPdf();
+    await api("/invoices/"+inv.id+"/email",{method:"POST",body:JSON.stringify({to, pdfBase64})});
+    alert("Invoice emailed to "+to+" ✓"+(pdfBase64?" (PDF attached)":""));
   }catch(e){ alert("Email failed: "+e.message); }
 }
 
