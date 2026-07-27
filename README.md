@@ -1,7 +1,7 @@
 # Invoicer
 
 Create, preview, download, and email professional invoices in seconds.
-Cloudflare Pages (static UI) + Pages Functions (API) + D1 (database), with
+Cloudflare Worker (static UI + `/api/*` backend) + D1 (database), with
 server-side email via Resend.
 
 ## Status
@@ -9,60 +9,102 @@ server-side email via Resend.
 | Phase | State |
 |-------|-------|
 | Core generator (form → live preview → PDF) | ✅ done |
-| D1 schema + API (save/list invoices & clients) | 🔜 |
-| Magic-link auth (passwordless, via Resend) | 🔜 |
-| Email invoice to client (server-side Resend) | 🔜 |
-| Deploy to Cloudflare (`invoices.aswincloud.com`) | ⛔ needs CF auth |
+| D1 schema + API (save/list/open/delete invoices) | ✅ done |
+| Magic-link auth (passwordless, via Resend) | ✅ done |
+| OAuth SSO (Google/GitHub/Microsoft, via auth broker) | ✅ done |
+| Per-user business profile, defaults & logo | ✅ done |
+| Email invoice to client (server-side Resend) | ✅ done |
+| Deploy to Cloudflare (`invoicer.aswincloud.com`) | ⛔ needs CF auth |
 
 ## Run locally
 
-No backend needed for the core generator:
+The pure front-end generator needs no backend — any static server works:
 
 ```bash
-# any static server works
 python3 -m http.server 8099 --directory public
 # open http://127.0.0.1:8099
 ```
 
-Or with the Cloudflare toolchain (once D1 is added):
+For the full app (auth, save, email) run the Worker locally with Wrangler,
+which serves `./public` as static assets and handles `/api/*`:
 
 ```bash
 npm install
-npm run dev            # wrangler pages dev
+npm run db:migrate:local   # apply migrations to the local D1
+npm run dev                # wrangler dev (reads wrangler.toml)
 ```
 
-## Features (core, shipping now)
+Local secrets go in `.dev.vars` (git-ignored) — see **Configuration** below.
+
+## Features
 
 - Form with **live preview** — every keystroke re-renders the invoice.
 - **Dynamic line items** — add/remove rows, auto qty × rate.
 - **Tax modes** — CGST+SGST split, single tax (IGST/VAT), or none.
 - **Discount**, multi-currency (₹ uses Indian digit grouping), status badge.
-- **Business profile persists** in `localStorage` — enter it once.
 - **Download PDF** via the browser print engine (client-side, offline-capable).
+- **Sign in** passwordless (magic link) or via Google / GitHub / Microsoft —
+  both resolve to one account per email.
+- **Business profile & invoice defaults** persist in `localStorage` and, once
+  signed in, **sync to your account** (D1) so they follow you across devices.
+- **Business logo** — upload once, downscaled to a data-URL, shown atop the
+  invoice (preview + PDF).
+- **My Invoices** dashboard — save, reopen to edit, re-download, email, delete.
+- **Email invoice to client** server-side via Resend.
 
 ## Architecture
 
 ```
-public/            static site (Pages)
-  index.html       form + preview shell
+src/               Cloudflare Worker
+  index.js         router: static assets via ASSETS binding + /api/* backend
+  lib.js           JSON/cookie/HMAC helpers, Resend email
+  invoice-html.js  server-side invoice HTML + totals (for emailed invoices)
+  oauth-routes.js  OAuth SSO via the central broker (@aswincloud/auth)
+public/            static site (served by the Worker's ASSETS binding)
+  index.html       form + preview shell + modals
   styles.css       screen + @media print styles
-  app.js           render, totals, persistence, print
-functions/api/     Pages Functions (D1-backed API) — WIP
-migrations/        D1 SQL migrations — WIP
+  app.js           render, totals, persistence, auth, save/email
+migrations/        D1 SQL migrations
+wrangler.toml      Worker config: main, [assets], D1 binding, vars
 ```
 
-## Deploy (later)
+The Worker (`main = "src/index.js"`) handles any `/api/*` path and delegates
+everything else to the static `[assets]` binding.
+
+## Configuration
+
+Non-secret vars live in `wrangler.toml` (`[vars]`): `APP_NAME`,
+`RESEND_FROM_EMAIL`, `APP_BASE_URL`.
+
+Secrets are **never committed**. Locally, put them in `.dev.vars`; in
+production, set them with `wrangler secret put`:
+
+| Secret | Purpose |
+|--------|---------|
+| `RESEND_API_KEY` | Send magic-link & invoice emails via Resend |
+| `SESSION_SECRET` | HMAC key for the session cookie (falls back to `AUTH_SIGNING_KEY`) |
+| `AUTH_BROKER_URL`, `RELAY_SECRET` | Enable OAuth SSO via the auth broker |
+
+Magic link works with just `RESEND_API_KEY` + a session key. SSO buttons only
+appear when the broker trio (`AUTH_BROKER_URL` + `RELAY_SECRET` +
+`SESSION_SECRET`) is configured.
+
+## Deploy
 
 Requires Cloudflare auth (`wrangler login` or `CLOUDFLARE_API_TOKEN`):
 
 ```bash
-wrangler d1 create invoicer-db          # paste id into wrangler.toml
+wrangler d1 create invoicer-db        # paste database_id into wrangler.toml
 npm run db:migrate:remote
-wrangler pages secret put RESEND_API_KEY
-npm run deploy
+wrangler secret put RESEND_API_KEY
+wrangler secret put SESSION_SECRET
+# for SSO, also:
+wrangler secret put AUTH_BROKER_URL
+wrangler secret put RELAY_SECRET
+npm run deploy                        # wrangler deploy
 ```
 
 ## Notes
 
-- Secrets (`RESEND_API_KEY`) live **server-side only** (Pages secret) — never in the browser.
+- Secrets live **server-side only** — never in the browser.
 - Resend requires a `User-Agent` header on API calls, or it returns `403 / 1010`.
