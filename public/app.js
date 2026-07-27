@@ -33,11 +33,13 @@ function itemRow(desc="",qty="1",rate=""){
   const div = document.createElement("div");
   div.className = "item";
   div.innerHTML =
-    `<input class="d" placeholder="Description" value="${esc(desc)}">`+
-    `<input class="q" type="number" min="0" step="0.01" placeholder="Qty" value="${esc(qty)}">`+
-    `<input class="r" type="number" min="0" step="0.01" placeholder="Rate" value="${esc(rate)}">`+
-    `<input class="a" placeholder="Amount" disabled>`+
-    `<button class="rm" title="Remove">×</button>`;
+    `<input class="d" placeholder="Description — e.g. Consulting services" value="${esc(desc)}">`+
+    `<div class="item-nums">`+
+      `<label>Qty<input class="q" type="number" min="0" step="0.01" placeholder="1" value="${esc(qty)}"></label>`+
+      `<label>Rate<input class="r" type="number" min="0" step="0.01" placeholder="0" value="${esc(rate)}"></label>`+
+      `<label>Amount<input class="a" placeholder="0.00" disabled></label>`+
+      `<button class="rm" title="Remove line item" aria-label="Remove line item">×</button>`+
+    `</div>`;
   div.querySelector(".rm").onclick = () => { div.remove(); render(); };
   div.querySelectorAll("input").forEach(i => i.addEventListener("input", render));
   return div;
