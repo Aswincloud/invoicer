@@ -41,8 +41,10 @@ function itemRow(desc="",qty="1",rate=""){
       `<label>Amount<input class="a" placeholder="0.00" disabled></label>`+
       `<button class="rm" title="Remove line item" aria-label="Remove line item">×</button>`+
     `</div>`;
-  div.querySelector(".rm").onclick = () => { div.remove(); render(); };
-  div.querySelectorAll("input").forEach(i => i.addEventListener("input", render));
+  div.querySelector(".rm").onclick = () => { div.remove(); update(); };
+  div.querySelectorAll("input").forEach(i => i.addEventListener("input", update));
+  // Auto-solve holds off while you're typing in a rate; rescale when you leave.
+  div.querySelector(".r").addEventListener("blur", update);
   return div;
 }
 function addItem(desc,qty,rate){ $("items").appendChild(itemRow(desc,qty,rate)); }
@@ -199,31 +201,66 @@ function applySolvedSubtotal(subtotal){
 }
 const round2 = (n) => Math.round(n*100)/100;
 
-// Solve, apply, then re-render and report. We state the total we actually
-// landed on rather than the one asked for: rounding rates to paise means the
-// result can sit a paisa off, and quietly showing the target would be a lie.
+// Solve and apply, reporting what happened. Doesn't render — update() does
+// that once, after this has written the rates.
 function solveFromTarget(){
   const msg = $("solveMsg");
   const say = (html, bad) => { msg.innerHTML = html; msg.classList.toggle("bad", !!bad); };
   const target = num($("targetTotal").value);
-  if(target <= 0) return say("Enter the total you want to charge.", true);
+  if(target <= 0){ say(""); return; }
 
   const s = solveSubtotal(target);
   if(s.error) return say(esc(s.error), true);
   const applied = applySolvedSubtotal(s.subtotal);
   if(applied.error) return say(esc(applied.error), true);
 
-  render();
+  // The total we actually reached, not the one asked for: rates round to paise,
+  // so the result can sit a paisa off and echoing the target back would be a lie.
   const got = computeTotals(readItems()).total;
+  // "scaled by ×1" means the rates were already on target — say that instead.
+  const k = round2(applied.k);
   const how = applied.scaled
-    ? `scaled ${applied.n} line items by ×${round2(applied.k)}`
-    : `set the rate to <b>${fmt(applied.rate)}</b>${applied.qty !== 1 ? ` × ${applied.qty}` : ""}`;
+    ? (k === 1 ? `line items already on target`
+               : `scaled ${applied.n} line items by ×${k}`)
+    : `rate <b>${fmt(applied.rate)}</b>${applied.qty !== 1 ? ` × ${applied.qty}` : ""}`;
   const off = Math.abs(got - target);
   // Only rounding can explain a sub-paisa gap; anything larger is a real
   // mismatch and shouldn't be excused as rounding.
   const why = off < 0.02 ? " — rates round to paise" : "";
-  say(`Subtotal <b>${fmt(s.subtotal)}</b> — ${how}. Total is now <b>${fmt(got)}</b>` +
-      (off >= 0.01 ? ` (${fmt(off)} off the target${why}).` : "."));
+  say(`Solved: subtotal <b>${fmt(s.subtotal)}</b>, ${how}. Total <b>${fmt(got)}</b>` +
+      (off >= 0.01 ? ` (${fmt(off)} off${why}).` : "."));
+}
+
+/* Auto-solve keeps the total pinned to the target while you edit anything else.
+   Two rules stop it fighting the user:
+     · it never runs while the caret is in a rate box — your typing stands, and
+       the rescale happens when you leave the field;
+     · unchecking "Auto-calculate" hands the rates back to you entirely. */
+let SOLVING = false;
+const editingRate = () => {
+  const el = document.activeElement;
+  return !!(el && el.classList && el.classList.contains("r"));
+};
+function shouldAutoSolve(){
+  if(!$("autoSolve").checked) return false;
+  if(num($("targetTotal").value) <= 0) return false;
+  return !editingRate();
+}
+// The single entry point for "something changed": solve if we should, then paint.
+// When we don't solve, the note is cleared rather than left behind — a stale
+// "Total ₹400.00" sitting next to a total that is no longer 400 is worse than
+// no note at all.
+function update(){
+  if(!SOLVING && shouldAutoSolve()){
+    SOLVING = true;
+    try{ solveFromTarget(); } finally{ SOLVING = false; }
+  } else if(!SOLVING){
+    const msg = $("solveMsg");
+    const paused = $("autoSolve").checked && num($("targetTotal").value) > 0 && editingRate();
+    msg.textContent = paused ? "Editing a rate — will re-solve to the target when you're done." : "";
+    msg.classList.remove("bad");
+  }
+  render();
 }
 
 // ── render preview ───────────────────────────────────────────────
@@ -426,26 +463,29 @@ function init(){
   // seed one example line item
   addItem("Consulting services","10","2500");
 
-  ALL_FIELDS.forEach(f => $(f).addEventListener("input", render));
-  $("shippingMode").addEventListener("change", () => { syncShippingMode(); render(); });
+  ALL_FIELDS.forEach(f => $(f).addEventListener("input", update));
+  $("shippingMode").addEventListener("change", () => { syncShippingMode(); update(); });
   syncShippingMode();
 
   // Inference: recompute when a source field changes, and stop touching a
   // field the moment the user sets it themselves.
   ["bizGst","clGst"].forEach(f =>
-    $(f).addEventListener("input", () => { applyInference(); render(); }));
-  $("taxMode").addEventListener("change", () => { TOUCHED.add("taxMode"); applyInference(); render(); });
+    $(f).addEventListener("input", () => { applyInference(); update(); }));
+  $("taxMode").addEventListener("change", () => { TOUCHED.add("taxMode"); applyInference(); update(); });
   applyInference();
 
-  $("btnSolve").onclick = solveFromTarget;
-  $("targetTotal").addEventListener("keydown", e => {
-    if(e.key === "Enter"){ e.preventDefault(); solveFromTarget(); }
+  $("targetTotal").addEventListener("input", update);
+  $("autoSolve").addEventListener("change", () => {
+    // Turning it off leaves the rates exactly as solved — the note would go
+    // stale, so clear it and let the user take over.
+    if(!$("autoSolve").checked) $("solveMsg").textContent = "";
+    update();
   });
   // Business fields persist locally always, and to the account (debounced) when
   // signed in — so a logged-in user's profile lives in the cloud DB, not just
   // this device.
   BIZ_FIELDS.forEach(f => $(f).addEventListener("input", () => { saveBiz(); persistProfileDebounced(); }));
-  $("btnAddItem").onclick = () => { addItem(); render(); };
+  $("btnAddItem").onclick = () => { addItem(); update(); };
   $("btnPrint").onclick = () => window.print();
   $("btnReset").onclick = () => {
     if(!confirm("Start a new blank invoice? (Your saved business details are kept.)")) return;
@@ -453,6 +493,7 @@ function init(){
      "targetTotal"].forEach(f=>$(f).value="");
     syncShippingMode();
     $("solveMsg").textContent = "";
+    $("autoSolve").checked = true;   // back to the default
     TOUCHED.delete("taxMode");   // fresh invoice — infer again
     applyInference();
     $("items").innerHTML=""; addItem();
@@ -785,6 +826,8 @@ async function openInvoiceInEditor(id){
     $("discount").value = inv.discount_pct ?? "";
     $("shipping").value = inv.shipping ? String(inv.shipping) : "";
     setShippingMode(inv.shipping_mode || "");
+    // Clear the target and render directly (not update()): a saved invoice's
+    // rates are settled figures, and auto-solve must never rewrite them.
     $("targetTotal").value = ""; $("solveMsg").textContent = "";
     $("taxModeAuto").textContent = "";
     $("status").value   = (inv.status || "UNPAID");

@@ -107,23 +107,17 @@
           <option value="__other">Other…</option>
         </select></label>
         <label id="shippingModeOtherWrap" hidden>Specify mode<input id="shippingModeOther" placeholder="e.g. Blue Dart — AWB 12345" maxlength="60"></label>
+        <label><span>Target total <span class="hint">(all-in)</span></span><input id="targetTotal" type="number" min="0" step="0.01" placeholder="e.g. 400"></label>
+        <label><span>Auto-calculate</span>
+          <span class="chk-row"><input id="autoSolve" type="checkbox" checked><span>Solve rates to hit the target</span></span>
+        </label>
+        <div id="solveMsg" class="col2 solve-msg" role="status" aria-live="polite"></div>
         <label>Status<select id="status">
           <option>UNPAID</option><option>PAID</option><option>DUE</option><option>DRAFT</option>
         </select></label>
         <label class="col2">Notes / terms<textarea id="notes" rows="2" placeholder="Net 14 days. Thank you for your business!"></textarea></label>
       </div>
 
-      <div class="solve">
-        <div class="solve-head">
-          <span class="solve-t">Work backwards from a total</span>
-          <span class="hint">Know the all-in price? We'll solve the rate.</span>
-        </div>
-        <div class="solve-row">
-          <label>Target total<input id="targetTotal" type="number" min="0" step="0.01" placeholder="e.g. 400"></label>
-          <button type="button" id="btnSolve" class="btn ghost sm">Solve rate</button>
-        </div>
-        <div id="solveMsg" class="solve-msg" role="status" aria-live="polite"></div>
-      </div>
     </details>
   </section>
 
