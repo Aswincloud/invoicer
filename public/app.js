@@ -15,7 +15,8 @@ const BIZ_FIELDS = ["bizName","bizEmail","bizAddr","bizPhone","bizGst","bizPay"]
 let BIZ_LOGO = "";
 // All fields we re-render the preview from.
 const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clAddr","clGst",
-  "invNo","currency","issueDate","dueDate","discount","taxMode","taxRate","status","notes"];
+  "invNo","currency","issueDate","dueDate","discount","taxMode","taxRate",
+  "shipping","shippingMode","shippingModeOther","status","notes"];
 
 // ── money helpers ────────────────────────────────────────────────
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
@@ -60,7 +61,10 @@ function readItems(){
 function computeTotals(items){
   const subtotal = items.reduce((s,i)=>s+i.amt,0);
   const disc = subtotal * num($("discount").value)/100;
-  const taxable = subtotal - disc;
+  // Shipping joins the taxable value (GST treatment for freight), so tax applies
+  // to it — mirrors computeTotals() in src/invoice-html.js.
+  const shipping = num($("shipping").value);
+  const taxable = subtotal - disc + shipping;
   const mode = $("taxMode").value;
   const rate = num($("taxRate").value);
   let taxRows = [], taxTotal = 0;
@@ -72,7 +76,35 @@ function computeTotals(items){
     const t = taxable * rate/100;
     taxRows = [[`Tax (${rate}%)`, t]]; taxTotal = t;
   }
-  return {subtotal, disc, taxable, taxRows, total: taxable + taxTotal};
+  return {subtotal, disc, shipping, taxable, taxRows, total: taxable + taxTotal};
+}
+
+// Effective mode of shipping: the dropdown value, or the free-text box when
+// "Other…" is picked.
+function shipMode(){
+  const sel = $("shippingMode").value;
+  return (sel === "__other" ? $("shippingModeOther").value : sel).trim().slice(0,60);
+}
+// Reveal the free-text box only for "Other…"; clear it otherwise so a stale
+// value can never leak into the invoice.
+function syncShippingMode(){
+  const other = $("shippingMode").value === "__other";
+  $("shippingModeOtherWrap").hidden = !other;
+  if(!other) $("shippingModeOther").value = "";
+}
+// Inverse of shipMode(): a stored mode is free text, so route anything that
+// isn't one of the presets back through "Other…".
+function setShippingMode(mode){
+  const m = String(mode || "");
+  const preset = [...$("shippingMode").options].some(o => o.value === m && o.value !== "__other");
+  if(m && !preset){
+    $("shippingMode").value = "__other";
+    syncShippingMode();
+    $("shippingModeOther").value = m;
+  } else {
+    $("shippingMode").value = m;
+    syncShippingMode();
+  }
 }
 
 // ── render preview ───────────────────────────────────────────────
@@ -136,7 +168,9 @@ function render(){
 
 <div class="totbox"><table>
   <tr><td>Subtotal</td><td class="r">${fmt(t.subtotal)}</td></tr>
-  ${t.disc?`<tr><td>Discount (${num($("discount").value)}%)</td><td class="r">– ${fmt(t.disc)}</td></tr><tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
+  ${t.disc?`<tr><td>Discount (${num($("discount").value)}%)</td><td class="r">– ${fmt(t.disc)}</td></tr>`:""}
+  ${t.shipping?`<tr><td>Shipping${shipMode()?` (${esc(shipMode())})`:""}</td><td class="r">${fmt(t.shipping)}</td></tr>`:""}
+  ${(t.disc||t.shipping)?`<tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
   ${taxHtml}
   <tr class="grand"><td>Total ${cur?`(${cur})`:""}</td><td class="r">${fmt(t.total)}</td></tr>
 </table></div>
@@ -274,6 +308,8 @@ function init(){
   addItem("Consulting services","10","2500");
 
   ALL_FIELDS.forEach(f => $(f).addEventListener("input", render));
+  $("shippingMode").addEventListener("change", () => { syncShippingMode(); render(); });
+  syncShippingMode();
   // Business fields persist locally always, and to the account (debounced) when
   // signed in — so a logged-in user's profile lives in the cloud DB, not just
   // this device.
@@ -282,7 +318,8 @@ function init(){
   $("btnPrint").onclick = () => window.print();
   $("btnReset").onclick = () => {
     if(!confirm("Start a new blank invoice? (Your saved business details are kept.)")) return;
-    ["clName","clEmail","clAddr","clGst","notes"].forEach(f=>$(f).value="");
+    ["clName","clEmail","clAddr","clGst","notes","shipping","shippingMode"].forEach(f=>$(f).value="");
+    syncShippingMode();
     $("items").innerHTML=""; addItem();
     $("invNo").value = "INV-"+new Date().getFullYear()+"-"+String(Math.floor(Math.random()*9000)+1000);
     $("issueDate").value=todayISO(0); $("dueDate").value="";  // due date optional
@@ -312,7 +349,8 @@ function collect(){
   const v=id=>$(id).value;
   return {number:v("invNo"),issueDate:v("issueDate"),dueDate:v("dueDate"),
     currency:v("currency"),taxMode:v("taxMode"),taxRate:v("taxRate"),
-    discount:v("discount"),status:v("status"),notes:v("notes"),
+    discount:v("discount"),shipping:v("shipping"),shippingMode:shipMode(),
+    status:v("status"),notes:v("notes"),
     clName:v("clName"),clEmail:v("clEmail"),clAddr:v("clAddr"),clGst:v("clGst"),
     items:readItems().filter(i=>i.desc||i.amt).map(i=>({description:i.desc,qty:i.qty,rate:i.rate}))};
 }
@@ -607,6 +645,8 @@ async function openInvoiceInEditor(id){
     $("taxMode").value  = inv.tax_mode || "gst";
     $("taxRate").value  = inv.tax_rate ?? "";
     $("discount").value = inv.discount_pct ?? "";
+    $("shipping").value = inv.shipping ? String(inv.shipping) : "";
+    setShippingMode(inv.shipping_mode || "");
     $("status").value   = (inv.status || "UNPAID");
     $("notes").value    = inv.notes || "";
     $("clName").value   = inv.client_name || "";
