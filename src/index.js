@@ -203,6 +203,7 @@ async function createInvoice(env, user, b) {
     number: b.number || "", issue_date: b.issueDate || "", due_date: b.dueDate || "",
     currency: b.currency || "₹", tax_mode: b.taxMode || "gst",
     tax_rate: +b.taxRate || 0, discount_pct: +b.discount || 0,
+    shipping: +b.shipping || 0, shipping_mode: (b.shippingMode || "").slice(0, 60),
     status: b.status || "UNPAID", notes: b.notes || "",
     client_name: b.clName || "", client_email: b.clEmail || "",
     client_addr: b.clAddr || "", client_gst: b.clGst || "",
@@ -211,11 +212,11 @@ async function createInvoice(env, user, b) {
 
   await env.DB.prepare(
     `INSERT INTO invoices (id,user_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
-       discount_pct,status,notes,client_name,client_email,client_addr,client_gst,total,created_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       discount_pct,shipping,shipping_mode,status,notes,client_name,client_email,client_addr,client_gst,total,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(id, user.id, inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
-         inv.tax_rate, inv.discount_pct, inv.status, inv.notes, inv.client_name,
-         inv.client_email, inv.client_addr, inv.client_gst, total, t, t).run();
+         inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode, inv.status, inv.notes,
+         inv.client_name, inv.client_email, inv.client_addr, inv.client_gst, total, t, t).run();
 
   // line items
   const stmt = env.DB.prepare(
