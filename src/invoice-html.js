@@ -13,7 +13,10 @@ function money(cur, n) {
 export function computeTotals(inv, items) {
   const subtotal = items.reduce((s, i) => s + (i.qty || 0) * (i.rate || 0), 0);
   const disc = subtotal * (inv.discount_pct || 0) / 100;
-  const taxable = subtotal - disc;
+  // Shipping is part of the taxable value (standard GST treatment for freight
+  // on a composite supply), so it lands before tax — not after.
+  const shipping = +inv.shipping || 0;
+  const taxable = subtotal - disc + shipping;
   const rate = inv.tax_rate || 0;
   let taxRows = [], taxTotal = 0;
   if (inv.tax_mode === "gst") {
@@ -24,7 +27,7 @@ export function computeTotals(inv, items) {
     const t = taxable * rate / 100;
     taxRows = [[`Tax (${rate}%)`, t]]; taxTotal = t;
   }
-  return { subtotal, disc, taxable, taxRows, total: taxable + taxTotal };
+  return { subtotal, disc, shipping, taxable, taxRows, total: taxable + taxTotal };
 }
 
 // "Ledger desk" email — mirrors the on-screen invoice: warm-neutral sheet,
@@ -97,7 +100,8 @@ export function renderInvoiceEmail(inv, items) {
   <table align="right" cellpadding="0" cellspacing="0" style="margin-top:16px;font-size:12px;width:56%">
    ${totRow("Subtotal", t.subtotal)}
    ${t.disc ? totRow(`Discount (${discPct}%)`, t.disc, { neg: true }) : ""}
-   ${t.disc ? totRow("Taxable value", t.taxable) : ""}
+   ${t.shipping ? totRow(inv.shipping_mode ? `Shipping (${inv.shipping_mode})` : "Shipping", t.shipping) : ""}
+   ${(t.disc || t.shipping) ? totRow("Taxable value", t.taxable) : ""}
    ${taxRows}
    <tr><td style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${SANS};font-weight:700;text-transform:uppercase;letter-spacing:.6px">Total ${cur ? `(${esc(cur)})` : ""}</td>
        <td align="right" style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${MONO};font-weight:600;font-size:18px;color:${GREEN}">${money(cur, t.total)}</td></tr>
