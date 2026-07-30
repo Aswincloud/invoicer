@@ -92,7 +92,7 @@
       <summary>Totals &amp; tax</summary>
       <div class="grid2">
         <label>Discount %<input id="discount" type="number" min="0" max="100" step="0.01" value="0"></label>
-        <label>Tax mode<select id="taxMode">
+        <label><span>Tax mode <span id="taxModeAuto" class="auto-note"></span></span><select id="taxMode">
           <option value="gst">CGST + SGST (split)</option>
           <option value="single">Single tax (e.g. IGST/VAT)</option>
           <option value="none">No tax</option>
@@ -111,6 +111,18 @@
           <option>UNPAID</option><option>PAID</option><option>DUE</option><option>DRAFT</option>
         </select></label>
         <label class="col2">Notes / terms<textarea id="notes" rows="2" placeholder="Net 14 days. Thank you for your business!"></textarea></label>
+      </div>
+
+      <div class="solve">
+        <div class="solve-head">
+          <span class="solve-t">Work backwards from a total</span>
+          <span class="hint">Know the all-in price? We'll solve the rate.</span>
+        </div>
+        <div class="solve-row">
+          <label>Target total<input id="targetTotal" type="number" min="0" step="0.01" placeholder="e.g. 400"></label>
+          <button type="button" id="btnSolve" class="btn ghost sm">Solve rate</button>
+        </div>
+        <div id="solveMsg" class="solve-msg" role="status" aria-live="polite"></div>
       </div>
     </details>
   </section>

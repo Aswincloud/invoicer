@@ -49,8 +49,11 @@ function addItem(desc,qty,rate){ $("items").appendChild(itemRow(desc,qty,rate));
 function readItems(){
   return [...document.querySelectorAll("#items .item")].map(row => {
     const d = row.querySelector(".d").value;
-    const q = num(row.querySelector(".q").value);
+    const rawQ = row.querySelector(".q").value.trim();
     const r = num(row.querySelector(".r").value);
+    // Blank Qty means 1 — the placeholder says "1", and charging a rate × 0
+    // silently zeroed the line, which is never what someone meant to invoice.
+    const q = rawQ === "" ? 1 : num(rawQ);
     const amt = q*r;
     row.querySelector(".a").value = amt ? amt.toFixed(2) : "";
     return {desc:d, qty:q, rate:r, amt};
@@ -105,6 +108,122 @@ function setShippingMode(mode){
     $("shippingMode").value = m;
     syncShippingMode();
   }
+}
+
+/* ── inferred fields ───────────────────────────────────────────────
+   Anything derivable from what's already typed. Rules: only ever write into
+   a field the user hasn't touched, and tag it "auto" so a value that appears
+   on its own is never a surprise on a financial document. */
+
+// Fields the user has edited by hand — inference leaves these alone forever.
+const TOUCHED = new Set();
+
+// A GSTIN starts with a 2-digit state code: 34ABCDE1234F1Z9 -> "34".
+// Same state as the seller means CGST+SGST; different means IGST (one line).
+const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]Z?[A-Z\d]$/i;
+function stateCode(gstin){
+  const g = String(gstin || "").trim().toUpperCase();
+  return GSTIN_RE.test(g) ? g.slice(0, 2) : "";
+}
+// Infer intra- vs inter-state tax from the two GSTINs. Returns "" when we
+// can't tell (either GSTIN missing or malformed) so the caller leaves it be.
+function inferTaxMode(){
+  const mine = stateCode($("bizGst").value), theirs = stateCode($("clGst").value);
+  if(!mine || !theirs) return "";
+  return mine === theirs ? "gst" : "single";
+}
+function applyInference(){
+  const note = $("taxModeAuto");
+  // The user picking a tax mode by hand always wins.
+  if(TOUCHED.has("taxMode")){ note.textContent = ""; return; }
+  const want = inferTaxMode();
+  if(!want){ note.textContent = ""; return; }
+  if($("taxMode").value !== want) $("taxMode").value = want;
+  const mine = stateCode($("bizGst").value), theirs = stateCode($("clGst").value);
+  note.textContent = mine === theirs ? "auto · intra-state" : "auto · inter-state";
+  note.title = `Derived from GSTIN state codes ${mine} → ${theirs}. Pick a mode yourself to override.`;
+}
+
+/* ── reverse solve: target total → product cost ────────────────────
+   Given an all-in figure ("quote them 400"), undo tax, shipping and discount
+   to get the subtotal the line items must add up to. Inverts computeTotals:
+
+     total   = taxable × (1 + rate/100)      →  taxable  = total / (1 + rate/100)
+     taxable = subtotal − discount% + ship   →  subtotal = (taxable − ship) / (1 − d/100)
+*/
+function solveSubtotal(total){
+  const mode = $("taxMode").value;
+  const rate = mode === "none" ? 0 : num($("taxRate").value);
+  const taxable = total / (1 + rate/100);
+  const ship = num($("shipping").value);
+  const d = num($("discount").value);
+  if(d >= 100) return { error: "A 100% discount can't reach a non-zero total." };
+  const subtotal = (taxable - ship) / (1 - d/100);
+  if(subtotal <= 0)
+    return { error: `Shipping alone (${fmt(ship)}) already exceeds that total.` };
+  return { subtotal, taxable, ship, rate, d };
+}
+// Push the solved subtotal onto the line items: with one row we set its rate
+// (dividing by qty); with several we scale every rate proportionally so the
+// mix the user built is preserved.
+function applySolvedSubtotal(subtotal){
+  const rows = [...document.querySelectorAll("#items .item")];
+  const items = readItems();
+  const priced = items.map((it,i) => ({it, i})).filter(x => x.it.desc || x.it.amt);
+  const targets = priced.length ? priced : items.map((it,i)=>({it,i})).slice(0,1);
+  if(!targets.length) return { error: "Add a line item first." };
+
+  const current = targets.reduce((s,x) => s + x.it.amt, 0);
+  if(targets.length === 1){
+    const row = rows[targets[0].i];
+    // A zero quantity can't reach a non-zero total no matter the rate, so
+    // solving implies at least one unit — write the 1 in rather than leaving a
+    // rate that silently multiplies out to nothing.
+    let qty = targets[0].it.qty;
+    if(qty <= 0){ qty = 1; row.querySelector(".q").value = "1"; }
+    const rate = subtotal / qty;
+    row.querySelector(".r").value = round2(rate);
+    return { scaled:false, rate, qty };
+  }
+  if(current <= 0)
+    return { error: "Give the line items rates first — we'll scale them to fit." };
+  // Scale only the rows that actually contribute: a row at zero stays at zero
+  // however we scale it, so rewriting its rate would be noise.
+  const k = subtotal / current;
+  const scaledRows = targets.filter(x => x.it.amt > 0);
+  scaledRows.forEach(x => {
+    const r = rows[x.i].querySelector(".r");
+    r.value = round2(num(r.value) * k);
+  });
+  return { scaled:true, k, n:scaledRows.length };
+}
+const round2 = (n) => Math.round(n*100)/100;
+
+// Solve, apply, then re-render and report. We state the total we actually
+// landed on rather than the one asked for: rounding rates to paise means the
+// result can sit a paisa off, and quietly showing the target would be a lie.
+function solveFromTarget(){
+  const msg = $("solveMsg");
+  const say = (html, bad) => { msg.innerHTML = html; msg.classList.toggle("bad", !!bad); };
+  const target = num($("targetTotal").value);
+  if(target <= 0) return say("Enter the total you want to charge.", true);
+
+  const s = solveSubtotal(target);
+  if(s.error) return say(esc(s.error), true);
+  const applied = applySolvedSubtotal(s.subtotal);
+  if(applied.error) return say(esc(applied.error), true);
+
+  render();
+  const got = computeTotals(readItems()).total;
+  const how = applied.scaled
+    ? `scaled ${applied.n} line items by ×${round2(applied.k)}`
+    : `set the rate to <b>${fmt(applied.rate)}</b>${applied.qty !== 1 ? ` × ${applied.qty}` : ""}`;
+  const off = Math.abs(got - target);
+  // Only rounding can explain a sub-paisa gap; anything larger is a real
+  // mismatch and shouldn't be excused as rounding.
+  const why = off < 0.02 ? " — rates round to paise" : "";
+  say(`Subtotal <b>${fmt(s.subtotal)}</b> — ${how}. Total is now <b>${fmt(got)}</b>` +
+      (off >= 0.01 ? ` (${fmt(off)} off the target${why}).` : "."));
 }
 
 // ── render preview ───────────────────────────────────────────────
@@ -310,6 +429,18 @@ function init(){
   ALL_FIELDS.forEach(f => $(f).addEventListener("input", render));
   $("shippingMode").addEventListener("change", () => { syncShippingMode(); render(); });
   syncShippingMode();
+
+  // Inference: recompute when a source field changes, and stop touching a
+  // field the moment the user sets it themselves.
+  ["bizGst","clGst"].forEach(f =>
+    $(f).addEventListener("input", () => { applyInference(); render(); }));
+  $("taxMode").addEventListener("change", () => { TOUCHED.add("taxMode"); applyInference(); render(); });
+  applyInference();
+
+  $("btnSolve").onclick = solveFromTarget;
+  $("targetTotal").addEventListener("keydown", e => {
+    if(e.key === "Enter"){ e.preventDefault(); solveFromTarget(); }
+  });
   // Business fields persist locally always, and to the account (debounced) when
   // signed in — so a logged-in user's profile lives in the cloud DB, not just
   // this device.
@@ -318,8 +449,12 @@ function init(){
   $("btnPrint").onclick = () => window.print();
   $("btnReset").onclick = () => {
     if(!confirm("Start a new blank invoice? (Your saved business details are kept.)")) return;
-    ["clName","clEmail","clAddr","clGst","notes","shipping","shippingMode"].forEach(f=>$(f).value="");
+    ["clName","clEmail","clAddr","clGst","notes","shipping","shippingMode",
+     "targetTotal"].forEach(f=>$(f).value="");
     syncShippingMode();
+    $("solveMsg").textContent = "";
+    TOUCHED.delete("taxMode");   // fresh invoice — infer again
+    applyInference();
     $("items").innerHTML=""; addItem();
     $("invNo").value = "INV-"+new Date().getFullYear()+"-"+String(Math.floor(Math.random()*9000)+1000);
     $("issueDate").value=todayISO(0); $("dueDate").value="";  // due date optional
@@ -642,11 +777,16 @@ async function openInvoiceInEditor(id){
     $("issueDate").value= inv.issue_date || "";
     $("dueDate").value  = inv.due_date || "";
     $("currency").value = inv.currency || "₹";
+    // A saved invoice's tax mode is a decision already made — don't re-infer
+    // over it, or reopening an old invoice could silently change its tax kind.
     $("taxMode").value  = inv.tax_mode || "gst";
+    TOUCHED.add("taxMode");
     $("taxRate").value  = inv.tax_rate ?? "";
     $("discount").value = inv.discount_pct ?? "";
     $("shipping").value = inv.shipping ? String(inv.shipping) : "";
     setShippingMode(inv.shipping_mode || "");
+    $("targetTotal").value = ""; $("solveMsg").textContent = "";
+    $("taxModeAuto").textContent = "";
     $("status").value   = (inv.status || "UNPAID");
     $("notes").value    = inv.notes || "";
     $("clName").value   = inv.client_name || "";
