@@ -608,16 +608,35 @@ const POS_PRINTABLE = 48;                       // 384 dots @ 203dpi
 const POS_PAD = (POS_W - POS_PRINTABLE) / 2;    // 4.5mm each side
 const POS_CONTENT = POS_PRINTABLE;
 
-/* Every size below is a base size multiplied by this. Thermal receipts get
-   read at arm's length in bad light, so bigger is genuinely better — the
-   limit is the 48mm band. Measured ceilings at 1.0: the tightest amount row
-   ("Discount (12.5%)" + "-2,500.00") wraps above 8.75pt and a full street
-   address above 8pt, against base sizes of 7 and 6.5. 1.2 lands those at
-   8.4 and 7.8 — the most we can add before ordinary receipts start wrapping.
-   Anything that still doesn't fit shrinks (amount rows) or wraps (prose)
-   rather than clipping, so this stays safe if a value is unusually long. */
-const POS_SCALE = 1.2;
-const ps = (base) => base * POS_SCALE;
+/* Sizes are per role rather than one global multiplier.
+
+   A single scale is capped by the receipt's longest line, and that line is
+   always prose: a full street address tops out at 8pt and the thank-you
+   footer at 8pt, while the money rows would take 12.75pt. Scaling
+   everything together therefore pinned the figures to the prose limit — and
+   the line the eye actually judges size by, the grand total, was pulled back
+   further by shrink-to-fit (10 -> 10.75pt, a 7% gain that reads as nothing).
+
+   So money and identity are sized for what they need, and long prose is
+   allowed to wrap onto a second line instead of holding the rest down.
+   Every value below is the measured ceiling for that role against the 48mm
+   band, so ordinary receipts fill the width without wrapping. */
+const PS = {
+  bizName:    13,    // "ASWIN CLOUD LABS" fits to 14pt
+  bizMeta:     8,    // address / phone / email / GSTIN — wraps past 8
+  docType:    10,    // "TAX INVOICE"
+  meta:        9,    // No. / Date / Status — "No." + a long invoice no. caps at 13.5
+  label:       8,    // "BILL TO" / "PAY TO"
+  client:      9.5,
+  clientMeta:  8,
+  itemDesc:   10,
+  itemCalc:    8.5,  // "  10 x 2,500.00" + amount; shrinks to fit
+  totals:      9,    // Subtotal / Discount / Shipping / tax rows
+  grandLabel: 10,    // "TOTAL (Rs.)" on its own line
+  grand:      18,    // the headline figure, alone on its line; shrinks if huge
+  prose:       8,    // pay-to, notes
+  footer:      7.5,
+};
 
 // jsPDF's core fonts are WinAnsi-encoded and have no ₹ — it silently prints as
 // "¹". "Rs." is the conventional spelling on Indian thermal receipts anyway.
@@ -643,16 +662,16 @@ function posOps(){
   const ops = [];
   const money = (n) => posMoney(n, cur, false);
 
-  ops.push({t:"center", s:(v("bizName") || "Your Business").toUpperCase(), bold:true, size:ps(9)});
-  if(v("bizAddr")) v("bizAddr").split(/\n+/).forEach(l => ops.push({t:"center", s:l, size:ps(6.5)}));
+  ops.push({t:"center", s:(v("bizName") || "Your Business").toUpperCase(), bold:true, size:PS.bizName});
+  if(v("bizAddr")) v("bizAddr").split(/\n+/).forEach(l => ops.push({t:"center", s:l, size:PS.bizMeta}));
   // Phone and email each get their own line. Joined with " · " they overflow
   // 53mm and wrap mid-separator, leaving a dangling "·" on the next line.
-  if(v("bizPhone")) ops.push({t:"center", s:v("bizPhone"), size:ps(6.5)});
-  if(v("bizEmail")) ops.push({t:"center", s:v("bizEmail"), size:ps(6.5)});
-  if(v("bizGst")) ops.push({t:"center", s:"GSTIN: "+v("bizGst"), size:ps(6.5)});
+  if(v("bizPhone")) ops.push({t:"center", s:v("bizPhone"), size:PS.bizMeta});
+  if(v("bizEmail")) ops.push({t:"center", s:v("bizEmail"), size:PS.bizMeta});
+  if(v("bizGst")) ops.push({t:"center", s:"GSTIN: "+v("bizGst"), size:PS.bizMeta});
 
   ops.push({t:"rule"});
-  ops.push({t:"center", s:"TAX INVOICE", bold:true, size:ps(7.5), track:true});
+  ops.push({t:"center", s:"TAX INVOICE", bold:true, size:PS.docType, track:true});
   ops.push({t:"rule"});
 
   if(v("invNo"))     ops.push({t:"kv", k:"No.",    val:v("invNo")});
@@ -662,54 +681,57 @@ function posOps(){
 
   if(v("clName") || v("clAddr") || v("clGst")){
     ops.push({t:"rule"});
-    ops.push({t:"left", s:"BILL TO", size:ps(6.5), bold:true});
-    if(v("clName")) ops.push({t:"wrap", s:v("clName"), size:ps(7.5)});
-    if(v("clAddr")) ops.push({t:"wrap", s:v("clAddr").replace(/\n+/g, ", "), size:ps(6.5)});
-    if(v("clGst"))  ops.push({t:"wrap", s:"GSTIN: "+v("clGst"), size:ps(6.5)});
+    ops.push({t:"left", s:"BILL TO", size:PS.label, bold:true});
+    if(v("clName")) ops.push({t:"wrap", s:v("clName"), size:PS.client});
+    if(v("clAddr")) ops.push({t:"wrap", s:v("clAddr").replace(/\n+/g, ", "), size:PS.clientMeta});
+    if(v("clGst"))  ops.push({t:"wrap", s:"GSTIN: "+v("clGst"), size:PS.clientMeta});
   }
 
   ops.push({t:"rule"});
   if(!items.length){
-    ops.push({t:"center", s:"(no line items)", size:ps(7)});
+    ops.push({t:"center", s:"(no line items)", size:PS.itemDesc});
   } else {
     // Description on its own line, then "qty x rate" indented with the amount
     // right-aligned — 48mm can't hold a 4-column table without truncating.
     // fit:true keeps "qty x rate" and the amount on one line: a big quantity
     // against a big rate otherwise wraps mid-expression ("12345.67 x" / "8,888.88").
     items.forEach(i => {
-      ops.push({t:"wrap", s:i.desc || "Item", size:ps(7.5)});
-      ops.push({t:"kv", k:`  ${trimNum(i.qty)} x ${money(i.rate)}`, val:money(i.amt), size:ps(7), fit:true});
+      ops.push({t:"wrap", s:i.desc || "Item", size:PS.itemDesc});
+      ops.push({t:"kv", k:`  ${trimNum(i.qty)} x ${money(i.rate)}`, val:money(i.amt), size:PS.itemCalc, fit:true});
     });
   }
   ops.push({t:"rule"});
 
-  ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:ps(7)});
-  if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:ps(7)});
-  if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:ps(7)});
-  if(t.disc || t.shipping) ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:ps(7)});
-  t.taxRows.forEach(([l,val]) => ops.push({t:"kv", k:l, val:money(val), size:ps(7)}));
+  ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:PS.totals});
+  if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:PS.totals});
+  if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:PS.totals});
+  if(t.disc || t.shipping) ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:PS.totals});
+  t.taxRows.forEach(([l,val]) => ops.push({t:"kv", k:l, val:money(val), size:PS.totals}));
 
   ops.push({t:"rule", heavy:true});
-  // fit:true — a large enough figure (a crore, say) pushes "TOTAL (Rs.)" past
-  // 53mm at 10pt and wraps the label onto two lines. Shrink to fit instead:
-  // the grand total is the one line that must never look broken.
-  ops.push({t:"kv", k:"TOTAL"+(cur?` (${posCur(cur)})`:""), val:money(t.total), size:ps(10), bold:true, fit:true});
+  // The label and the figure each get their own line, the way a till receipt
+  // prints it. Sharing one line is what kept this small: "TOTAL (Rs.)" plus a
+  // 9-character figure cannot exceed 10.75pt inside 48mm, however large a size
+  // we ask for. Alone, the figure fits at 18pt — and it's the number the
+  // customer actually looks for, so it gets the space.
+  ops.push({t:"left",   s:"TOTAL"+(cur?` (${posCur(cur)})`:""), size:PS.grandLabel, bold:true});
+  ops.push({t:"right",  s:money(t.total), size:PS.grand, bold:true, fit:true});
   ops.push({t:"rule", heavy:true});
 
   if(v("bizPay")){
-    ops.push({t:"left", s:"PAY TO", size:ps(6.5), bold:true});
-    ops.push({t:"wrap", s:v("bizPay").replace(/\n+/g, " · "), size:ps(6.5)});
+    ops.push({t:"left", s:"PAY TO", size:PS.label, bold:true});
+    ops.push({t:"wrap", s:v("bizPay").replace(/\n+/g, " · "), size:PS.prose});
   }
   if(v("notes")){
     ops.push({t:"gap", h:1});
-    ops.push({t:"wrap", s:v("notes").replace(/\n+/g, " "), size:ps(6.5)});
+    ops.push({t:"wrap", s:v("notes").replace(/\n+/g, " "), size:PS.prose});
   }
   ops.push({t:"gap", h:1.5});
   // The stock thank-you is a nicety, not a fixture — skip it when the notes
   // already say it, rather than printing the same sentence twice.
   if(!/thank you/i.test(v("notes")))
-    ops.push({t:"center", s:"Thank you for your business!", size:ps(6.5)});
-  ops.push({t:"center", s:"Generated with Invoicer", size:ps(6)});
+    ops.push({t:"center", s:"Thank you for your business!", size:PS.footer});
+  ops.push({t:"center", s:"Generated with Invoicer", size:PS.footer});
   return ops;
 }
 
@@ -733,18 +755,20 @@ function posDraw(doc, ops){
       y += 1.8;
       continue;
     }
-    let size = op.size || ps(7.5);
+    let size = op.size || PS.meta;
     doc.setFont("courier", op.bold ? "bold" : "normal");
     doc.setFontSize(size);
 
-    // Shrink-to-fit for lines flagged fit:true (grand total, item rows). Step
-    // down until key + value fit on one line. The floor scales with POS_SCALE
-    // too — a fixed 6pt would stop being a floor once the base sizes grow past
-    // it, letting a long row shrink far below its neighbours.
-    if(op.t === "kv" && op.fit){
-      const floor = ps(6);
-      while(size > floor &&
-            doc.getTextWidth(op.k) + doc.getTextWidth(op.val) + 1.5 > POS_CONTENT){
+    // Shrink-to-fit for lines flagged fit:true (item rows, the grand figure).
+    // Step down until the line fits, but never below the ordinary totals size —
+    // a grand total smaller than the Subtotal above it looks like a mistake,
+    // and at that point wrapping is the lesser evil.
+    if(op.fit){
+      const floor = PS.totals;
+      const width = () => op.t === "kv"
+        ? doc.getTextWidth(op.k) + doc.getTextWidth(op.val) + 1.5
+        : doc.getTextWidth(op.s);
+      while(size > floor && width() > POS_CONTENT){
         size -= 0.25;
         doc.setFontSize(size);
       }
@@ -763,12 +787,13 @@ function posDraw(doc, ops){
       });
       continue;
     }
-    // center / left / wrap all wrap at the content width
+    // center / right / left / wrap all wrap at the content width
     const lines = doc.splitTextToSize(op.s, POS_CONTENT);
     lines.forEach(line => {
       y += lh(size);
-      if(op.t === "center") doc.text(line, POS_W/2, y, {align:"center"});
-      else doc.text(line, L, y);
+      if(op.t === "center")     doc.text(line, POS_W/2, y, {align:"center"});
+      else if(op.t === "right") doc.text(line, R, y, {align:"right"});
+      else                      doc.text(line, L, y);
     });
   }
   return y;
