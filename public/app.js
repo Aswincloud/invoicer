@@ -487,6 +487,7 @@ function init(){
   BIZ_FIELDS.forEach(f => $(f).addEventListener("input", () => { saveBiz(); persistProfileDebounced(); }));
   $("btnAddItem").onclick = () => { addItem(); update(); };
   $("btnPrint").onclick = () => window.print();
+  $("btnPos").onclick = downloadPosReceipt;
   $("btnReset").onclick = () => {
     if(!confirm("Start a new blank invoice? (Your saved business details are kept.)")) return;
     ["clName","clEmail","clAddr","clGst","notes","shipping","shippingMode",
@@ -586,6 +587,192 @@ async function renderInvoicePdfBase64(){
 async function tryRenderPdf(){
   try{ return await renderInvoicePdfBase64(); }
   catch(e){ console.warn("PDF render failed; sending without attachment:", e); return ""; }
+}
+
+/* ── POS / thermal receipt (57mm) ─────────────────────────────────
+   Drawn as text, not a rasterised #paper: thermal heads are ~203dpi and
+   1-bit, so a downscaled screenshot of the A4 sheet turns to mush. Real
+   text in a mono font stays crisp and the file stays tiny.
+
+   Page is 57mm wide with 2mm side margins -> 53mm of content. Height is
+   measured first and the page built to fit, so the roll never gets a
+   trailing blank feed. */
+const POS_W = 57, POS_PAD = 2;
+const POS_CONTENT = POS_W - POS_PAD*2;   // 53mm
+
+// jsPDF's core fonts are WinAnsi-encoded and have no ₹ — it silently prints as
+// "¹". "Rs." is the conventional spelling on Indian thermal receipts anyway.
+// £/€/$ all survive WinAnsi, so they pass through untouched.
+const posCur = (cur) => cur === "₹" ? "Rs." : cur;
+
+// Receipt-local money formatter: mirrors fmt() but with the PDF-safe symbol,
+// and never depends on the live #currency element mid-render.
+function posMoney(n, cur, withSym){
+  const loc = cur === "₹" ? "en-IN" : "en-US";
+  const s = Number(n||0).toLocaleString(loc, {minimumFractionDigits:2, maximumFractionDigits:2});
+  const sym = posCur(cur);
+  return withSym && sym ? sym + " " + s : s;
+}
+
+// Collect every line the receipt will draw, as {t:type, ...} ops. Building the
+// op list before touching jsPDF is what lets us measure the height up front.
+function posOps(){
+  const v = (id) => $(id).value.trim();
+  const items = readItems().filter(i => i.desc || i.amt);
+  const t = computeTotals(items);
+  const cur = $("currency").value;
+  const ops = [];
+  const money = (n) => posMoney(n, cur, false);
+
+  ops.push({t:"center", s:(v("bizName") || "Your Business").toUpperCase(), bold:true, size:9});
+  if(v("bizAddr")) v("bizAddr").split(/\n+/).forEach(l => ops.push({t:"center", s:l, size:6.5}));
+  // Phone and email each get their own line. Joined with " · " they overflow
+  // 53mm and wrap mid-separator, leaving a dangling "·" on the next line.
+  if(v("bizPhone")) ops.push({t:"center", s:v("bizPhone"), size:6.5});
+  if(v("bizEmail")) ops.push({t:"center", s:v("bizEmail"), size:6.5});
+  if(v("bizGst")) ops.push({t:"center", s:"GSTIN: "+v("bizGst"), size:6.5});
+
+  ops.push({t:"rule"});
+  ops.push({t:"center", s:"TAX INVOICE", bold:true, size:7.5, track:true});
+  ops.push({t:"rule"});
+
+  if(v("invNo"))     ops.push({t:"kv", k:"No.",    val:v("invNo")});
+  if(v("issueDate")) ops.push({t:"kv", k:"Date",   val:v("issueDate")});
+  if(v("dueDate"))   ops.push({t:"kv", k:"Due",    val:v("dueDate")});
+  ops.push({t:"kv", k:"Status", val:v("status") || "UNPAID"});
+
+  if(v("clName") || v("clAddr") || v("clGst")){
+    ops.push({t:"rule"});
+    ops.push({t:"left", s:"BILL TO", size:6.5, bold:true});
+    if(v("clName")) ops.push({t:"wrap", s:v("clName"), size:7.5});
+    if(v("clAddr")) ops.push({t:"wrap", s:v("clAddr").replace(/\n+/g, ", "), size:6.5});
+    if(v("clGst"))  ops.push({t:"wrap", s:"GSTIN: "+v("clGst"), size:6.5});
+  }
+
+  ops.push({t:"rule"});
+  if(!items.length){
+    ops.push({t:"center", s:"(no line items)", size:7});
+  } else {
+    // Description on its own line, then "qty x rate" indented with the amount
+    // right-aligned — 53mm can't hold a 4-column table without truncating.
+    items.forEach(i => {
+      ops.push({t:"wrap", s:i.desc || "Item", size:7.5});
+      ops.push({t:"kv", k:`  ${trimNum(i.qty)} x ${money(i.rate)}`, val:money(i.amt), size:7});
+    });
+  }
+  ops.push({t:"rule"});
+
+  ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:7});
+  if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:7});
+  if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:7});
+  if(t.disc || t.shipping) ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:7});
+  t.taxRows.forEach(([l,val]) => ops.push({t:"kv", k:l, val:money(val), size:7}));
+
+  ops.push({t:"rule", heavy:true});
+  // fit:true — a large enough figure (a crore, say) pushes "TOTAL (Rs.)" past
+  // 53mm at 10pt and wraps the label onto two lines. Shrink to fit instead:
+  // the grand total is the one line that must never look broken.
+  ops.push({t:"kv", k:"TOTAL"+(cur?` (${posCur(cur)})`:""), val:money(t.total), size:10, bold:true, fit:true});
+  ops.push({t:"rule", heavy:true});
+
+  if(v("bizPay")){
+    ops.push({t:"left", s:"PAY TO", size:6.5, bold:true});
+    ops.push({t:"wrap", s:v("bizPay").replace(/\n+/g, " · "), size:6.5});
+  }
+  if(v("notes")){
+    ops.push({t:"gap", h:1});
+    ops.push({t:"wrap", s:v("notes").replace(/\n+/g, " "), size:6.5});
+  }
+  ops.push({t:"gap", h:1.5});
+  // The stock thank-you is a nicety, not a fixture — skip it when the notes
+  // already say it, rather than printing the same sentence twice.
+  if(!/thank you/i.test(v("notes")))
+    ops.push({t:"center", s:"Thank you for your business!", size:6.5});
+  ops.push({t:"center", s:"Generated with Invoicer", size:6});
+  return ops;
+}
+
+// 10 -> "10", 2.5 -> "2.5": quantities shouldn't gain trailing zeros on a
+// receipt where every character costs width.
+const trimNum = (n) => String(Math.round(Number(n||0)*100)/100);
+
+// Draw the ops with a given jsPDF doc. Returns the y it finished at, so the
+// same routine both measures (throwaway doc) and renders (real doc).
+function posDraw(doc, ops){
+  const L = POS_PAD, R = POS_W - POS_PAD;
+  let y = 4;
+  const lh = (size) => size * 0.42;   // pt -> mm leading, tuned for Courier
+
+  for(const op of ops){
+    if(op.t === "gap"){ y += op.h; continue; }
+    if(op.t === "rule"){
+      y += 1.2;
+      doc.setLineWidth(op.heavy ? 0.4 : 0.15);
+      doc.line(L, y, R, y);
+      y += 1.8;
+      continue;
+    }
+    let size = op.size || 7.5;
+    doc.setFont("courier", op.bold ? "bold" : "normal");
+    doc.setFontSize(size);
+
+    // Shrink-to-fit for lines flagged fit:true (the grand total). Step down
+    // until key + value fit on one line, with a floor so it stays readable.
+    if(op.t === "kv" && op.fit){
+      while(size > 6 &&
+            doc.getTextWidth(op.k) + doc.getTextWidth(op.val) + 1.5 > POS_CONTENT){
+        size -= 0.25;
+        doc.setFontSize(size);
+      }
+    }
+
+    if(op.t === "kv"){
+      // Key left, value hard right. If the key is too long to leave room for
+      // the value, wrap the key and put the value on the last line's right.
+      const valW = doc.getTextWidth(op.val);
+      const keyMax = POS_CONTENT - valW - 1.5;
+      const keyLines = doc.splitTextToSize(op.k, Math.max(keyMax, 10));
+      keyLines.forEach((line, idx) => {
+        y += lh(size);
+        doc.text(line, L, y);
+        if(idx === keyLines.length - 1) doc.text(op.val, R, y, {align:"right"});
+      });
+      continue;
+    }
+    // center / left / wrap all wrap at the content width
+    const lines = doc.splitTextToSize(op.s, POS_CONTENT);
+    lines.forEach(line => {
+      y += lh(size);
+      if(op.t === "center") doc.text(line, POS_W/2, y, {align:"center"});
+      else doc.text(line, L, y);
+    });
+  }
+  return y;
+}
+
+// Build the 57mm receipt. Two passes: measure on a scratch doc, then draw on a
+// page cut to that exact height (+ bottom padding for the tear-off).
+async function renderPosReceipt(){
+  await ensurePdfLibs();
+  const { jsPDF } = window.jspdf;
+  const ops = posOps();
+  const probe = new jsPDF({unit:"mm", format:[POS_W, 600]});
+  const h = posDraw(probe, ops) + 6;
+  const doc = new jsPDF({unit:"mm", format:[POS_W, Math.max(h, 40)]});
+  posDraw(doc, ops);
+  return doc;
+}
+
+function downloadPosReceipt(){
+  const btn = $("btnPos"), was = btn.textContent;
+  btn.disabled = true; btn.textContent = "…";
+  renderPosReceipt().then(doc => {
+    const no = ($("invNo").value.trim() || "receipt").replace(/[^\w.-]+/g, "-");
+    doc.save(`receipt-${no}-57mm.pdf`);
+  }).catch(e => {
+    console.warn("POS receipt failed:", e);
+    alert("Couldn't build the receipt: " + (e.message || e));
+  }).finally(() => { btn.disabled = false; btn.textContent = was; });
 }
 
 // brand SVGs (inline, currentColor where sensible)
