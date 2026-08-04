@@ -597,16 +597,25 @@ async function tryRenderPdf(){
    Height is measured first and the page built to fit, so the roll never
    gets a trailing blank feed.
 
-   Width: the page is the full 57mm of paper, but the *printable* band is
-   narrower than the roll. A 57/58mm printer has a 384-dot head at 203dpi
-   = 48.0mm; the rest of the paper physically passes outside the head. So
-   content is centred in a 48mm band, leaving 4.5mm of dead paper each
-   side. Right-aligned amounts used to end at 55mm — past the head — which
-   silently ate the last characters ("600.00" printed as "600."). */
-const POS_W = 57;
-const POS_PRINTABLE = 48;                       // 384 dots @ 203dpi
-const POS_PAD = (POS_W - POS_PRINTABLE) / 2;    // 4.5mm each side
-const POS_CONTENT = POS_PRINTABLE;
+   Width: the PAGE is the printable width, not the paper width.
+
+   57mm paper has a head that reaches roughly 52mm from the left edge — the
+   last ~5mm of roll physically passes outside it and can never take ink.
+   Two earlier attempts got this wrong in opposite directions. First the
+   page was 57mm with content to 55mm, so right-aligned amounts fell past
+   the head and lost characters ("600.00" printed as "600."). Then content
+   was centred in a 48mm band — which fixed the clipping but assumed the
+   head was centred too. It isn't: the original left margin of 2mm printed
+   fine, so the head starts at the left edge. Centring simply moved
+   everything 2.5mm right and made the unreachable strip look larger.
+
+   Making the page itself 52mm removes the dead strip from the document
+   instead of encoding it. The receipt now starts 1.5mm from the paper's
+   left edge, exactly as it did in the version whose left margin looked
+   right, and every remaining millimetre is inside the head. */
+const POS_W = 52;                     // printable width, ~1.5mm inset on paper
+const POS_PAD = 1.5;
+const POS_CONTENT = POS_W - POS_PAD*2;   // 49mm of content
 
 /* Sizes are per role rather than one global multiplier.
 
@@ -702,11 +711,14 @@ function posOps(){
   }
   ops.push({t:"rule"});
 
-  ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:PS.totals});
-  if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:PS.totals});
-  if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:PS.totals});
-  if(t.disc || t.shipping) ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:PS.totals});
-  t.taxRows.forEach(([l,val]) => ops.push({t:"kv", k:l, val:money(val), size:PS.totals}));
+  // fit:true throughout — a wrapped money label reads as two rows and breaks
+  // the column ("Shipping (Hand" / "delivery)"). Shrinking the row a quarter
+  // point keeps one label against one figure, which is what a receipt needs.
+  ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:PS.totals, fit:true});
+  if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:PS.totals, fit:true});
+  if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:PS.totals, fit:true});
+  if(t.disc || t.shipping) ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:PS.totals, fit:true});
+  t.taxRows.forEach(([l,val]) => ops.push({t:"kv", k:l, val:money(val), size:PS.totals, fit:true}));
 
   ops.push({t:"rule", heavy:true});
   // The label and the figure each get their own line, the way a till receipt
@@ -759,12 +771,14 @@ function posDraw(doc, ops){
     doc.setFont("courier", op.bold ? "bold" : "normal");
     doc.setFontSize(size);
 
-    // Shrink-to-fit for lines flagged fit:true (item rows, the grand figure).
-    // Step down until the line fits, but never below the ordinary totals size —
-    // a grand total smaller than the Subtotal above it looks like a mistake,
-    // and at that point wrapping is the lesser evil.
+    // Shrink-to-fit for lines flagged fit:true. Step down until the line fits.
+    // The floor is a fraction of the row's own size rather than a fixed value:
+    // a shared floor at PS.totals would leave the totals rows (which start
+    // there) unable to shrink at all, and a long shipping mode would wrap
+    // instead. 0.75 is enough for every label the form can produce while
+    // keeping a row recognisably the same size as its neighbours.
     if(op.fit){
-      const floor = PS.totals;
+      const floor = size * 0.75;
       const width = () => op.t === "kv"
         ? doc.getTextWidth(op.k) + doc.getTextWidth(op.val) + 1.5
         : doc.getTextWidth(op.s);
@@ -817,7 +831,9 @@ function downloadPosReceipt(){
   btn.disabled = true; btn.textContent = "…";
   renderPosReceipt().then(doc => {
     const no = ($("invNo").value.trim() || "receipt").replace(/[^\w.-]+/g, "-");
-    doc.save(`receipt-${no}-57mm.pdf`);
+    // Named for the paper it's meant for, not the page width — someone
+    // looking for "the 57mm receipt" shouldn't have to know it prints 52.
+    doc.save(`receipt-${no}-57mm-roll.pdf`);
   }).catch(e => {
     console.warn("POS receipt failed:", e);
     alert("Couldn't build the receipt: " + (e.message || e));
