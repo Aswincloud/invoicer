@@ -594,11 +594,19 @@ async function tryRenderPdf(){
    1-bit, so a downscaled screenshot of the A4 sheet turns to mush. Real
    text in a mono font stays crisp and the file stays tiny.
 
-   Page is 57mm wide with 2mm side margins -> 53mm of content. Height is
-   measured first and the page built to fit, so the roll never gets a
-   trailing blank feed. */
-const POS_W = 57, POS_PAD = 2;
-const POS_CONTENT = POS_W - POS_PAD*2;   // 53mm
+   Height is measured first and the page built to fit, so the roll never
+   gets a trailing blank feed.
+
+   Width: the page is the full 57mm of paper, but the *printable* band is
+   narrower than the roll. A 57/58mm printer has a 384-dot head at 203dpi
+   = 48.0mm; the rest of the paper physically passes outside the head. So
+   content is centred in a 48mm band, leaving 4.5mm of dead paper each
+   side. Right-aligned amounts used to end at 55mm — past the head — which
+   silently ate the last characters ("600.00" printed as "600."). */
+const POS_W = 57;
+const POS_PRINTABLE = 48;                       // 384 dots @ 203dpi
+const POS_PAD = (POS_W - POS_PRINTABLE) / 2;    // 4.5mm each side
+const POS_CONTENT = POS_PRINTABLE;
 
 // jsPDF's core fonts are WinAnsi-encoded and have no ₹ — it silently prints as
 // "¹". "Rs." is the conventional spelling on Indian thermal receipts anyway.
@@ -654,10 +662,12 @@ function posOps(){
     ops.push({t:"center", s:"(no line items)", size:7});
   } else {
     // Description on its own line, then "qty x rate" indented with the amount
-    // right-aligned — 53mm can't hold a 4-column table without truncating.
+    // right-aligned — 48mm can't hold a 4-column table without truncating.
+    // fit:true keeps "qty x rate" and the amount on one line: a big quantity
+    // against a big rate otherwise wraps mid-expression ("12345.67 x" / "8,888.88").
     items.forEach(i => {
       ops.push({t:"wrap", s:i.desc || "Item", size:7.5});
-      ops.push({t:"kv", k:`  ${trimNum(i.qty)} x ${money(i.rate)}`, val:money(i.amt), size:7});
+      ops.push({t:"kv", k:`  ${trimNum(i.qty)} x ${money(i.rate)}`, val:money(i.amt), size:7, fit:true});
     });
   }
   ops.push({t:"rule"});
