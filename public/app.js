@@ -608,6 +608,17 @@ const POS_PRINTABLE = 48;                       // 384 dots @ 203dpi
 const POS_PAD = (POS_W - POS_PRINTABLE) / 2;    // 4.5mm each side
 const POS_CONTENT = POS_PRINTABLE;
 
+/* Every size below is a base size multiplied by this. Thermal receipts get
+   read at arm's length in bad light, so bigger is genuinely better — the
+   limit is the 48mm band. Measured ceilings at 1.0: the tightest amount row
+   ("Discount (12.5%)" + "-2,500.00") wraps above 8.75pt and a full street
+   address above 8pt, against base sizes of 7 and 6.5. 1.2 lands those at
+   8.4 and 7.8 — the most we can add before ordinary receipts start wrapping.
+   Anything that still doesn't fit shrinks (amount rows) or wraps (prose)
+   rather than clipping, so this stays safe if a value is unusually long. */
+const POS_SCALE = 1.2;
+const ps = (base) => base * POS_SCALE;
+
 // jsPDF's core fonts are WinAnsi-encoded and have no ₹ — it silently prints as
 // "¹". "Rs." is the conventional spelling on Indian thermal receipts anyway.
 // £/€/$ all survive WinAnsi, so they pass through untouched.
@@ -632,16 +643,16 @@ function posOps(){
   const ops = [];
   const money = (n) => posMoney(n, cur, false);
 
-  ops.push({t:"center", s:(v("bizName") || "Your Business").toUpperCase(), bold:true, size:9});
-  if(v("bizAddr")) v("bizAddr").split(/\n+/).forEach(l => ops.push({t:"center", s:l, size:6.5}));
+  ops.push({t:"center", s:(v("bizName") || "Your Business").toUpperCase(), bold:true, size:ps(9)});
+  if(v("bizAddr")) v("bizAddr").split(/\n+/).forEach(l => ops.push({t:"center", s:l, size:ps(6.5)}));
   // Phone and email each get their own line. Joined with " · " they overflow
   // 53mm and wrap mid-separator, leaving a dangling "·" on the next line.
-  if(v("bizPhone")) ops.push({t:"center", s:v("bizPhone"), size:6.5});
-  if(v("bizEmail")) ops.push({t:"center", s:v("bizEmail"), size:6.5});
-  if(v("bizGst")) ops.push({t:"center", s:"GSTIN: "+v("bizGst"), size:6.5});
+  if(v("bizPhone")) ops.push({t:"center", s:v("bizPhone"), size:ps(6.5)});
+  if(v("bizEmail")) ops.push({t:"center", s:v("bizEmail"), size:ps(6.5)});
+  if(v("bizGst")) ops.push({t:"center", s:"GSTIN: "+v("bizGst"), size:ps(6.5)});
 
   ops.push({t:"rule"});
-  ops.push({t:"center", s:"TAX INVOICE", bold:true, size:7.5, track:true});
+  ops.push({t:"center", s:"TAX INVOICE", bold:true, size:ps(7.5), track:true});
   ops.push({t:"rule"});
 
   if(v("invNo"))     ops.push({t:"kv", k:"No.",    val:v("invNo")});
@@ -651,54 +662,54 @@ function posOps(){
 
   if(v("clName") || v("clAddr") || v("clGst")){
     ops.push({t:"rule"});
-    ops.push({t:"left", s:"BILL TO", size:6.5, bold:true});
-    if(v("clName")) ops.push({t:"wrap", s:v("clName"), size:7.5});
-    if(v("clAddr")) ops.push({t:"wrap", s:v("clAddr").replace(/\n+/g, ", "), size:6.5});
-    if(v("clGst"))  ops.push({t:"wrap", s:"GSTIN: "+v("clGst"), size:6.5});
+    ops.push({t:"left", s:"BILL TO", size:ps(6.5), bold:true});
+    if(v("clName")) ops.push({t:"wrap", s:v("clName"), size:ps(7.5)});
+    if(v("clAddr")) ops.push({t:"wrap", s:v("clAddr").replace(/\n+/g, ", "), size:ps(6.5)});
+    if(v("clGst"))  ops.push({t:"wrap", s:"GSTIN: "+v("clGst"), size:ps(6.5)});
   }
 
   ops.push({t:"rule"});
   if(!items.length){
-    ops.push({t:"center", s:"(no line items)", size:7});
+    ops.push({t:"center", s:"(no line items)", size:ps(7)});
   } else {
     // Description on its own line, then "qty x rate" indented with the amount
     // right-aligned — 48mm can't hold a 4-column table without truncating.
     // fit:true keeps "qty x rate" and the amount on one line: a big quantity
     // against a big rate otherwise wraps mid-expression ("12345.67 x" / "8,888.88").
     items.forEach(i => {
-      ops.push({t:"wrap", s:i.desc || "Item", size:7.5});
-      ops.push({t:"kv", k:`  ${trimNum(i.qty)} x ${money(i.rate)}`, val:money(i.amt), size:7, fit:true});
+      ops.push({t:"wrap", s:i.desc || "Item", size:ps(7.5)});
+      ops.push({t:"kv", k:`  ${trimNum(i.qty)} x ${money(i.rate)}`, val:money(i.amt), size:ps(7), fit:true});
     });
   }
   ops.push({t:"rule"});
 
-  ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:7});
-  if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:7});
-  if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:7});
-  if(t.disc || t.shipping) ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:7});
-  t.taxRows.forEach(([l,val]) => ops.push({t:"kv", k:l, val:money(val), size:7}));
+  ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:ps(7)});
+  if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:ps(7)});
+  if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:ps(7)});
+  if(t.disc || t.shipping) ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:ps(7)});
+  t.taxRows.forEach(([l,val]) => ops.push({t:"kv", k:l, val:money(val), size:ps(7)}));
 
   ops.push({t:"rule", heavy:true});
   // fit:true — a large enough figure (a crore, say) pushes "TOTAL (Rs.)" past
   // 53mm at 10pt and wraps the label onto two lines. Shrink to fit instead:
   // the grand total is the one line that must never look broken.
-  ops.push({t:"kv", k:"TOTAL"+(cur?` (${posCur(cur)})`:""), val:money(t.total), size:10, bold:true, fit:true});
+  ops.push({t:"kv", k:"TOTAL"+(cur?` (${posCur(cur)})`:""), val:money(t.total), size:ps(10), bold:true, fit:true});
   ops.push({t:"rule", heavy:true});
 
   if(v("bizPay")){
-    ops.push({t:"left", s:"PAY TO", size:6.5, bold:true});
-    ops.push({t:"wrap", s:v("bizPay").replace(/\n+/g, " · "), size:6.5});
+    ops.push({t:"left", s:"PAY TO", size:ps(6.5), bold:true});
+    ops.push({t:"wrap", s:v("bizPay").replace(/\n+/g, " · "), size:ps(6.5)});
   }
   if(v("notes")){
     ops.push({t:"gap", h:1});
-    ops.push({t:"wrap", s:v("notes").replace(/\n+/g, " "), size:6.5});
+    ops.push({t:"wrap", s:v("notes").replace(/\n+/g, " "), size:ps(6.5)});
   }
   ops.push({t:"gap", h:1.5});
   // The stock thank-you is a nicety, not a fixture — skip it when the notes
   // already say it, rather than printing the same sentence twice.
   if(!/thank you/i.test(v("notes")))
-    ops.push({t:"center", s:"Thank you for your business!", size:6.5});
-  ops.push({t:"center", s:"Generated with Invoicer", size:6});
+    ops.push({t:"center", s:"Thank you for your business!", size:ps(6.5)});
+  ops.push({t:"center", s:"Generated with Invoicer", size:ps(6)});
   return ops;
 }
 
@@ -722,14 +733,17 @@ function posDraw(doc, ops){
       y += 1.8;
       continue;
     }
-    let size = op.size || 7.5;
+    let size = op.size || ps(7.5);
     doc.setFont("courier", op.bold ? "bold" : "normal");
     doc.setFontSize(size);
 
-    // Shrink-to-fit for lines flagged fit:true (the grand total). Step down
-    // until key + value fit on one line, with a floor so it stays readable.
+    // Shrink-to-fit for lines flagged fit:true (grand total, item rows). Step
+    // down until key + value fit on one line. The floor scales with POS_SCALE
+    // too — a fixed 6pt would stop being a floor once the base sizes grow past
+    // it, letting a long row shrink far below its neighbours.
     if(op.t === "kv" && op.fit){
-      while(size > 6 &&
+      const floor = ps(6);
+      while(size > floor &&
             doc.getTextWidth(op.k) + doc.getTextWidth(op.val) + 1.5 > POS_CONTENT){
         size -= 0.25;
         doc.setFontSize(size);
