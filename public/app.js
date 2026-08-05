@@ -36,7 +36,14 @@ function itemRow(desc="",qty="1",rate=""){
   div.innerHTML =
     `<input class="d" placeholder="Description — e.g. Consulting services" value="${esc(desc)}">`+
     `<div class="item-nums">`+
-      `<label>Qty<input class="q" type="number" min="0" step="0.01" placeholder="1" value="${esc(qty)}"></label>`+
+      // Qty arrows move by 1 — counting units is the norm, and the old 0.01 step
+      // made them crawl. A fractional qty (2.5 kg, 1.5 hours) still computes
+      // correctly because readItems() parses .value directly, but it does count
+      // as :invalid under this step. That's deliberate: step="any" restores
+      // validity yet makes stepUp() throw InvalidStateError, killing the arrows
+      // altogether. Nothing calls checkValidity(), so working arrows win — just
+      // don't add form validation here without revisiting this.
+      `<label>Qty<input class="q" type="number" min="0" step="1" placeholder="1" value="${esc(qty)}"></label>`+
       `<label>Rate<input class="r" type="number" min="0" step="0.01" placeholder="0" value="${esc(rate)}"></label>`+
       `<label>Amount<input class="a" placeholder="0.00" disabled></label>`+
       `<button class="rm" title="Remove line item" aria-label="Remove line item">×</button>`+
@@ -478,8 +485,11 @@ function init(){
   if(!$("invNo").value)     $("invNo").value = "INV-" + new Date().getFullYear() + "-" +
       String(Math.floor(Math.random()*9000)+1000);
 
-  // seed one example line item
-  addItem("Consulting services","10","2500");
+  // One empty row to type into. Qty defaults to 1 (the common case); the
+  // description and rate are left blank rather than seeded with a sample —
+  // a pre-filled price is a figure you have to notice and clear, and on an
+  // invoice that's the kind of thing that goes out by accident.
+  addItem();
 
   ALL_FIELDS.forEach(f => $(f).addEventListener("input", update));
   $("shippingMode").addEventListener("change", () => { syncShippingMode(); update(); });
