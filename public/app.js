@@ -629,26 +629,29 @@ async function tryRenderPdf(){
    Height is measured first and the page built to fit, so the roll never
    gets a trailing blank feed.
 
-   Width: measured, not inferred. Three earlier attempts guessed the head's
-   geometry from symptoms and all three were wrong. A calibration page — a
-   bar across the full 57mm plus a millimetre ruler — was printed on the
-   actual hardware, and reported: the "0" label is clipped, and ink stops at
-   50mm. So the printable band is ~1.5..50mm = 48.5mm, which matches a
-   384-dot head at 203dpi (48.05mm) almost exactly.
+   Width: taken from a printed calibration page, measured with a ruler.
 
-   Two things follow. The head does NOT start at the paper's edge, so the
-   ~7mm of roll past 50mm can never take ink in any version — that blank
-   right strip is the paper, not the document, and no layout fixes it. And
-   the page must END at 50mm: the previous 52mm page put content at
-   1.5..50.5mm, half a millimetre past the head, quietly clipping the
-   right-aligned amounts again.
+   That page drew a solid bar across the full 57mm. On paper the ink spanned
+   4..54mm — 4mm of blank roll on the left, 3mm on the right. So the head
+   prints a 50mm window (400 dots at 203dpi) starting 4mm in, and the printer
+   maps PDF x=0 to paper x=0 at native size.
 
-   The page is therefore exactly the printable band. Content fills all
-   48.5mm of it, which keeps text as large as the hardware allows and
-   leaves the unreachable strip where it is. */
-const POS_W = 50;                        // = the head's right limit, measured
-const POS_PAD = 1.5;                     // = the head's left start, measured
-const POS_CONTENT = POS_W - POS_PAD;     // 48.5mm — the full printable band
+   Two corrections to earlier attempts, both worth stating so they aren't
+   repeated. The head reaches 54mm, not 50: the calibration ruler's labels
+   simply stopped at 50 because that was the last one drawn, and the end of
+   the ruler got mistaken for the end of the head. And the PAGE has to stay
+   the full 57mm — a narrower page is left-aligned on the roll, so it strands
+   paper on the right rather than reclaiming it. Shrinking the page to 50mm
+   pushed the right-hand blank from 3mm to 7mm.
+
+   So: full-width page, content confined to the 4..54mm window the head can
+   actually reach. Nothing is clipped, and the 4mm/3mm blank edges are the
+   roll passing outside the head — not margins, and not removable. */
+const POS_W = 57;                            // full paper width: PDF mm == paper mm
+const POS_L = 4;                             // head starts here (measured)
+const POS_R = 54;                            // head stops here (measured)
+const POS_PAD = POS_L;                       // kept for callers reading POS_PAD
+const POS_CONTENT = POS_R - POS_L;           // 50mm of reachable width
 
 /* Sizes are per role rather than one global multiplier.
 
@@ -798,11 +801,10 @@ const trimNum = (n) => String(Math.round(Number(n||0)*100)/100);
 // Draw the ops with a given jsPDF doc. Returns the y it finished at, so the
 // same routine both measures (throwaway doc) and renders (real doc).
 function posDraw(doc, ops){
-  // Asymmetric by design: the left inset is where the head starts printing,
-  // the right edge is where it stops. Insetting the right too would just hand
-  // back printable width for nothing — there's no paper edge to clear on that
-  // side, the head simply ends.
-  const L = POS_PAD, R = POS_W;
+  // Both bounds are the head's, not the page's: the page is the full 57mm of
+  // paper, but only 4..54mm of it can take ink. Using POS_W as the right edge
+  // would place amounts 3mm beyond where the head stops.
+  const L = POS_L, R = POS_R;
   let y = 4;
   const lh = (size) => size * 0.42;   // pt -> mm leading, tuned for Courier
 
@@ -850,9 +852,9 @@ function posDraw(doc, ops){
       continue;
     }
     // center / right / left / wrap all wrap at the content width. Centring is
-    // on the midpoint of the printable band (L..R), not of the page — with an
-    // asymmetric left inset those differ, and using POS_W/2 would pull every
-    // centred line half the inset to the left of the body text.
+    // on the midpoint of the head's window (L..R = 29mm), not the page's
+    // (28.5mm) — the window isn't centred on the paper, so using POS_W/2 would
+    // sit centred lines half a millimetre left of the body text.
     const mid = (L + R) / 2;
     const lines = doc.splitTextToSize(op.s, POS_CONTENT);
     lines.forEach(line => {
