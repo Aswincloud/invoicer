@@ -56,6 +56,12 @@ body{font-family:var(--font-ui);font-size:14px;line-height:1.5;
   background:var(--surface);color:var(--ink);padding:9px 15px;border-radius:9px;
   cursor:pointer;transition:border-color .16s,background .16s,color .16s,filter .16s;
   display:inline-flex;align-items:center;gap:7px}
+/* Any `display` declaration beats the hidden attribute, and several rules here
+   set one on elements that ship hidden: .btn on the signed-in-only buttons
+   (667px of topbar on a 390px phone — what forced the page to scroll
+   sideways), label on #shippingModeOtherWrap, .divider on #ssoDivider. One
+   global rule instead of chasing each selector. */
+[hidden]{display:none!important}
 .btn:hover{border-color:color-mix(in srgb,var(--muted) 60%,var(--line))}
 .btn:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
 .btn.primary{background:var(--primary);color:var(--primary-ink);border-color:var(--primary)}
@@ -265,6 +271,61 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
 @media(max-width:560px){
   .inv-row{grid-template-columns:1fr}
   .inv-right{justify-content:space-between}
+}
+
+/* ── Phones ─────────────────────────────────────────────────────── */
+@media(max-width:640px){
+  /* The topbar was the reason the whole page scrolled sideways: nine buttons
+     on one row can't fit 390px however tight the padding. Let them wrap, and
+     drop the label on the two icon-only buttons. */
+  .topbar-in{flex-wrap:wrap;padding:10px 14px;gap:9px}
+  .actions{flex-wrap:wrap;justify-content:flex-end;flex:1 1 100%;gap:7px}
+  .logo-wrap{font-size:16px}
+  .who{max-width:100%;font-size:11px;flex:1 1 100%;text-align:right}
+  .btn{font-size:12.5px;padding:8px 12px}
+  .icon-btn{width:34px;height:34px;font-size:17px}
+
+  .layout{padding:14px;gap:16px}
+  .grp{padding:2px 13px 13px}
+
+  /* One column: two 50% fields on a phone leave neither wide enough to read
+     a date or a GSTIN in. */
+  .grid2{grid-template-columns:1fr;gap:11px}
+  .grid2 .col2{grid-column:1}
+
+  /* Qty / Rate / Amount stay on one row — they're short numbers and belong
+     side by side — but the remove button moves out of the flow so it can't
+     squeeze them. */
+  .item-nums{grid-template-columns:1fr 1fr 1fr;gap:7px}
+  .item-nums input{padding:8px}
+  .item{position:relative;padding-top:11px}
+  .item .rm{position:absolute;top:8px;right:8px;width:30px;height:30px;font-size:15px}
+  .item .d{padding-right:44px}
+
+  /* The sheet was 48px of padding each side, leaving 272px of content out of
+     370px. A phone can't spare a third of its width to margins. */
+  .paper{padding:22px 18px;min-height:0;font-size:11.5px}
+  /* Logo/company above, INVOICE + meta below — side by side they were 129px
+     and 136px, too narrow for either. */
+  .paper .ph{flex-direction:column;gap:14px;padding-bottom:14px}
+  .paper .title{text-align:left}
+  .paper .title h2{font-size:21px}
+  /* .parties is flex, not grid — column direction is what stacks it. */
+  .parties{flex-direction:column;gap:14px;margin:16px 0 6px}
+  .parties>div:last-child{text-align:left!important}
+  /* Rate is derivable from amount ÷ qty; on 320px it's the column to lose
+     before the description starts wrapping to one word per line. */
+  table.lines th:nth-child(3),table.lines td:nth-child(3){display:none}
+  table.lines th,table.lines td{padding:8px 6px}
+  /* The description th carries an inline width:48%, so this needs !important
+     to win — with Rate gone there's room to give it back. */
+  table.lines thead th:first-child{width:auto!important}
+  .totbox table{width:100%;min-width:0}
+  .totbox .grand td.r{font-size:17px}
+
+  /* Sticky preview fights a phone's scroll — the form is long and the sheet
+     belongs below it, not pinned. */
+  .preview-wrap{position:static}
 }
 
 /* ── Print ──────────────────────────────────────────────────────── */
