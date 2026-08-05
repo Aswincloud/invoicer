@@ -648,15 +648,24 @@ async function tryRenderPdf(){
    large solid fills band on a battery-powered head, so the bar's true extent
    was never as legible as a relative comparison between two of them.
 
-   0.5mm of left inset absorbs paper wander; stopping at 48mm rather than
-   48.6 costs nothing and stays clear of dot rounding. The blank strip left
-   on the right is the roll passing outside the head — not a margin, and not
-   removable by any layout. */
+   A follow-up strip pinned the left edge. Text drawn from 0.5mm printed with
+   its first character half-cut — the "b" of "both" lost its stem, leaving
+   only the bowl — so at 6pt (1.27mm per character) the head actually starts
+   at ~1.1mm. The same strip printed two right-aligned amounts ending at 48mm
+   in full, confirming that limit. A 384-dot head starting at 1.1mm ends at
+   49.15mm, so 48 sits inside it with room to spare — the two readings agree.
+
+   POS_L is 1.5mm rather than 1.1: a first character shaved off the
+   description is worse than giving up 0.4mm of width, and the roll wanders
+   slightly as it feeds. Stopping at 48 rather than 48.6 likewise stays clear
+   of dot rounding for nothing lost. The blank strip on the right is the roll
+   passing outside the head — not a margin, and not removable by any
+   layout. */
 const POS_W = 57;                            // full paper width: PDF mm == paper mm
-const POS_L = 0.5;                           // head starts at the paper edge
+const POS_L = 1.5;                           // head starts ~1.1mm; +0.4mm safety
 const POS_R = 48;                            // 384-dot head limit (48.05mm)
 const POS_PAD = POS_L;                       // kept for callers reading POS_PAD
-const POS_CONTENT = POS_R - POS_L;           // 47.5mm of reachable width
+const POS_CONTENT = POS_R - POS_L;           // 46.5mm of reachable width
 
 /* Sizes are per role rather than one global multiplier.
 
