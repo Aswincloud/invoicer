@@ -629,25 +629,26 @@ async function tryRenderPdf(){
    Height is measured first and the page built to fit, so the roll never
    gets a trailing blank feed.
 
-   Width: the PAGE is the printable width, not the paper width.
+   Width: measured, not inferred. Three earlier attempts guessed the head's
+   geometry from symptoms and all three were wrong. A calibration page — a
+   bar across the full 57mm plus a millimetre ruler — was printed on the
+   actual hardware, and reported: the "0" label is clipped, and ink stops at
+   50mm. So the printable band is ~1.5..50mm = 48.5mm, which matches a
+   384-dot head at 203dpi (48.05mm) almost exactly.
 
-   57mm paper has a head that reaches roughly 52mm from the left edge — the
-   last ~5mm of roll physically passes outside it and can never take ink.
-   Two earlier attempts got this wrong in opposite directions. First the
-   page was 57mm with content to 55mm, so right-aligned amounts fell past
-   the head and lost characters ("600.00" printed as "600."). Then content
-   was centred in a 48mm band — which fixed the clipping but assumed the
-   head was centred too. It isn't: the original left margin of 2mm printed
-   fine, so the head starts at the left edge. Centring simply moved
-   everything 2.5mm right and made the unreachable strip look larger.
+   Two things follow. The head does NOT start at the paper's edge, so the
+   ~7mm of roll past 50mm can never take ink in any version — that blank
+   right strip is the paper, not the document, and no layout fixes it. And
+   the page must END at 50mm: the previous 52mm page put content at
+   1.5..50.5mm, half a millimetre past the head, quietly clipping the
+   right-aligned amounts again.
 
-   Making the page itself 52mm removes the dead strip from the document
-   instead of encoding it. The receipt now starts 1.5mm from the paper's
-   left edge, exactly as it did in the version whose left margin looked
-   right, and every remaining millimetre is inside the head. */
-const POS_W = 52;                     // printable width, ~1.5mm inset on paper
-const POS_PAD = 1.5;
-const POS_CONTENT = POS_W - POS_PAD*2;   // 49mm of content
+   The page is therefore exactly the printable band. Content fills all
+   48.5mm of it, which keeps text as large as the hardware allows and
+   leaves the unreachable strip where it is. */
+const POS_W = 50;                        // = the head's right limit, measured
+const POS_PAD = 1.5;                     // = the head's left start, measured
+const POS_CONTENT = POS_W - POS_PAD;     // 48.5mm — the full printable band
 
 /* Sizes are per role rather than one global multiplier.
 
@@ -797,7 +798,11 @@ const trimNum = (n) => String(Math.round(Number(n||0)*100)/100);
 // Draw the ops with a given jsPDF doc. Returns the y it finished at, so the
 // same routine both measures (throwaway doc) and renders (real doc).
 function posDraw(doc, ops){
-  const L = POS_PAD, R = POS_W - POS_PAD;
+  // Asymmetric by design: the left inset is where the head starts printing,
+  // the right edge is where it stops. Insetting the right too would just hand
+  // back printable width for nothing — there's no paper edge to clear on that
+  // side, the head simply ends.
+  const L = POS_PAD, R = POS_W;
   let y = 4;
   const lh = (size) => size * 0.42;   // pt -> mm leading, tuned for Courier
 
@@ -844,11 +849,15 @@ function posDraw(doc, ops){
       });
       continue;
     }
-    // center / right / left / wrap all wrap at the content width
+    // center / right / left / wrap all wrap at the content width. Centring is
+    // on the midpoint of the printable band (L..R), not of the page — with an
+    // asymmetric left inset those differ, and using POS_W/2 would pull every
+    // centred line half the inset to the left of the body text.
+    const mid = (L + R) / 2;
     const lines = doc.splitTextToSize(op.s, POS_CONTENT);
     lines.forEach(line => {
       y += lh(size);
-      if(op.t === "center")     doc.text(line, POS_W/2, y, {align:"center"});
+      if(op.t === "center")     doc.text(line, mid, y, {align:"center"});
       else if(op.t === "right") doc.text(line, R, y, {align:"right"});
       else                      doc.text(line, L, y);
     });
