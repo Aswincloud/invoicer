@@ -693,6 +693,11 @@ function posMoney(n, cur, withSym){
   return withSym && sym ? sym + " " + s : s;
 }
 
+// Split a textarea's value into the lines the user actually typed. Blank lines
+// are dropped (they'd feed empty paper on a roll) but real breaks are kept, so
+// a formatted block reaches the receipt as written.
+const lines = (s) => String(s || "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
 // Collect every line the receipt will draw, as {t:type, ...} ops. Building the
 // op list before touching jsPDF is what lets us measure the height up front.
 function posOps(){
@@ -704,7 +709,7 @@ function posOps(){
   const money = (n) => posMoney(n, cur, false);
 
   ops.push({t:"center", s:(v("bizName") || "Your Business").toUpperCase(), bold:true, size:PS.bizName});
-  if(v("bizAddr")) v("bizAddr").split(/\n+/).forEach(l => ops.push({t:"center", s:l, size:PS.bizMeta}));
+  lines(v("bizAddr")).forEach(l => ops.push({t:"center", s:l, size:PS.bizMeta}));
   // Phone and email each get their own line. Joined with " · " they overflow
   // 53mm and wrap mid-separator, leaving a dangling "·" on the next line.
   if(v("bizPhone")) ops.push({t:"center", s:v("bizPhone"), size:PS.bizMeta});
@@ -724,7 +729,7 @@ function posOps(){
     ops.push({t:"rule"});
     ops.push({t:"left", s:"BILL TO", size:PS.label, bold:true});
     if(v("clName")) ops.push({t:"wrap", s:v("clName"), size:PS.client});
-    if(v("clAddr")) ops.push({t:"wrap", s:v("clAddr").replace(/\n+/g, ", "), size:PS.clientMeta});
+    lines(v("clAddr")).forEach(l => ops.push({t:"wrap", s:l, size:PS.clientMeta}));
     if(v("clGst"))  ops.push({t:"wrap", s:"GSTIN: "+v("clGst"), size:PS.clientMeta});
   }
 
@@ -764,13 +769,17 @@ function posOps(){
   ops.push({t:"right",  s:money(t.total), size:PS.grand, bold:true, fit:true});
   ops.push({t:"rule", heavy:true});
 
+  // One op per typed line, so a line break survives onto the paper. These used
+  // to be joined with " · " and " ", which turned a deliberately formatted
+  // block ("A/C 1234…" then "IFSC …") into one run-on line. The preview honours
+  // the breaks via white-space:pre-line, so the receipt should too.
   if(v("bizPay")){
     ops.push({t:"left", s:"PAY TO", size:PS.label, bold:true});
-    ops.push({t:"wrap", s:v("bizPay").replace(/\n+/g, " · "), size:PS.prose});
+    lines(v("bizPay")).forEach(l => ops.push({t:"wrap", s:l, size:PS.prose}));
   }
   if(v("notes")){
     ops.push({t:"gap", h:1});
-    ops.push({t:"wrap", s:v("notes").replace(/\n+/g, " "), size:PS.prose});
+    lines(v("notes")).forEach(l => ops.push({t:"wrap", s:l, size:PS.prose}));
   }
   ops.push({t:"gap", h:1.5});
   // The stock thank-you is a nicety, not a fixture — skip it when the notes
