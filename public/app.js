@@ -81,8 +81,19 @@ function computeTotals(items){
     const t = taxable * rate/100;
     taxRows = [[`Tax (${rate}%)`, t]]; taxTotal = t;
   }
-  return {subtotal, disc, shipping, taxable, taxRows, total: taxable + taxTotal};
+  // Round the grand total to a whole unit, showing the adjustment as its own
+  // line. Standard GST presentation: subtotal, discount, shipping and each tax
+  // row stay exact and auditable, and a visible "Round off" absorbs the paise
+  // so the figures on the page still add up to the total.
+  const gross = taxable + taxTotal;
+  const total = $("roundOff").checked ? Math.round(gross) : gross;
+  return {subtotal, disc, shipping, taxable, taxRows, gross, round: total - gross, total};
 }
+
+// Show the round-off row only when it actually moves the total. An adjustment
+// under half a paisa displays as "0.00" (or "-0.00"), which reads as a bug
+// rather than a rounding, so those are suppressed instead of printed.
+const showRound = (t) => Math.abs(t.round) >= 0.005;
 
 // Effective mode of shipping: the dropdown value, or the free-text box when
 // "Other…" is picked.
@@ -224,9 +235,15 @@ function solveFromTarget(){
                : `scaled ${applied.n} line items by ×${k}`)
     : `rate <b>${fmt(applied.rate)}</b>${applied.qty !== 1 ? ` × ${applied.qty}` : ""}`;
   const off = Math.abs(got - target);
-  // Only rounding can explain a sub-paisa gap; anything larger is a real
-  // mismatch and shouldn't be excused as rounding.
-  const why = off < 0.02 ? " — rates round to paise" : "";
+  // A target with paise in it can't be hit while the total is being rounded to
+  // whole units — say so plainly rather than reporting an unexplained gap the
+  // user can't act on.
+  const fractional = Math.abs(target - Math.round(target)) >= 0.005;
+  const why = $("roundOff").checked && fractional
+    ? " — round off is on, so the total lands on a whole " + (($("currency").value || "unit"))
+    // Only rounding can explain a sub-paisa gap; anything larger is a real
+    // mismatch and shouldn't be excused as rounding.
+    : (off < 0.02 ? " — rates round to paise" : "");
   say(`Solved: subtotal <b>${fmt(s.subtotal)}</b>, ${how}. Total <b>${fmt(got)}</b>` +
       (off >= 0.01 ? ` (${fmt(off)} off${why}).` : "."));
 }
@@ -328,6 +345,7 @@ function render(){
   ${t.shipping?`<tr><td>Shipping${shipMode()?` (${esc(shipMode())})`:""}</td><td class="r">${fmt(t.shipping)}</td></tr>`:""}
   ${(t.disc||t.shipping)?`<tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
   ${taxHtml}
+  ${showRound(t)?`<tr><td>Round off</td><td class="r">${t.round<0?"– ":"+ "}${fmt(Math.abs(t.round))}</td></tr>`:""}
   <tr class="grand"><td>Total ${cur?`(${cur})`:""}</td><td class="r">${fmt(t.total)}</td></tr>
 </table></div>
 
@@ -481,6 +499,8 @@ function init(){
     if(!$("autoSolve").checked) $("solveMsg").textContent = "";
     update();
   });
+  // Rounding changes the total, so the solver has to re-aim at it.
+  $("roundOff").addEventListener("change", update);
   // Business fields persist locally always, and to the account (debounced) when
   // signed in — so a logged-in user's profile lives in the cloud DB, not just
   // this device.
@@ -495,6 +515,7 @@ function init(){
     syncShippingMode();
     $("solveMsg").textContent = "";
     $("autoSolve").checked = true;   // back to the default
+    $("roundOff").checked = true;
     TOUCHED.delete("taxMode");   // fresh invoice — infer again
     applyInference();
     $("items").innerHTML=""; addItem();
@@ -527,6 +548,7 @@ function collect(){
   return {number:v("invNo"),issueDate:v("issueDate"),dueDate:v("dueDate"),
     currency:v("currency"),taxMode:v("taxMode"),taxRate:v("taxRate"),
     discount:v("discount"),shipping:v("shipping"),shippingMode:shipMode(),
+    roundOff:$("roundOff").checked,
     status:v("status"),notes:v("notes"),
     clName:v("clName"),clEmail:v("clEmail"),clAddr:v("clAddr"),clGst:v("clGst"),
     items:readItems().filter(i=>i.desc||i.amt).map(i=>({description:i.desc,qty:i.qty,rate:i.rate}))};
@@ -719,6 +741,8 @@ function posOps(){
   if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:PS.totals, fit:true});
   if(t.disc || t.shipping) ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:PS.totals, fit:true});
   t.taxRows.forEach(([l,val]) => ops.push({t:"kv", k:l, val:money(val), size:PS.totals, fit:true}));
+  if(showRound(t))
+    ops.push({t:"kv", k:"Round off", val:(t.round<0?"-":"+")+money(Math.abs(t.round)), size:PS.totals, fit:true});
 
   ops.push({t:"rule", heavy:true});
   // The label and the figure each get their own line, the way a till receipt
@@ -1078,6 +1102,9 @@ async function openInvoiceInEditor(id){
     $("discount").value = inv.discount_pct ?? "";
     $("shipping").value = inv.shipping ? String(inv.shipping) : "";
     setShippingMode(inv.shipping_mode || "");
+    // Restore the saved setting rather than the default: an invoice stored with
+    // exact paise must not gain a round-off line just because it was reopened.
+    $("roundOff").checked = !!inv.round_off;
     // Clear the target and render directly (not update()): a saved invoice's
     // rates are settled figures, and auto-solve must never rewrite them.
     $("targetTotal").value = ""; $("solveMsg").textContent = "";

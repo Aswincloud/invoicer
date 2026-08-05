@@ -27,8 +27,17 @@ export function computeTotals(inv, items) {
     const t = taxable * rate / 100;
     taxRows = [[`Tax (${rate}%)`, t]]; taxTotal = t;
   }
-  return { subtotal, disc, shipping, taxable, taxRows, total: taxable + taxTotal };
+  // Round the grand total to a whole unit when the invoice was saved with it on,
+  // shown as its own line. Subtotal, discount, shipping and each tax row stay
+  // exact — mirrors computeTotals() in public/app.js.
+  const gross = taxable + taxTotal;
+  const total = inv.round_off ? Math.round(gross) : gross;
+  return { subtotal, disc, shipping, taxable, taxRows, gross, round: total - gross, total };
 }
+
+// Only worth a row when it actually moves the total; below half a paisa it
+// would print as "0.00" and read as a bug.
+export const showRoundOff = (t) => Math.abs(t.round) >= 0.005;
 
 // "Ledger desk" email — mirrors the on-screen invoice: warm-neutral sheet,
 // pine-green ink, monospaced ledger figures, a double-rule grand total.
@@ -103,6 +112,7 @@ export function renderInvoiceEmail(inv, items) {
    ${t.shipping ? totRow(inv.shipping_mode ? `Shipping (${inv.shipping_mode})` : "Shipping", t.shipping) : ""}
    ${(t.disc || t.shipping) ? totRow("Taxable value", t.taxable) : ""}
    ${taxRows}
+   ${showRoundOff(t) ? totRow("Round off", Math.abs(t.round), { neg: t.round < 0 }) : ""}
    <tr><td style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${SANS};font-weight:700;text-transform:uppercase;letter-spacing:.6px">Total ${cur ? `(${esc(cur)})` : ""}</td>
        <td align="right" style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${MONO};font-weight:600;font-size:18px;color:${GREEN}">${money(cur, t.total)}</td></tr>
   </table>
