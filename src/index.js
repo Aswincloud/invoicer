@@ -5,6 +5,7 @@ import {
 } from "./lib.js";
 import { renderInvoiceEmail, computeTotals } from "./invoice-html.js";
 import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
+import { ingestOrder } from "./ingest.js";
 
 const SESSION_COOKIE = "inv_session";
 const TOKEN_TTL = 15 * 60 * 1000;          // magic link valid 15 min
@@ -46,6 +47,16 @@ async function currentUser(request, env) {
 async function api(request, env, url) {
   const p = url.pathname;
   const m = request.method;
+
+  // Dispatched BEFORE the body is parsed: this route verifies an HMAC over the
+  // exact bytes sent, and re-serialising a parsed object produces different ones,
+  // so the signature would never match.
+  //
+  // It is service-to-service (the shop Worker raising an invoice for a paid
+  // order) and carries its own auth, so it sits above the session gate below —
+  // there is no cookie on a Worker-to-Worker call.
+  if (p === "/api/ingest/order" && m === "POST") return ingestOrder(request, env);
+
   const body = (m === "POST" || m === "PUT" || m === "PATCH")
     ? await request.json().catch(() => ({})) : {};
 

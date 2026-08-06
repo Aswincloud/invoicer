@@ -48,6 +48,34 @@ export async function unsign(signed, secret) {
   return diff === 0 ? value : null;
 }
 
+// Hex digest, for verifying signatures produced by another service.
+//
+// Separate from sign()/unsign() above, which are base64url and carry the signed
+// value inline — a cookie format, not a webhook one. A caller signing a request
+// body sends the digest in a header, so hex is what it needs, and the two must
+// not be confused: verifying a body against sign() would silently never match.
+//
+// Same shape as the shop's src/lib.js, deliberately — the shop already signs its
+// Razorpay webhooks and chat-coupon calls this way, and one scheme across both
+// services is one thing to get right instead of two.
+export async function hmacHex(message, secret) {
+  const key = await hmacKey(secret);
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Constant-time compare of two hex digests. Length is compared first and is not
+// secret (a SHA-256 digest is always 64 chars), so returning early there leaks
+// nothing an attacker could not already work out.
+export function timingSafeEqualHex(a, b) {
+  const x = String(a || "");
+  const y = String(b || "");
+  if (x.length !== y.length) return false;
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return diff === 0;
+}
+
 // ── cookies ───────────────────────────────────────────────────────
 export function parseCookies(req) {
   const out = {};

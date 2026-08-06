@@ -110,7 +110,7 @@ export function renderInvoiceEmail(inv, items) {
    ${totRow("Subtotal", t.subtotal)}
    ${t.disc ? totRow(`Discount (${discPct}%)`, t.disc, { neg: true }) : ""}
    ${t.shipping ? totRow(inv.shipping_mode ? `Shipping (${inv.shipping_mode})` : "Shipping", t.shipping) : ""}
-   ${(t.disc || t.shipping) ? totRow("Taxable value", t.taxable) : ""}
+   ${(t.disc || t.shipping) && t.taxRows.length ? totRow("Taxable value", t.taxable) : ""}
    ${taxRows}
    ${showRoundOff(t) ? totRow("Round off", Math.abs(t.round), { neg: t.round < 0 }) : ""}
    <tr><td style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${SANS};font-weight:700;text-transform:uppercase;letter-spacing:.6px">Total ${cur ? `(${esc(cur)})` : ""}</td>

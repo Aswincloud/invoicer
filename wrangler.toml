@@ -17,5 +17,18 @@ APP_NAME = "Invoicer"
 RESEND_FROM_EMAIL = "notify@aswincloud.com"
 APP_BASE_URL = "https://invoicer.aswincloud.com"
 
+# Invoices raised automatically from paid orders at 3d-prints.aswincloud.com.
+#
+# Kill switch: set to "false" and deploy to stop accepting them, without touching
+# the shop. Checked before any work, so a disabled endpoint writes nothing.
+SHOP_INGEST_ENABLED = "true"
+
+# Whose business appears on an auto-raised invoice. Read from config, never from
+# the request — otherwise the caller would choose whose name is on the document.
+# Must match an existing Invoicer account with its business profile filled in.
+INVOICE_OWNER_EMAIL = "aswin@aswincloud.com"
+
 # Secrets (NOT here — set once via API/dashboard, never committed):
 #   RESEND_API_KEY, AUTH_SIGNING_KEY
+#   SHOP_INGEST_SECRET — shared with the shop Worker; signs POST /api/ingest/order.
+#                        Must match the secret of the same name in 3d_printing.
