@@ -3,7 +3,7 @@ import {
   json, bad, uid, randToken, now, sign, unsign, parseCookies, cookie,
   sendEmail, isEmail,
 } from "./lib.js";
-import { renderInvoiceEmail, computeTotals } from "./invoice-html.js";
+import { renderInvoiceEmail, computeTotals, logoAttachment } from "./invoice-html.js";
 import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
 import { ingestOrder } from "./ingest.js";
 
@@ -279,16 +279,23 @@ async function emailInvoice(env, user, id, b) {
   const to = (b.to || r.inv.client_email || "").trim();
   if (!isEmail(to)) return bad("valid recipient email required");
 
-  const html = renderInvoiceEmail(r.inv, r.items);
+  // Same CID treatment as the auto-raised invoice: the stored logo is a data:
+  // URI, and every mail client strips those, so it has to travel as an
+  // attachment. This path had the bug too — the dashboard's "email invoice"
+  // button has been sending a broken image for as long as logos have existed.
+  const logo = logoAttachment(user.biz_logo);
+  const html = renderInvoiceEmail(r.inv, r.items, logo ? logo.src : "");
+
+  const attachments = [];
+  if (logo) attachments.push(logo.attachment);
 
   // Optional PDF, rendered client-side and sent as base64. Accept it only if it
   // looks like a real base64 PDF within a sane size (Resend caps ~40MB; we keep
   // it much smaller). If anything's off, drop the attachment and still send.
-  let attachments;
   const pdf = typeof b.pdfBase64 === "string" ? b.pdfBase64.trim() : "";
   if (pdf && pdf.length < 8_000_000 && /^[A-Za-z0-9+/=]+$/.test(pdf)) {
     const safeNum = String(r.inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
-    attachments = [{ filename: `${safeNum}.pdf`, content: pdf }];
+    attachments.push({ filename: `${safeNum}.pdf`, content: pdf });
   }
 
   const bizName = user.biz_name ? user.biz_name.trim() : "";
@@ -298,7 +305,7 @@ async function emailInvoice(env, user, id, b) {
     subject: b.subject || `Invoice ${r.inv.number} from ${bizName || "us"}`,
     html,
     text: `Invoice ${r.inv.number}. Total ${r.inv.currency} ${r.inv.total}. View the HTML version in an email client.`,
-    attachments,
+    attachments: attachments.length ? attachments : undefined,
   });
   if (!res.ok) return bad("email failed: " + (res.error || res.status), 502);
   return json({ ok: true, id: res.id });

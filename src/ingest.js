@@ -24,7 +24,7 @@
 // that it is an open "email anyone an invoice from Aswin's business" endpoint.
 
 import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex } from "./lib.js";
-import { renderInvoiceEmail, computeTotals } from "./invoice-html.js";
+import { renderInvoiceEmail, computeTotals, logoAttachment } from "./invoice-html.js";
 
 const REPLAY_WINDOW_MS = 5 * 60 * 1000;
 
@@ -151,12 +151,20 @@ export async function ingestOrder(request, env) {
                      biz_logo: user.biz_logo || "" };
   const bizName = (user.biz_name || "").trim();
 
+  // The logo travels as a CID attachment, not as the stored data: URI — mail
+  // clients strip those, which is why the first invoices arrived with a broken
+  // image where the logo should be. logoAttachment() returns null when there is
+  // no logo or it is not a usable image, and the template then falls back to the
+  // initial badge rather than rendering a broken <img>.
+  const logo = logoAttachment(user.biz_logo);
+
   const sent = await sendEmail(env, {
     to: inv.client_email,
     fromName: `${bizName || "Invoicer"} Billing`,
     subject: `Invoice ${inv.number} — order ${receipt}`,
-    html: renderInvoiceEmail(rendered, items),
+    html: renderInvoiceEmail(rendered, items, logo ? logo.src : ""),
     text: `Invoice ${inv.number} for order ${receipt}. Total ${inv.currency} ${total.toFixed(2)}.`,
+    attachments: logo ? [logo.attachment] : undefined,
   });
 
   if (!sent.ok) {

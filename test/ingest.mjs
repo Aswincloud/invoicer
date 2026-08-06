@@ -14,7 +14,7 @@
 // awkward combination of shipping and discount that can occur.
 
 import { ingestOrder, buildInvoice } from "../src/ingest.js";
-import { computeTotals, renderInvoiceEmail } from "../src/invoice-html.js";
+import { computeTotals, renderInvoiceEmail, logoAttachment } from "../src/invoice-html.js";
 import { hmacHex } from "../src/lib.js";
 
 let pass = 0, fail = 0;
@@ -261,6 +261,84 @@ section("the invoice reads correctly");
     { ...inv, tax_mode: "gst", tax_rate: 18, total: 1295, ...USER }, items);
   ok("'Taxable value' survives on a GST invoice", /Taxable value/.test(gst));
   ok("CGST/SGST still render when tax applies", /CGST/.test(gst) && /SGST/.test(gst));
+}
+
+// ── the logo ──────────────────────────────────────────────────────
+//
+// Reported from a real invoice: the logo arrived as a broken image. It is stored
+// as a data: URI (the Settings page uses readAsDataURL), which renders fine in a
+// browser — so the on-screen invoice and the PDF always looked right — but Gmail,
+// Outlook and Apple Mail all strip data: images.
+//
+// Nothing here asserted the logo at all, which is why it shipped. These are the
+// checks that would have caught it.
+section("the logo survives the trip to an inbox");
+{
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+  const l = logoAttachment(png);
+  ok("a data: logo becomes an attachment", Boolean(l));
+  ok("referenced by cid, not data:", l.src.startsWith("cid:"), l.src);
+  ok("attachment carries a content_id", Boolean(l.attachment.content_id));
+  ok("cid in src matches the attachment", l.src === `cid:${l.attachment.content_id}`);
+  ok("content is raw base64, no data: prefix",
+     !l.attachment.content.startsWith("data:"), l.attachment.content.slice(0, 12));
+  ok("content type preserved", l.attachment.content_type === "image/png");
+  ok("filename has the right extension", l.attachment.filename === "logo.png");
+
+  const jpg = logoAttachment("data:image/jpeg;base64,/9j/4AAQSkZJRg==");
+  ok("jpeg is handled", jpg?.attachment.filename === "logo.jpg", jpg?.attachment.filename);
+}
+{
+  // Anything that is not a usable image returns null, and the template falls back
+  // to the initial badge rather than rendering a broken <img>.
+  for (const [label, v] of [
+    ["empty", ""], ["null", null], ["a plain URL", "https://example.com/logo.png"],
+    ["a non-image data URI", "data:text/html;base64,PHNjcmlwdD4="],
+    ["malformed base64", "data:image/png;base64,not base64!"],
+    ["an oversized payload", "data:image/png;base64," + "A".repeat(2_000_001)],
+  ]) ok(`${label} → no attachment`, logoAttachment(v) === null);
+}
+{
+  // THE assertion. A data: URI must never reach the rendered email.
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+  const l = logoAttachment(png);
+  const inv = { currency: "₹", tax_mode: "none", tax_rate: 0, discount_pct: 0,
+                round_off: 0, shipping: 0, total: 100, biz_name: "AswinPrints",
+                biz_logo: png };
+  const items = [{ description: "Thing", qty: 1, rate: 100 }];
+
+  const email = renderInvoiceEmail(inv, items, l.src);
+  ok("no data: image in the email HTML", !/src="data:/.test(email));
+  ok("the cid reference is there", email.includes(`src="cid:${l.attachment.content_id}"`));
+  ok("the business name still renders", email.includes("AswinPrints"));
+
+  // With no logo at all, the initial badge renders and there is no <img> to break.
+  const noLogo = renderInvoiceEmail({ ...inv, biz_logo: "" }, items, "");
+  ok("no logo → no <img> tag at all", !/<img/.test(noLogo));
+  ok("no logo → initial badge instead", noLogo.includes(">A<"));
+
+  // The browser path is unchanged: called without an override, the data: URI is
+  // still used, so the on-screen invoice and the PDF keep working.
+  const browser = renderInvoiceEmail(inv, items);
+  ok("browser rendering still uses the data: URI", browser.includes('src="data:image/png'));
+}
+{
+  // End to end through the handler: the sent email must carry the attachment.
+  const env = envWith({ users: [{ ...USER, biz_logo: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" }] });
+  await ingestOrder(await signedRequest(ORDER()), env);
+  const mail = env._sent[0];
+  ok("the sent email has an attachment", Array.isArray(mail.attachments) && mail.attachments.length === 1);
+  ok("it is the logo", mail.attachments[0].content_id === "logo@invoicer");
+  ok("and the HTML points at it", mail.html.includes("cid:logo@invoicer"));
+  ok("and carries no data: image", !/src="data:/.test(mail.html));
+}
+{
+  // No logo configured: no attachment key at all, rather than an empty array.
+  const env = envWith({ users: [{ ...USER, biz_logo: "" }] });
+  await ingestOrder(await signedRequest(ORDER()), env);
+  const mail = env._sent[0];
+  ok("no logo → no attachments sent", mail.attachments === undefined);
+  ok("and the email still goes out", Boolean(mail.html));
 }
 
 // ── idempotency ───────────────────────────────────────────────────

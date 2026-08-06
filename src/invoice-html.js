@@ -50,11 +50,53 @@ const INK = "#1b1e24";
 const SOFT = "#5b6472";
 const RULE = "#e7e9e6";
 
-export function renderInvoiceEmail(inv, items) {
+// The logo is stored as a data: URI — the Settings page reads the uploaded file
+// with readAsDataURL and keeps it on the user row. That renders fine in a browser
+// and is why the on-screen invoice and the PDF have always looked right.
+//
+// EMAIL CLIENTS STRIP data: IMAGES. Gmail, Outlook and Apple Mail all refuse
+// them (they are a classic tracking and payload vector), so the invoice email
+// showed a broken-image icon where the logo should be.
+//
+// The fix is CID: send the image bytes as an attachment and reference it as
+// <img src="cid:...">. Supported by every mail client — it predates HTML email —
+// and by Resend via the attachment's content_id field. No hosting, no remote
+// fetch, and no "click to show images" prompt, which is the flaw in linking to a
+// hosted URL instead.
+//
+// Returns { attachment, src } or null when there is no usable logo.
+export function logoAttachment(dataUri) {
+  const m = /^data:(image\/(png|jpe?g|gif|webp));base64,([A-Za-z0-9+/=]+)$/i
+    .exec(String(dataUri || "").trim());
+  if (!m) return null;
+
+  // Resend caps attachments at 40MB and a logo is a few KB. Anything larger than
+  // this is not a logo, and quietly refusing beats sending a broken email.
+  const base64 = m[3];
+  if (base64.length > 2_000_000) return null;
+
+  const ext = m[2].toLowerCase().replace("jpeg", "jpg");
+  const cid = "logo@invoicer";
+  return {
+    src: `cid:${cid}`,
+    attachment: {
+      filename: `logo.${ext}`,
+      content: base64,
+      content_id: cid,
+      content_type: m[1],
+    },
+  };
+}
+
+// `logoSrc` overrides what the <img> points at, so the same template serves both
+// the email (a cid: reference) and any browser context (the data: URI as before).
+// Defaulting to inv.biz_logo keeps every existing caller working unchanged.
+export function renderInvoiceEmail(inv, items, logoSrc = null) {
   const cur = inv.currency || "₹";
   const t = computeTotals(inv, items);
   const initial = (inv.biz_name || "I").charAt(0).toUpperCase();
   const discPct = inv.discount_pct || 0;
+  const logo = logoSrc ?? inv.biz_logo;
 
   const rows = items.filter((i) => i.description || i.qty || i.rate).map((i) => {
     const amt = (i.qty || 0) * (i.rate || 0);
@@ -74,8 +116,8 @@ export function renderInvoiceEmail(inv, items) {
   return `<div style="font-family:${SANS};color:${INK};max-width:640px;margin:0 auto;padding:8px">
   <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:2px solid ${INK};padding-bottom:14px">
    <tr><td valign="top" style="padding:16px 0">
-     ${inv.biz_logo
-      ? `<img src="${esc(inv.biz_logo)}" alt="${esc(inv.biz_name || "Logo")}" style="max-width:150px;max-height:60px;display:block;margin-bottom:10px">`
+     ${logo
+      ? `<img src="${esc(logo)}" alt="${esc(inv.biz_name || "Logo")}" style="max-width:150px;max-height:60px;display:block;margin-bottom:10px">`
       : `<span style="display:inline-block;width:44px;height:44px;background:${GREEN};color:#fff;font-family:${MONO};font-size:21px;font-weight:600;text-align:center;line-height:44px;border-radius:9px">${esc(initial)}</span>`}
      <div style="margin-top:9px"><b style="font-size:18px">${esc(inv.biz_name || "Your Business")}</b><br>
      <span style="color:${SOFT};font-size:12px">${esc(inv.biz_addr)}<br>${esc(inv.biz_email)}</span></div>
