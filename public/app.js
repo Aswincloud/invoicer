@@ -629,43 +629,31 @@ async function tryRenderPdf(){
    Height is measured first and the page built to fit, so the roll never
    gets a trailing blank feed.
 
-   Width: the page stays the full 57mm so PDF millimetres map to paper
-   millimetres, and content is confined to the window the head can reach.
+   Width: the page IS the printable width — 48mm, the 384-dot head at 203dpi.
 
-   That window was settled by a two-bar test strip — one bar drawn 0..57mm,
-   one drawn inside it — printed in a single pass so no setting could drift
-   between them. Three readings agreed:
+   This is printed with the app's paper size set to 48mm and "fit to paper"
+   on, which scales the page to the head. A page that already measures 48mm
+   therefore scales 1:1, and every millimetre of it reaches paper.
 
-     - the full-width bar reached further LEFT than the inset one, so the
-       head starts at/near 0, not several mm in
-     - both bars stopped at the SAME point on the right, so there's a hard
-       clip well before 57mm
-     - "500.00" right-aligned to 54mm printed as "500", losing ".00", which
-       puts the clip at ~48.6mm
+   Getting here took several wrong turns worth recording, because they all
+   shared one mistake: trying to infer the head's window from which glyphs
+   survived a 57mm page printed at native size. With no scaling, the head
+   simply clips at an unmarked hardware edge, and each indirect reading —
+   a striped bar measured with a ruler, a half-cut character, a missing
+   ".00" — contradicted the last. Guesses ranged over 48, 50 and 54mm.
 
-   That's 384 dots at 203dpi (48.05mm) — the standard 58mm head. Earlier
-   attempts read a single striped bar with a ruler and got 4..54mm from it;
-   large solid fills band on a battery-powered head, so the bar's true extent
-   was never as legible as a relative comparison between two of them.
+   Matching the page to the paper setting sidesteps the question entirely:
+   there is no clipping to measure because nothing is drawn outside the
+   window. The 1.5mm inset stays as a margin against paper wander; it is a
+   choice now, not a workaround for a hardware edge.
 
-   A follow-up strip pinned the left edge. Text drawn from 0.5mm printed with
-   its first character half-cut — the "b" of "both" lost its stem, leaving
-   only the bowl — so at 6pt (1.27mm per character) the head actually starts
-   at ~1.1mm. The same strip printed two right-aligned amounts ending at 48mm
-   in full, confirming that limit. A 384-dot head starting at 1.1mm ends at
-   49.15mm, so 48 sits inside it with room to spare — the two readings agree.
-
-   POS_L is 1.5mm rather than 1.1: a first character shaved off the
-   description is worse than giving up 0.4mm of width, and the roll wanders
-   slightly as it feeds. Stopping at 48 rather than 48.6 likewise stays clear
-   of dot rounding for nothing lost. The blank strip on the right is the roll
-   passing outside the head — not a margin, and not removable by any
-   layout. */
-const POS_W = 57;                            // full paper width: PDF mm == paper mm
-const POS_L = 1.5;                           // head starts ~1.1mm; +0.4mm safety
-const POS_R = 48;                            // 384-dot head limit (48.05mm)
+   If the paper size is ever set back to 57mm, this must go back to a 57mm
+   page — a 48mm page at native size would print two-thirds width. */
+const POS_W = 48;                            // = paper size set in the print app
+const POS_L = 1.5;                           // margin for paper wander
+const POS_R = POS_W - POS_L;                 // 46.5mm
 const POS_PAD = POS_L;                       // kept for callers reading POS_PAD
-const POS_CONTENT = POS_R - POS_L;           // 46.5mm of reachable width
+const POS_CONTENT = POS_R - POS_L;           // 45mm of content
 
 /* Sizes are per role rather than one global multiplier.
 
@@ -881,15 +869,19 @@ function posDraw(doc, ops){
   return y;
 }
 
-// Build the 57mm receipt. Two passes: measure on a scratch doc, then draw on a
-// page cut to that exact height (+ bottom padding for the tear-off).
+// Build the receipt. Two passes: measure on a scratch doc, then draw on a page
+// cut to that exact height (+ bottom padding for the tear-off).
 async function renderPosReceipt(){
   await ensurePdfLibs();
   const { jsPDF } = window.jspdf;
   const ops = posOps();
   const probe = new jsPDF({unit:"mm", format:[POS_W, 600]});
   const h = posDraw(probe, ops) + 6;
-  const doc = new jsPDF({unit:"mm", format:[POS_W, Math.max(h, 40)]});
+  // The floor must exceed POS_W: jsPDF silently switches to landscape when
+  // height < width, which would rotate the receipt 90°. No real receipt is
+  // short enough to hit it, but the floor used to sit above the page width
+  // and now doesn't, so make the dependency explicit rather than incidental.
+  const doc = new jsPDF({unit:"mm", format:[POS_W, Math.max(h, POS_W + 20)]});
   posDraw(doc, ops);
   return doc;
 }
