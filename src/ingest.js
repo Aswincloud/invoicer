@@ -25,6 +25,7 @@
 
 import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex } from "./lib.js";
 import { renderInvoiceEmail, computeTotals, logoAttachment } from "./invoice-html.js";
+import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
 
 const REPLAY_WINDOW_MS = 5 * 60 * 1000;
 
@@ -158,13 +159,32 @@ export async function ingestOrder(request, env) {
   // initial badge rather than rendering a broken <img>.
   const logo = logoAttachment(user.biz_logo);
 
+  const attachments = [];
+  if (logo) attachments.push(logo.attachment);
+
+  // A PDF copy, generated here rather than in a browser — there is no browser on
+  // this path. Wrapped, because a layout bug in the generator must not cost the
+  // customer their invoice: the email body IS the invoice, and arriving without
+  // the attachment is a far better failure than not arriving at all.
+  try {
+    const pdf = renderInvoicePdf(rendered, items, computeTotals(rendered, items));
+    const safeNum = String(inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
+    attachments.push({
+      filename: `${safeNum}.pdf`,
+      content: toBase64(pdf),
+      content_type: "application/pdf",
+    });
+  } catch (e) {
+    console.error("invoice pdf failed", receipt, e?.message || e);
+  }
+
   const sent = await sendEmail(env, {
     to: inv.client_email,
     fromName: `${bizName || "Invoicer"} Billing`,
     subject: `Invoice ${inv.number} — order ${receipt}`,
     html: renderInvoiceEmail(rendered, items, logo ? logo.src : ""),
-    text: `Invoice ${inv.number} for order ${receipt}. Total ${inv.currency} ${total.toFixed(2)}.`,
-    attachments: logo ? [logo.attachment] : undefined,
+    text: `Invoice ${inv.number} for order ${receipt}. Total ${inv.currency} ${total.toFixed(2)}. A PDF copy is attached.`,
+    attachments: attachments.length ? attachments : undefined,
   });
 
   if (!sent.ok) {

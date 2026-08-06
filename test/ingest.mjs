@@ -327,18 +327,77 @@ section("the logo survives the trip to an inbox");
   const env = envWith({ users: [{ ...USER, biz_logo: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" }] });
   await ingestOrder(await signedRequest(ORDER()), env);
   const mail = env._sent[0];
-  ok("the sent email has an attachment", Array.isArray(mail.attachments) && mail.attachments.length === 1);
-  ok("it is the logo", mail.attachments[0].content_id === "logo@invoicer");
+  // Two attachments now: the logo (inline, by CID) and the PDF copy.
+  ok("the email carries attachments", Array.isArray(mail.attachments) && mail.attachments.length === 2,
+     String(mail.attachments?.length));
+  const logoAtt = mail.attachments.find((a) => a.content_id === "logo@invoicer");
+  ok("one is the logo", Boolean(logoAtt));
   ok("and the HTML points at it", mail.html.includes("cid:logo@invoicer"));
   ok("and carries no data: image", !/src="data:/.test(mail.html));
+
+  // The logo must be INLINE and the PDF must NOT be — a logo listed as a
+  // downloadable file, or a PDF that never shows as one, would both be wrong.
+  const pdfAtt = mail.attachments.find((a) => a.filename.endsWith(".pdf"));
+  ok("the other is the PDF", Boolean(pdfAtt), JSON.stringify(mail.attachments.map((a) => a.filename)));
+  ok("the PDF has no content_id (not inline)", pdfAtt.content_id === undefined);
 }
 {
   // No logo configured: no attachment key at all, rather than an empty array.
   const env = envWith({ users: [{ ...USER, biz_logo: "" }] });
   await ingestOrder(await signedRequest(ORDER()), env);
   const mail = env._sent[0];
-  ok("no logo → no attachments sent", mail.attachments === undefined);
+  // No logo, but the PDF is always attached — so exactly one attachment, and it
+  // must be the PDF rather than an empty logo slot.
+  ok("no logo → only the PDF is attached", mail.attachments?.length === 1,
+     String(mail.attachments?.length));
+  ok("and it is the PDF", mail.attachments[0].filename.endsWith(".pdf"));
   ok("and the email still goes out", Boolean(mail.html));
+}
+
+// ── the PDF attachment ────────────────────────────────────────────
+//
+// test/pdf.mjs covers the document itself. What matters here is that it reaches
+// the customer, is named usefully, and — most importantly — that a failure to
+// build it never costs them the invoice.
+section("the PDF reaches the customer");
+{
+  const env = envWith();
+  await ingestOrder(await signedRequest(ORDER()), env);
+  const pdf = env._sent[0].attachments.find((a) => a.filename.endsWith(".pdf"));
+
+  ok("named after the invoice", pdf.filename === "AP-2026-1A2B3C4D.pdf", pdf.filename);
+  ok("declared as a PDF", pdf.content_type === "application/pdf");
+  ok("content is base64", /^[A-Za-z0-9+/]+=*$/.test(pdf.content));
+
+  const bytes = Buffer.from(pdf.content, "base64");
+  ok("is a real PDF file", bytes.subarray(0, 5).toString() === "%PDF-", bytes.subarray(0, 8).toString());
+  ok("is complete", bytes.toString("latin1").trimEnd().endsWith("%%EOF"));
+
+  // The number on the attachment must match the number in the email body, and
+  // both must match what was charged. A PDF that disagrees with the email it
+  // arrived with is worse than no PDF.
+  //
+  // ORDER() is ₹1,299 + ₹99 shipping = ₹1,398, with no discount — read from the
+  // fixture rather than hardcoded, so this cannot drift out of step with it.
+  const expected = (ORDER().total_paise / 100).toLocaleString("en-IN",
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  ok(`the PDF states the amount charged (${expected})`,
+     bytes.toString("latin1").includes(expected));
+  ok("the email body agrees", env._sent[0].html.includes(expected));
+
+  ok("the email mentions the attachment", /PDF copy is attached/i.test(env._sent[0].text));
+}
+{
+  // A layout bug in the generator must not cost the customer their invoice —
+  // the email body IS the invoice. Simulate a throw from the PDF path.
+  const env = envWith();
+  const items = ORDER().items;
+  // A description that is not a string at all; the generator must either cope or
+  // throw, and either way the email must go.
+  const weird = { ...ORDER(), items: [{ name: { nope: true }, qty: 1, price_paise: 129900 }] };
+  const res = await ingestOrder(await signedRequest(weird), env);
+  ok("a hostile item does not block the invoice", res.status === 200, String(res.status));
+  ok("and the email is still sent", env._sent.length === 1);
 }
 
 // ── idempotency ───────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import {
 import { renderInvoiceEmail, computeTotals, logoAttachment } from "./invoice-html.js";
 import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
 import { ingestOrder } from "./ingest.js";
+import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
 
 const SESSION_COOKIE = "inv_session";
 const TOKEN_TTL = 15 * 60 * 1000;          // magic link valid 15 min
@@ -289,13 +290,23 @@ async function emailInvoice(env, user, id, b) {
   const attachments = [];
   if (logo) attachments.push(logo.attachment);
 
-  // Optional PDF, rendered client-side and sent as base64. Accept it only if it
-  // looks like a real base64 PDF within a sane size (Resend caps ~40MB; we keep
-  // it much smaller). If anything's off, drop the attachment and still send.
+  // The PDF. The browser sends one when it has the invoice rendered (a bitmap of
+  // the on-screen sheet, which matches what the user is looking at). Accept it
+  // only if it looks like a real base64 PDF within a sane size.
+  const safeNum = String(r.inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
   const pdf = typeof b.pdfBase64 === "string" ? b.pdfBase64.trim() : "";
   if (pdf && pdf.length < 8_000_000 && /^[A-Za-z0-9+/=]+$/.test(pdf)) {
-    const safeNum = String(r.inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
-    attachments.push({ filename: `${safeNum}.pdf`, content: pdf });
+    attachments.push({ filename: `${safeNum}.pdf`, content: pdf, content_type: "application/pdf" });
+  } else {
+    // No browser PDF — generate one here. Previously this path simply sent no
+    // attachment, so an invoice emailed from anywhere the client-side renderer
+    // had not run arrived without one.
+    try {
+      const bytes = renderInvoicePdf(r.inv, r.items, computeTotals(r.inv, r.items));
+      attachments.push({ filename: `${safeNum}.pdf`, content: toBase64(bytes), content_type: "application/pdf" });
+    } catch (e) {
+      console.error("invoice pdf failed", r.inv.number, e?.message || e);
+    }
   }
 
   const bizName = user.biz_name ? user.biz_name.trim() : "";
