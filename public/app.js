@@ -629,29 +629,43 @@ async function tryRenderPdf(){
    Height is measured first and the page built to fit, so the roll never
    gets a trailing blank feed.
 
-   Width: taken from a printed calibration page, measured with a ruler.
+   Width: the page stays the full 57mm so PDF millimetres map to paper
+   millimetres, and content is confined to the window the head can reach.
 
-   That page drew a solid bar across the full 57mm. On paper the ink spanned
-   4..54mm — 4mm of blank roll on the left, 3mm on the right. So the head
-   prints a 50mm window (400 dots at 203dpi) starting 4mm in, and the printer
-   maps PDF x=0 to paper x=0 at native size.
+   That window was settled by a two-bar test strip — one bar drawn 0..57mm,
+   one drawn inside it — printed in a single pass so no setting could drift
+   between them. Three readings agreed:
 
-   Two corrections to earlier attempts, both worth stating so they aren't
-   repeated. The head reaches 54mm, not 50: the calibration ruler's labels
-   simply stopped at 50 because that was the last one drawn, and the end of
-   the ruler got mistaken for the end of the head. And the PAGE has to stay
-   the full 57mm — a narrower page is left-aligned on the roll, so it strands
-   paper on the right rather than reclaiming it. Shrinking the page to 50mm
-   pushed the right-hand blank from 3mm to 7mm.
+     - the full-width bar reached further LEFT than the inset one, so the
+       head starts at/near 0, not several mm in
+     - both bars stopped at the SAME point on the right, so there's a hard
+       clip well before 57mm
+     - "500.00" right-aligned to 54mm printed as "500", losing ".00", which
+       puts the clip at ~48.6mm
 
-   So: full-width page, content confined to the 4..54mm window the head can
-   actually reach. Nothing is clipped, and the 4mm/3mm blank edges are the
-   roll passing outside the head — not margins, and not removable. */
+   That's 384 dots at 203dpi (48.05mm) — the standard 58mm head. Earlier
+   attempts read a single striped bar with a ruler and got 4..54mm from it;
+   large solid fills band on a battery-powered head, so the bar's true extent
+   was never as legible as a relative comparison between two of them.
+
+   A follow-up strip pinned the left edge. Text drawn from 0.5mm printed with
+   its first character half-cut — the "b" of "both" lost its stem, leaving
+   only the bowl — so at 6pt (1.27mm per character) the head actually starts
+   at ~1.1mm. The same strip printed two right-aligned amounts ending at 48mm
+   in full, confirming that limit. A 384-dot head starting at 1.1mm ends at
+   49.15mm, so 48 sits inside it with room to spare — the two readings agree.
+
+   POS_L is 1.5mm rather than 1.1: a first character shaved off the
+   description is worse than giving up 0.4mm of width, and the roll wanders
+   slightly as it feeds. Stopping at 48 rather than 48.6 likewise stays clear
+   of dot rounding for nothing lost. The blank strip on the right is the roll
+   passing outside the head — not a margin, and not removable by any
+   layout. */
 const POS_W = 57;                            // full paper width: PDF mm == paper mm
-const POS_L = 4;                             // head starts here (measured)
-const POS_R = 54;                            // head stops here (measured)
+const POS_L = 1.5;                           // head starts ~1.1mm; +0.4mm safety
+const POS_R = 48;                            // 384-dot head limit (48.05mm)
 const POS_PAD = POS_L;                       // kept for callers reading POS_PAD
-const POS_CONTENT = POS_R - POS_L;           // 50mm of reachable width
+const POS_CONTENT = POS_R - POS_L;           // 46.5mm of reachable width
 
 /* Sizes are per role rather than one global multiplier.
 
