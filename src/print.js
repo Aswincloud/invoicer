@@ -58,10 +58,32 @@ async function sendToRelay(env, raw) {
   }
 }
 
+// Who is allowed to make paper come out of a machine in someone's house.
+//
+// Being signed in is NOT sufficient: magic-link signup is open (authRequest in
+// index.js applies no allowlist, unlike the OAuth path), so anyone who can
+// receive email could otherwise print here as often as they liked. This is a
+// physical side effect in a private space, so it gets an explicit allowlist
+// read from config — never from the request.
+//
+// Defaults to INVOICE_OWNER_EMAIL, which is already the "whose business is
+// this" var, so a single-user deploy needs no extra configuration.
+function mayPrint(env, email) {
+  const who = String(email || "").trim().toLowerCase();
+  if (!who) return false;
+  const list = String(env.PRINT_ALLOWED_EMAILS || env.INVOICE_OWNER_EMAIL || "")
+    .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return list.includes(who);
+}
+
 export async function printReceipt(env, user, b) {
   // Kill switch first, so a disabled feature does no work and reaches nothing.
   if (String(env.PRINT_ENABLED ?? "").toLowerCase() !== "true") {
     return json({ error: "printing is disabled" }, 503);
+  }
+
+  if (!mayPrint(env, user.email)) {
+    return json({ error: "this account cannot print" }, 403);
   }
 
   // Fail CLOSED, and with the same message as the kill switch: without the
