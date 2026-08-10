@@ -886,18 +886,60 @@ async function renderPosReceipt(){
   return doc;
 }
 
-function downloadPosReceipt(){
+// Save the receipt to disk. The fallback whenever printing isn't available.
+function savePosReceipt(doc){
+  const no = ($("invNo").value.trim() || "receipt").replace(/[^\w.-]+/g, "-");
+  // Named for the paper it's meant for, not the page width — someone
+  // looking for "the 57mm receipt" shouldn't have to know it prints 52.
+  doc.save(`receipt-${no}-57mm-roll.pdf`);
+}
+
+/* Print the receipt on the thermal printer, or download it.
+
+   Signed in, the PDF goes to the server, which forwards it to the printer at
+   the office; the button waits for the paper to actually come out, so
+   "Printed" means printed rather than "queued somewhere".
+
+   Every failure path falls back to the download. Printing depends on a BLE
+   link, a bridge and a roll of paper, and none of those being available is a
+   reason to leave someone with no receipt at all. */
+async function downloadPosReceipt(){
   const btn = $("btnPos"), was = btn.textContent;
   btn.disabled = true; btn.textContent = "…";
-  renderPosReceipt().then(doc => {
-    const no = ($("invNo").value.trim() || "receipt").replace(/[^\w.-]+/g, "-");
-    // Named for the paper it's meant for, not the page width — someone
-    // looking for "the 57mm receipt" shouldn't have to know it prints 52.
-    doc.save(`receipt-${no}-57mm-roll.pdf`);
-  }).catch(e => {
+  let doc;
+  try {
+    doc = await renderPosReceipt();
+  } catch(e) {
     console.warn("POS receipt failed:", e);
     alert("Couldn't build the receipt: " + (e.message || e));
-  }).finally(() => { btn.disabled = false; btn.textContent = was; });
+    btn.disabled = false; btn.textContent = was;
+    return;
+  }
+
+  if(!ME){                      // signed out: the button behaves as it always did
+    savePosReceipt(doc);
+    btn.disabled = false; btn.textContent = was;
+    return;
+  }
+
+  btn.textContent = "Printing…";
+  try {
+    const uri = doc.output("datauristring");
+    await api("/print", {method:"POST",
+      body: JSON.stringify({pdfBase64: uri.slice(uri.indexOf(",") + 1)})});
+    btn.textContent = "Printed ✓";
+    setTimeout(() => { btn.textContent = was; }, 2500);
+  } catch(e) {
+    // Say what went wrong AND hand over the PDF, so a printer that's off or
+    // out of paper costs a download rather than the whole receipt.
+    console.warn("print failed:", e);
+    savePosReceipt(doc);
+    alert("Couldn't print (" + (e.message || e) + ").\nThe PDF was downloaded instead.");
+    btn.textContent = was;
+  } finally {
+    btn.disabled = false;
+    if(btn.textContent === "Printing…") btn.textContent = was;
+  }
 }
 
 // brand SVGs (inline, currentColor where sensible)

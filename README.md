@@ -84,6 +84,7 @@ production, set them with `wrangler secret put`:
 | `RESEND_API_KEY` | Send magic-link & invoice emails via Resend |
 | `SESSION_SECRET` | HMAC key for the session cookie (falls back to `AUTH_SIGNING_KEY`) |
 | `AUTH_BROKER_URL`, `RELAY_SECRET` | Enable OAuth SSO via the auth broker |
+| `PRINT_RELAY_SECRET` | Signs print jobs sent to the thermal-printer relay |
 
 Magic link works with just `RESEND_API_KEY` + a session key. SSO buttons only
 appear when the broker trio (`AUTH_BROKER_URL` + `RELAY_SECRET` +
@@ -101,8 +102,22 @@ wrangler secret put SESSION_SECRET
 # for SSO, also:
 wrangler secret put AUTH_BROKER_URL
 wrangler secret put RELAY_SECRET
+# to print receipts on the thermal printer, also:
+wrangler secret put PRINT_RELAY_SECRET
 npm run deploy                        # wrangler deploy
 ```
+
+### Printing to the thermal printer
+
+The POS receipt button downloads a PDF. When signed in and `PRINT_ENABLED` is
+`"true"`, it instead prints on the 57mm thermal printer and falls back to the
+download if that fails for any reason.
+
+The printer is Bluetooth, so the Worker cannot reach it. `POST /api/print`
+HMAC-signs the PDF and forwards it to a relay running on the printer's LAN
+(`tejprint-relay.py`, exposed at `PRINT_RELAY_URL` via a cloudflared tunnel),
+which hands it to an ESP32-C3 BLE bridge. `PRINT_RELAY_SECRET` must match on
+both ends. Set `PRINT_ENABLED = "false"` to turn the whole path off.
 
 ## Notes
 
