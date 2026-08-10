@@ -6,6 +6,7 @@ import {
 import { renderInvoiceEmail, computeTotals, logoAttachment } from "./invoice-html.js";
 import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
 import { ingestOrder } from "./ingest.js";
+import { printReceipt } from "./print.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
 
 const SESSION_COOKIE = "inv_session";
@@ -83,6 +84,7 @@ async function api(request, env, url) {
   if (p === "/api/profile" && m === "PUT")   return saveProfile(env, user, body);
   if (p === "/api/invoices" && m === "GET")  return listInvoices(env, user);
   if (p === "/api/invoices" && m === "POST") return createInvoice(env, user, body);
+  if (p === "/api/print"    && m === "POST") return printReceipt(env, user, body);
 
   let match;
   if ((match = p.match(/^\/api\/invoices\/([^/]+)$/))) {

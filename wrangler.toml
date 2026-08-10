@@ -28,7 +28,19 @@ SHOP_INGEST_ENABLED = "true"
 # Must match an existing Invoicer account with its business profile filled in.
 INVOICE_OWNER_EMAIL = "aswin@aswincloud.com"
 
+# Print a receipt on the thermal printer at the office. The printer is Bluetooth
+# and unreachable from here, so POST /api/print forwards the PDF to a relay on
+# that LAN over the cloudflared tunnel.
+#
+# Kill switch: set to "false" and deploy to stop printing. The POS receipt button
+# then just downloads the PDF, as it did before.
+PRINT_ENABLED = "true"
+PRINT_RELAY_URL = "https://print.aswincloud.com/print"
+
 # Secrets (NOT here — set once via API/dashboard, never committed):
 #   RESEND_API_KEY, AUTH_SIGNING_KEY
 #   SHOP_INGEST_SECRET — shared with the shop Worker; signs POST /api/ingest/order.
 #                        Must match the secret of the same name in 3d_printing.
+#   PRINT_RELAY_SECRET — shared with the print relay; signs POST to PRINT_RELAY_URL.
+#                        Must match PRINT_RELAY_SECRET in /etc/tejprint-relay.env
+#                        on the machine running tejprint-relay.py.
