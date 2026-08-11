@@ -518,6 +518,7 @@ function init(){
   $("btnAddItem").onclick = () => { addItem(); update(); };
   $("btnPrint").onclick = () => window.print();
   $("btnPos").onclick = downloadPosReceipt;
+  $("btnPosPrint").onclick = printPosReceipt;
   $("btnReset").onclick = () => {
     if(!confirm("Start a new blank invoice? (Your saved business details are kept.)")) return;
     ["clName","clEmail","clAddr","clGst","notes","shipping","shippingMode",
@@ -894,52 +895,66 @@ function savePosReceipt(doc){
   doc.save(`receipt-${no}-57mm-roll.pdf`);
 }
 
-/* Print the receipt on the thermal printer, or download it.
-
-   Signed in, the PDF goes to the server, which forwards it to the printer at
-   the office; the button waits for the paper to actually come out, so
-   "Printed" means printed rather than "queued somewhere".
-
-   Every failure path falls back to the download. Printing depends on a BLE
-   link, a bridge and a roll of paper, and none of those being available is a
-   reason to leave someone with no receipt at all. */
-async function downloadPosReceipt(){
-  const btn = $("btnPos"), was = btn.textContent;
-  btn.disabled = true; btn.textContent = "…";
-  let doc;
+/* Build the receipt, reporting a failure on the button that was pressed.
+   Returns null if it couldn't be built, having already told the user. */
+async function buildPosReceipt(){
   try {
-    doc = await renderPosReceipt();
+    return await renderPosReceipt();
   } catch(e) {
     console.warn("POS receipt failed:", e);
     alert("Couldn't build the receipt: " + (e.message || e));
-    btn.disabled = false; btn.textContent = was;
-    return;
+    return null;
   }
+}
 
-  if(!ME){                      // signed out: the button behaves as it always did
-    savePosReceipt(doc);
-    btn.disabled = false; btn.textContent = was;
-    return;
-  }
-
-  btn.textContent = "Printing…";
-  try {
-    const uri = doc.output("datauristring");
-    await api("/print", {method:"POST",
-      body: JSON.stringify({pdfBase64: uri.slice(uri.indexOf(",") + 1)})});
-    btn.textContent = "Printed ✓";
-    setTimeout(() => { btn.textContent = was; }, 2500);
-  } catch(e) {
-    // Say what went wrong AND hand over the PDF, so a printer that's off or
-    // out of paper costs a download rather than the whole receipt.
-    console.warn("print failed:", e);
-    savePosReceipt(doc);
-    alert("Couldn't print (" + (e.message || e) + ").\nThe PDF was downloaded instead.");
-    btn.textContent = was;
-  } finally {
+/* Run `job` with the button disabled and showing `busy`, restoring it after.
+   Shared by the two receipt buttons so neither can be double-fired mid-job. */
+async function withBusy(btn, busy, job){
+  const was = btn.textContent;
+  btn.disabled = true; btn.textContent = busy;
+  try { await job(ok => { btn.textContent = ok; setTimeout(() => { btn.textContent = was; }, 2500); }); }
+  finally {
     btn.disabled = false;
-    if(btn.textContent === "Printing…") btn.textContent = was;
+    if(btn.textContent === busy) btn.textContent = was;
   }
+}
+
+// "POS receipt" — always downloads, signed in or not. Kept separate from the
+// printer so there's still a way to get the PDF when the printer is the thing
+// that's broken.
+async function downloadPosReceipt(){
+  await withBusy($("btnPos"), "…", async () => {
+    const doc = await buildPosReceipt();
+    if(doc) savePosReceipt(doc);
+  });
+}
+
+/* "Print" — send the receipt to the thermal printer at the office.
+
+   The PDF goes to the server, which forwards it to the printer; the button
+   waits for the paper to actually come out, so "Printed" means printed rather
+   than "queued somewhere".
+
+   A failure falls back to downloading the PDF. Printing depends on a BLE link,
+   a bridge and a roll of paper, and none of those being available is a reason
+   to leave someone with no receipt at all. */
+async function printPosReceipt(){
+  await withBusy($("btnPosPrint"), "Printing…", async (done) => {
+    const doc = await buildPosReceipt();
+    if(!doc) return;
+    try {
+      const uri = doc.output("datauristring");
+      await api("/print", {method:"POST",
+        body: JSON.stringify({pdfBase64: uri.slice(uri.indexOf(",") + 1)})});
+      done("Printed ✓");
+    } catch(e) {
+      // Say what went wrong AND hand over the PDF, so a printer that's off or
+      // out of paper costs a download rather than the whole receipt.
+      console.warn("print failed:", e);
+      savePosReceipt(doc);
+      alert("Couldn't print (" + (e.message || e) + ").\nThe PDF was downloaded instead.");
+    }
+  });
 }
 
 // brand SVGs (inline, currentColor where sensible)
@@ -960,6 +975,9 @@ async function refreshMe(){
   $("who").textContent = on ? ME.email : "";
   $("btnAuth").textContent = on ? "Sign out" : "Sign in";
   $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
+  // Printing goes through the account (and an allowlist on the server), so the
+  // button only makes sense signed in. "POS receipt" stays visible either way.
+  $("btnPosPrint").hidden = !on;
   $("btnSettings").hidden = !on;
   $("btnInvoices").hidden = !on;
   $("bizHint").textContent = on ? "(synced to your account)" : "(saved on this device)";
