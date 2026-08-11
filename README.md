@@ -109,9 +109,18 @@ npm run deploy                        # wrangler deploy
 
 ### Printing to the thermal printer
 
-The POS receipt button downloads a PDF. When signed in and `PRINT_ENABLED` is
-`"true"`, it instead prints on the 57mm thermal printer and falls back to the
-download if that fails for any reason.
+Two separate buttons, so neither can surprise you:
+
+- **POS receipt** — always downloads the 57mm PDF, signed in or not.
+- **Print receipt** — sends it to the thermal printer. Only shown when signed
+  in, and only works for an address in `PRINT_ALLOWED_EMAILS` (defaults to
+  `INVOICE_OWNER_EMAIL`). Signing in is not authorisation to print: anyone can
+  create an account, so the allowlist is what gates the printer.
+
+The button waits for the paper to actually come out, so "Printed ✓" means
+printed rather than queued. If it fails for any reason it downloads the PDF and
+says why — a printer that's off or out of paper costs a download, not the
+receipt.
 
 The printer is Bluetooth, so the Worker cannot reach it. `POST /api/print`
 HMAC-signs the PDF and forwards it to a relay running on the printer's LAN
