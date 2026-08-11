@@ -27,6 +27,11 @@
 // and renders in every reader. The HTML email — which is the primary document —
 // still shows ₹ properly.
 
+// The one import: deciding what sits where "PAY TO" goes is a rule about the
+// document, not about PDF drawing, and a second copy of it here is how the PDF
+// and the email would end up disagreeing on a paid invoice.
+import { paymentBlock } from "./invoice-html.js";
+
 const PT = 1;                     // PDF unit is the point
 const PAGE_W = 595.28;            // A4
 const PAGE_H = 841.89;
@@ -210,10 +215,15 @@ export function renderInvoicePdf(inv, items, totals) {
   if (inv.client_email) { p.text(MARGIN, y, inv.client_email, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 10.5; }
   if (inv.client_gst) { p.text(MARGIN, y, "GSTIN: " + inv.client_gst, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 10.5; }
 
+  // Pay-to on an unpaid invoice; the Razorpay reference once it is settled.
+  // See paymentBlock() — a paid receipt must not carry payment instructions.
+  const pay = paymentBlock(inv);
   let ry = blockTop;
-  p.text(PAGE_W - MARGIN, ry, "PAY TO", { size: 7.5, bold: true, color: "0.36 0.39 0.45", align: "right" });
+  p.text(PAGE_W - MARGIN, ry, pay.label.toUpperCase(),
+    { size: 7.5, bold: true, align: "right",
+      color: pay.kind === "paid" ? "0.18 0.49 0.33" : "0.36 0.39 0.45" });
   ry -= 13;
-  for (const l of String(inv.biz_pay || "").split(/\n|,\s*/).filter(Boolean)) {
+  for (const l of pay.lines) {
     p.text(PAGE_W - MARGIN, ry, l, { size: 8.5, color: "0.36 0.39 0.45", align: "right" });
     ry -= 10.5;
   }

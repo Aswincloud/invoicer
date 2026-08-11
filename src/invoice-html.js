@@ -41,6 +41,45 @@ export function computeTotals(inv, items) {
 // would print as "0.00" and read as a bug.
 export const showRoundOff = (t) => Math.abs(t.round) >= 0.005;
 
+/* What belongs where "PAY TO" sits.
+
+   A settled invoice must not carry payment instructions. Handing someone a
+   receipt that still says "UPI aswincloud@hdfcbank" invites a second payment
+   for something already paid for — which is worse than useless, because the
+   duplicate then has to be spotted and refunded.
+
+   So:
+     unpaid            → the pay-to details, as always
+     paid via the link → the Razorpay reference, which is what a receipt is for
+     paid by hand      → just PAID; there is no reference to show
+
+   Mirrored by payBlock() in public/app.js for the on-screen preview and the
+   thermal receipt, which render from form state rather than from a row. */
+export function paymentBlock(inv) {
+  const paid = String(inv.status || "").toUpperCase() === "PAID";
+  if (!paid) return { kind: "payto", label: "Pay To", lines: payToLines(inv) };
+
+  const lines = [];
+  if (inv.rzp_payment_id) {
+    lines.push("Paid online via Razorpay");
+    lines.push(`Ref ${inv.rzp_payment_id}`);
+  }
+  if (inv.paid_at) lines.push(fmtPaidDate(inv.paid_at));
+  return { kind: "paid", label: "Paid", lines };
+}
+
+export const payToLines = (inv) =>
+  String(inv.biz_pay || "").split(/\n|,\s*/).map((s) => s.trim()).filter(Boolean);
+
+// Epoch ms to "11 Aug 2026". Fixed en-GB so the day/month order cannot flip
+// with the runtime's locale — a receipt is a record, and 11/08 vs 08/11 on one
+// is a genuine ambiguity.
+export function fmtPaidDate(ms) {
+  const d = new Date(Number(ms));
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
 // "Ledger desk" email — mirrors the on-screen invoice: warm-neutral sheet,
 // pine-green ink, monospaced ledger figures, a double-rule grand total.
 // Email-safe: inline styles + table layout, no <style>/@page. Figures use a
@@ -117,6 +156,7 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
       <td align="right" style="padding:6px 10px;font-family:${MONO};color:${opts.strong ? INK : SOFT}">${opts.neg ? "– " : ""}${money(cur, val)}</td></tr>`;
 
   const taxRows = t.taxRows.map(([l, v]) => totRow(l, v)).join("");
+  const pay = paymentBlock(inv);
 
   // Only on an unpaid invoice: a Pay button on a settled one invites a second
   // payment. A bulletproof <a>, not a <button> — mail clients do not run scripts.
@@ -150,8 +190,8 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
      <b style="font-size:13px">${esc(inv.client_name || "Client")}</b><br><span style="color:${SOFT}">${esc(inv.client_addr)}<br>${esc(inv.client_email)}${inv.client_gst ? "<br>GSTIN: " + esc(inv.client_gst) : ""}</span>
    </td>
    <td valign="top" align="right">
-     <div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700">Pay To</div>
-     <span style="color:${SOFT}">${esc(inv.biz_pay)}${inv.biz_gst ? "<br>GSTIN: " + esc(inv.biz_gst) : ""}</span>
+     <div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${pay.kind === "paid" ? GREEN : SOFT};font-weight:700">${esc(pay.label)}</div>
+     <span style="color:${SOFT}">${pay.lines.map(esc).join("<br>")}${pay.lines.length && inv.biz_gst ? "<br>" : ""}${inv.biz_gst ? "GSTIN: " + esc(inv.biz_gst) : ""}</span>
    </td></tr>
   </table>
   <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;border-collapse:collapse">
