@@ -13,6 +13,47 @@ const BIZ_FIELDS = ["bizName","bizEmail","bizAddr","bizPhone","bizGst","bizPay"]
 // Optional business logo (data-URL). Not a form <input>, so it's tracked
 // separately from BIZ_FIELDS and persisted alongside them.
 let BIZ_LOGO = "";
+
+/* The Razorpay reference for the invoice currently loaded in the editor.
+
+   The preview and the thermal receipt render from FORM state, and the payment
+   reference is not a form field — it is written by the webhook, not typed. So it
+   is carried here when a saved invoice is opened.
+
+   `number` is kept alongside it as a guard. "Save" always inserts a NEW invoice
+   row, so opening a paid invoice, editing it and saving produces a fresh unpaid
+   one; without checking the number still matches, that new invoice would print
+   somebody else's payment reference. */
+let PAY_REF = null;                       // { number, id, at } | null
+
+// Mirrors paymentBlock() in src/invoice-html.js — same rule, applied to the form
+// rather than to a database row. A settled invoice shows how it was paid, never
+// how to pay it.
+// render() and the receipt builder each declare their own local `v`, so these
+// module-level helpers need their own field accessor.
+const fld = (id) => ($(id)?.value || "").trim();
+
+function payBlock(){
+  const paid = fld("status").toUpperCase() === "PAID";
+  if(!paid) return { paid:false, label:"Pay To", lines: payToLines() };
+
+  const ref = PAY_REF && PAY_REF.number === fld("invNo") ? PAY_REF : null;
+  const lines = [];
+  if(ref && ref.id){ lines.push("Paid online via Razorpay"); lines.push("Ref " + ref.id); }
+  if(ref && ref.at) lines.push(fmtPaidDate(ref.at));
+  return { paid:true, label:"Paid", lines };
+}
+
+const payToLines = () =>
+  fld("bizPay").split(/\r?\n|,\s*/).map(s => s.trim()).filter(Boolean);
+
+// Fixed en-GB so the day/month order cannot flip with the device locale —
+// 11/08 vs 08/11 on a receipt is a real ambiguity.
+function fmtPaidDate(ms){
+  const d = new Date(Number(ms));
+  if(isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" });
+}
 // All fields we re-render the preview from.
 const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clAddr","clGst",
   "invNo","currency","issueDate","dueDate","discount","taxMode","taxRate",
@@ -294,6 +335,7 @@ function render(){
   const v = (id) => $(id).value.trim();
   const cur = $("currency").value;
   const status = v("status") || "UNPAID";
+  const payNow = payBlock();
   const initial = (v("bizName")||"I").trim().charAt(0).toUpperCase();
 
   const rowsHtml = items.filter(i=>i.desc||i.amt).map(i =>
@@ -336,8 +378,8 @@ function render(){
     ${v("clGst")?`<p>GSTIN: ${esc(v("clGst"))}</p>`:""}
   </div>
   <div style="text-align:right">
-    <div class="lbl">Pay To</div>
-    <p>${esc(v("bizPay"))}</p>
+    <div class="lbl${payNow.paid ? " paid" : ""}">${esc(payNow.label)}</div>
+    ${payNow.lines.map(l => `<p>${esc(l)}</p>`).join("")}
   </div>
 </div>
 
@@ -529,6 +571,8 @@ function init(){
     $("roundOff").checked = true;
     TOUCHED.delete("taxMode");   // fresh invoice — infer again
     applyInference();
+    $("status").value = "UNPAID";
+    PAY_REF = null;              // a blank invoice carries no payment reference
     $("items").innerHTML=""; addItem();
     $("invNo").value = "INV-"+new Date().getFullYear()+"-"+String(Math.floor(Math.random()*9000)+1000);
     $("issueDate").value=todayISO(0); $("dueDate").value="";  // due date optional
@@ -780,9 +824,13 @@ function posOps(){
   // to be joined with " · " and " ", which turned a deliberately formatted
   // block ("A/C 1234…" then "IFSC …") into one run-on line. The preview honours
   // the breaks via white-space:pre-line, so the receipt should too.
-  if(v("bizPay")){
-    ops.push({t:"left", s:"PAY TO", size:PS.label, bold:true});
-    lines(v("bizPay")).forEach(l => ops.push({t:"wrap", s:l, size:PS.prose}));
+  // On a settled receipt this is the Razorpay reference, not the UPI id — the
+  // customer has already paid, and printing payment instructions on their copy
+  // is how a duplicate payment happens. See payBlock().
+  const payNow = payBlock();
+  if(payNow.lines.length){
+    ops.push({t:"left", s:payNow.label.toUpperCase(), size:PS.label, bold:true});
+    payNow.lines.forEach(l => ops.push({t:"wrap", s:l, size:PS.prose}));
   }
   if(v("notes")){
     ops.push({t:"gap", h:1});
@@ -1237,6 +1285,13 @@ async function openInvoiceInEditor(id){
     $("targetTotal").value = ""; $("solveMsg").textContent = "";
     $("taxModeAuto").textContent = "";
     $("status").value   = (inv.status || "UNPAID");
+    // Not a form field — written by the Razorpay webhook, carried so the
+    // preview and the thermal receipt can print it. Keyed to this invoice's
+    // number so it cannot leak onto a different invoice (Save always inserts a
+    // new row rather than updating this one).
+    PAY_REF = inv.rzp_payment_id || inv.paid_at
+      ? { number: (inv.number || "").trim(), id: inv.rzp_payment_id || "", at: inv.paid_at || 0 }
+      : null;
     $("notes").value    = inv.notes || "";
     $("clName").value   = inv.client_name || "";
     $("clEmail").value  = inv.client_email || "";
