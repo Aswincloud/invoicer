@@ -9,7 +9,7 @@ import { ingestOrder } from "./ingest.js";
 import { printReceipt } from "./print.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
 import {
-  sharePage, createPayOrder, verifyPayCallback, razorpayWebhook,
+  sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
 } from "./pay.js";
 
@@ -30,10 +30,12 @@ export default {
 
     // Public invoice link. Above the assets fallback, which would 404 it — there
     // is no /i/<token> file, the page is rendered from the database.
-    const share = url.pathname.match(/^\/i\/([^/]+)\/?$/);
+    const share = url.pathname.match(/^\/i\/([^/]+?)(\/logo)?\/?$/);
     if (share && request.method === "GET") {
-      try { return await sharePage(env, share[1]); }
-      catch (e) { return bad("server error: " + (e?.message || e), 500); }
+      try {
+        return share[2] ? await shareLogo(env, share[1])
+                        : await sharePage(env, share[1]);
+      } catch (e) { return bad("server error: " + (e?.message || e), 500); }
     }
 
     // everything else → static assets

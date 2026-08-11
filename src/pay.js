@@ -109,18 +109,46 @@ export async function sharePage(env, token) {
     ? `<div class="banner paid">Paid${inv.paid_at ? ` on ${new Date(inv.paid_at).toISOString().slice(0, 10)}` : ""} — thank you.</div>`
     : "";
 
+  // Preview crawlers will not render a data: URI, and the logo is stored as one,
+  // so it is served as bytes from /i/<token>/logo. Omitted entirely when there
+  // is no logo — a broken preview image is worse than a text-only card.
+  const ogImage = inv.biz_logo
+    ? `\n<meta property="og:image" content="${esc(shareUrl(env, token))}/logo">`
+    : "";
+
   // The Pay button is inert markup plus a fetch; Checkout is only loaded when
   // there is something to pay, so a settled invoice pulls no third-party script.
+  //
+  // The reassurance under it is a plain statement of fact, not a badge: Checkout
+  // runs in an iframe served by razorpay.com, so the card number is entered into
+  // Razorpay's page and this Worker never sees it. Someone deciding whether to
+  // trust an unfamiliar link is asking exactly that question, and until now the
+  // page did not answer it.
   const payUi = can.ok ? `
     <div class="paywrap">
       <button id="pay" class="pay">Pay ${esc(amountLabel)}</button>
       <div id="msg" class="msg"></div>
-      <div class="secure">Secured by Razorpay</div>
+      <div class="secure">
+        <img src="/razorpay.svg" alt="Razorpay" class="rzp" width="104" height="22">
+        <div class="secure-note">Card and UPI details are entered on Razorpay's
+          secure checkout. This page never sees them.</div>
+      </div>
     </div>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script>${payScript(token, bizName, inv)}</script>` :
     (isPaid || !can.why || can.why === "paid" ? "" :
       `<div class="paywrap"><div class="msg">${esc(can.why)}</div></div>`);
+
+  // Somewhere to check before paying. "Let me call them first" is what a careful
+  // person does with an unfamiliar link, and a page with no way to do that gives
+  // them only two options: pay on faith, or don't pay.
+  const contactBits = [
+    inv.biz_phone ? `<a href="tel:${esc(String(inv.biz_phone).replace(/[^\d+]/g, ""))}">${esc(inv.biz_phone)}</a>` : "",
+    inv.biz_email ? `<a href="mailto:${esc(inv.biz_email)}">${esc(inv.biz_email)}</a>` : "",
+  ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+  const contact = contactBits
+    ? `<div class="contact">Questions about this invoice? Contact ${esc(bizName)}:<br>${contactBits}</div>`
+    : "";
 
   const html = `<!doctype html>
 <html lang="en"><head>
@@ -131,6 +159,21 @@ export async function sharePage(env, token) {
      execute or parse the document. -->
 <meta name="robots" content="noindex,nofollow,noarchive">
 <title>Invoice ${esc(inv.number || "")} — ${esc(bizName)}</title>
+<!-- Link preview for WhatsApp / SMS / Slack. A bare URL in a chat is what a scam
+     looks like; a card with the business name and logo is the cheapest way to
+     look like what it is.
+
+     The AMOUNT and the CLIENT'S NAME are deliberately absent. A preview renders
+     for everyone in the chat the link is forwarded to, and unlike the page
+     itself it cannot be un-seen by closing the tab. The invoice number is
+     included because the recipient needs to recognise which invoice it is. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${esc(bizName)}">
+<meta property="og:title" content="Invoice ${esc(inv.number || "")} from ${esc(bizName)}">
+<meta property="og:description" content="View this invoice and pay it securely with Razorpay.">
+<meta property="og:url" content="${esc(shareUrl(env, token))}">${ogImage}
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#4f46e5">
 <style>
   :root { color-scheme: light dark; }
   body { margin:0; background:#f4f4f5; color:#18181b; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
@@ -146,17 +189,28 @@ export async function sharePage(env, token) {
   .msg { margin-top:11px; font-size:13px; color:#52525b; min-height:18px; }
   .msg.err { color:#b91c1c; }
   .msg.ok  { color:#166534; font-weight:600; }
-  .secure { margin-top:8px; font-size:11px; color:#a1a1aa; }
+  .secure { margin-top:14px; }
+  .rzp { height:22px; width:auto; opacity:.9; }
+  .secure-note { margin:7px auto 0; max-width:360px; font-size:11.5px;
+                 line-height:1.5; color:#71717a; }
+  .contact { margin-top:22px; text-align:center; font-size:12px; color:#71717a;
+             line-height:1.7; }
+  .contact a { color:#4f46e5; text-decoration:none; font-weight:600; }
+  .contact a:hover { text-decoration:underline; }
   @media (prefers-color-scheme: dark) {
     body { background:#18181b; color:#fafafa; }
     .card { background:#fff; }          /* the invoice itself stays a white sheet */
-    .msg { color:#a1a1aa; }
+    .msg, .secure-note, .contact { color:#a1a1aa; }
+    .contact a { color:#a5b4fc; }
+    /* The wordmark is dark navy; lift it off a dark page. */
+    .rzp { background:#fff; padding:5px 9px; border-radius:6px; opacity:1; }
   }
 </style>
 </head><body>
   <div class="sheet">
     <div class="card">${banner}${body}</div>
     ${payUi}
+    ${contact}
   </div>
 </body></html>`;
 
@@ -168,6 +222,39 @@ export async function sharePage(env, token) {
       // The amount and status can change; never let a shared link be cached as
       // "unpaid" by an intermediary after it has been settled.
       "cache-control": "no-store",
+    },
+  });
+}
+
+/* GET /i/:token/logo — the business logo as image bytes.
+
+   The logo lives on the user row as a data: URI, which is fine for a browser and
+   useless to a link-preview crawler: WhatsApp, Slack and iMessage all fetch
+   og:image over HTTP and will not decode a data: URI. This turns it back into a
+   normal image response.
+
+   Gated by the same token as the page, so it exposes nothing the holder of the
+   link cannot already see. */
+export async function shareLogo(env, token) {
+  const loaded = await loadByToken(env, token);
+  if (!loaded) return new Response("not found", { status: 404 });
+
+  const m = /^data:(image\/(?:png|jpe?g|gif|webp));base64,([A-Za-z0-9+/=]+)$/i
+    .exec(String(loaded.inv.biz_logo || "").trim());
+  if (!m) return new Response("no logo", { status: 404 });
+
+  // atob gives a binary string; Uint8Array.from turns it into the bytes a
+  // Response body needs. No Buffer without nodejs_compat.
+  const bin = atob(m[2]);
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+
+  return new Response(bytes, {
+    headers: {
+      "content-type": m[1],
+      // The logo rarely changes and a crawler may fetch it repeatedly; the
+      // token in the path makes the URL specific enough to cache safely.
+      "cache-control": "public, max-age=3600",
+      "x-robots-tag": "noindex",
     },
   });
 }
