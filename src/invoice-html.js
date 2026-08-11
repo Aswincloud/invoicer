@@ -1,7 +1,9 @@
 // Server-side invoice HTML (for the "email invoice to client" feature).
 // Kept email-safe: inline styles, table layout, no <style>/@page.
 
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+// Exported so the public pay page escapes with the same function this template
+// does, rather than carrying a second copy that can drift from it.
+export const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 function money(cur, n) {
@@ -91,7 +93,10 @@ export function logoAttachment(dataUri) {
 // `logoSrc` overrides what the <img> points at, so the same template serves both
 // the email (a cid: reference) and any browser context (the data: URI as before).
 // Defaulting to inv.biz_logo keeps every existing caller working unchanged.
-export function renderInvoiceEmail(inv, items, logoSrc = null) {
+// `payUrl` adds a Pay button to the emailed copy. Optional and last, so every
+// existing caller (ingest.js, emailInvoice, and the public pay page — which has
+// its own button and must NOT get a second one) is unaffected by its addition.
+export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
   const cur = inv.currency || "₹";
   const t = computeTotals(inv, items);
   const initial = (inv.biz_name || "I").charAt(0).toUpperCase();
@@ -112,6 +117,15 @@ export function renderInvoiceEmail(inv, items, logoSrc = null) {
       <td align="right" style="padding:6px 10px;font-family:${MONO};color:${opts.strong ? INK : SOFT}">${opts.neg ? "– " : ""}${money(cur, val)}</td></tr>`;
 
   const taxRows = t.taxRows.map(([l, v]) => totRow(l, v)).join("");
+
+  // Only on an unpaid invoice: a Pay button on a settled one invites a second
+  // payment. A bulletproof <a>, not a <button> — mail clients do not run scripts.
+  const payButton = payUrl && String(inv.status || "").toUpperCase() !== "PAID"
+    ? `<div style="margin-top:26px;text-align:center">
+         <a href="${esc(payUrl)}" style="display:inline-block;background:${GREEN};color:#fff;text-decoration:none;padding:13px 30px;border-radius:9px;font-weight:700;font-size:15px">Pay ${money(cur, t.total)}</a>
+         <div style="margin-top:9px;font-size:11px;color:${SOFT}">or view this invoice online: <a href="${esc(payUrl)}" style="color:${GREEN}">${esc(payUrl)}</a></div>
+       </div>`
+    : "";
 
   return `<div style="font-family:${SANS};color:${INK};max-width:640px;margin:0 auto;padding:8px">
   <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:2px solid ${INK};padding-bottom:14px">
@@ -159,6 +173,7 @@ export function renderInvoiceEmail(inv, items, logoSrc = null) {
        <td align="right" style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${MONO};font-weight:600;font-size:18px;color:${GREEN}">${money(cur, t.total)}</td></tr>
   </table>
   <div style="clear:both"></div>
+  ${payButton}
   ${inv.notes ? `<div style="margin-top:28px;font-size:11px;color:${SOFT};white-space:pre-line"><div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700;margin-bottom:4px">Notes / Terms</div>${esc(inv.notes)}</div>` : ""}
   <div style="margin-top:26px;text-align:center;color:${SOFT};font-size:10px;font-family:${MONO};letter-spacing:.3px;border-top:1px solid ${RULE};padding-top:13px">Generated with Invoicer</div>
  </div>`;
