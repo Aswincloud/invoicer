@@ -1170,15 +1170,46 @@ function renderInvoiceList(list){
          <span class="inv-amt">${esc(invAmt(inv.currency, inv.total))}</span>
          <div class="inv-acts">
            <button class="btn ghost open">Open</button>
+           <button class="btn ghost link">Copy link</button>
            <button class="btn ghost email">Email</button>
            <button class="btn ghost del">Delete</button>
          </div>
        </div>`;
     row.querySelector(".open").onclick  = () => openInvoiceInEditor(inv.id);
+    row.querySelector(".link").onclick  = (e) => copyPayLink(inv, e.currentTarget);
     row.querySelector(".email").onclick = () => emailSavedInvoice(inv);
     row.querySelector(".del").onclick   = () => deleteSavedInvoice(inv, row);
     box.appendChild(row);
   });
+}
+
+/* Copy the invoice's public pay link to the clipboard.
+
+   The token is minted server-side on first use, so an invoice that is never
+   shared never gets a link. Falls back to a prompt() when the clipboard is
+   unavailable — it needs a secure context and permission, and losing the link
+   entirely because of that would defeat the button. */
+async function copyPayLink(inv, btn){
+  const was = btn.textContent;
+  btn.disabled = true; btn.textContent = "…";
+  try{
+    const { url } = await api("/invoices/"+inv.id+"/share", { method:"POST" });
+    try{
+      await navigator.clipboard.writeText(url);
+      btn.textContent = "Copied ✓";
+    }catch(_){
+      // Not an error worth alerting over — show them the link so they can copy
+      // it by hand.
+      prompt("Copy this pay link:", url);
+      btn.textContent = was;
+    }
+  }catch(e){
+    alert("Couldn't create the link: " + (e.message || e));
+    btn.textContent = was;
+  }finally{
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = was; }, 2000);
+  }
 }
 
 // Load a saved invoice back into the editor form + preview.

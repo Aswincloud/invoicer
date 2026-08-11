@@ -8,18 +8,34 @@ import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js"
 import { ingestOrder } from "./ingest.js";
 import { printReceipt } from "./print.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
+import {
+  sharePage, createPayOrder, verifyPayCallback, razorpayWebhook,
+  shareInvoice, shareUrl,
+} from "./pay.js";
 
 const SESSION_COOKIE = "inv_session";
 const TOKEN_TTL = 15 * 60 * 1000;          // magic link valid 15 min
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export default {
-  async fetch(request, env) {
+  // `ctx` is threaded through for the Razorpay webhook: Razorpay times out at
+  // ~5s, so the "payment received" emails go out via ctx.waitUntil after the
+  // response rather than inside it.
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/")) {
-      try { return await api(request, env, url); }
+      try { return await api(request, env, url, ctx); }
       catch (e) { return bad("server error: " + (e?.message || e), 500); }
     }
+
+    // Public invoice link. Above the assets fallback, which would 404 it — there
+    // is no /i/<token> file, the page is rendered from the database.
+    const share = url.pathname.match(/^\/i\/([^/]+)\/?$/);
+    if (share && request.method === "GET") {
+      try { return await sharePage(env, share[1]); }
+      catch (e) { return bad("server error: " + (e?.message || e), 500); }
+    }
+
     // everything else → static assets
     return env.ASSETS.fetch(request);
   },
@@ -46,21 +62,33 @@ async function currentUser(request, env) {
 }
 
 // ── router ───────────────────────────────────────────────────────
-async function api(request, env, url) {
+async function api(request, env, url, ctx) {
   const p = url.pathname;
   const m = request.method;
 
-  // Dispatched BEFORE the body is parsed: this route verifies an HMAC over the
+  // Dispatched BEFORE the body is parsed: these routes verify an HMAC over the
   // exact bytes sent, and re-serialising a parsed object produces different ones,
   // so the signature would never match.
   //
-  // It is service-to-service (the shop Worker raising an invoice for a paid
-  // order) and carries its own auth, so it sits above the session gate below —
-  // there is no cookie on a Worker-to-Worker call.
+  // Both are service-to-service and carry their own auth, so they sit above the
+  // session gate below — there is no cookie on a Worker-to-Worker call, and none
+  // on a webhook from Razorpay either.
   if (p === "/api/ingest/order" && m === "POST") return ingestOrder(request, env);
+  if (p === "/api/webhook/razorpay" && m === "POST") return razorpayWebhook(request, env, ctx);
 
   const body = (m === "POST" || m === "PUT" || m === "PATCH")
     ? await request.json().catch(() => ({})) : {};
+
+  // --- public pay endpoints ---
+  //
+  // Above the session gate: the person paying an invoice is the client, who has
+  // no account here. The share token in the path is what authorises them, and
+  // the amount is recomputed server-side regardless of what they send.
+  let pm;
+  if ((pm = p.match(/^\/api\/pay\/([^/]+)\/order$/)) && m === "POST")
+    return createPayOrder(env, pm[1]);
+  if ((pm = p.match(/^\/api\/pay\/([^/]+)\/verify$/)) && m === "POST")
+    return verifyPayCallback(env, pm[1], body);
 
   // --- public auth endpoints ---
   if (p === "/api/auth/request" && m === "POST") return authRequest(env, body);
@@ -93,6 +121,8 @@ async function api(request, env, url) {
   }
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/email$/)) && m === "POST")
     return emailInvoice(env, user, match[1], body);
+  if ((match = p.match(/^\/api\/invoices\/([^/]+)\/share$/)) && m === "POST")
+    return shareInvoice(env, user, match[1], request.url);
 
   return bad("not found", 404);
 }
@@ -287,7 +317,23 @@ async function emailInvoice(env, user, id, b) {
   // attachment. This path had the bug too — the dashboard's "email invoice"
   // button has been sending a broken image for as long as logos have existed.
   const logo = logoAttachment(user.biz_logo);
-  const html = renderInvoiceEmail(r.inv, r.items, logo ? logo.src : "");
+
+  // Mint the share token here too, so an emailed invoice always carries a link
+  // the client can pay from — without the owner having to remember to press
+  // "Copy link" first. Reuses the existing token when there is one, so the URL
+  // in an old email keeps working.
+  let payUrl = null;
+  if (String(r.inv.status || "").toUpperCase() !== "PAID") {
+    let token = r.inv.share_token;
+    if (!token) {
+      token = randToken(16);
+      await env.DB.prepare("UPDATE invoices SET share_token=?, updated_at=? WHERE id=?")
+        .bind(token, now(), id).run();
+    }
+    payUrl = shareUrl(env, token);
+  }
+
+  const html = renderInvoiceEmail(r.inv, r.items, logo ? logo.src : "", payUrl);
 
   const attachments = [];
   if (logo) attachments.push(logo.attachment);

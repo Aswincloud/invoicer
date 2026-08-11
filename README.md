@@ -51,6 +51,8 @@ Local secrets go in `.dev.vars` (git-ignored) — see **Configuration** below.
   invoice (preview + PDF).
 - **My Invoices** dashboard — save, reopen to edit, re-download, email, delete.
 - **Email invoice to client** server-side via Resend.
+- **Shareable pay link** — one URL the client opens to review the invoice and
+  pay it with Razorpay; the invoice marks itself **PAID** when the money lands.
 
 ## Architecture
 
@@ -58,8 +60,10 @@ Local secrets go in `.dev.vars` (git-ignored) — see **Configuration** below.
 src/               Cloudflare Worker
   index.js         router: static assets via ASSETS binding + /api/* backend
   lib.js           JSON/cookie/HMAC helpers, Resend email
-  invoice-html.js  server-side invoice HTML + totals (for emailed invoices)
+  invoice-html.js  server-side invoice HTML + totals (email, PDF and pay page)
   oauth-routes.js  OAuth SSO via the central broker (@aswincloud/auth)
+  razorpay.js      Razorpay REST client + the two signature checks
+  pay.js           /i/<token> public page, order/verify, order.paid webhook
 public/            static site (served by the Worker's ASSETS binding)
   index.html       form + preview shell + modals
   styles.css       screen + @media print styles
@@ -85,6 +89,8 @@ production, set them with `wrangler secret put`:
 | `SESSION_SECRET` | HMAC key for the session cookie (falls back to `AUTH_SIGNING_KEY`) |
 | `AUTH_BROKER_URL`, `RELAY_SECRET` | Enable OAuth SSO via the auth broker |
 | `PRINT_RELAY_SECRET` | Signs print jobs sent to the thermal-printer relay |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Razorpay API key pair, for pay links |
+| `RAZORPAY_WEBHOOK_SECRET` | A **different** string — signs the webhook body |
 
 Magic link works with just `RESEND_API_KEY` + a session key. SSO buttons only
 appear when the broker trio (`AUTH_BROKER_URL` + `RELAY_SECRET` +
@@ -104,8 +110,44 @@ wrangler secret put AUTH_BROKER_URL
 wrangler secret put RELAY_SECRET
 # to print receipts on the thermal printer, also:
 wrangler secret put PRINT_RELAY_SECRET
+# for shareable pay links, also:
+wrangler secret put RAZORPAY_KEY_ID
+wrangler secret put RAZORPAY_KEY_SECRET
+wrangler secret put RAZORPAY_WEBHOOK_SECRET
 npm run deploy                        # wrangler deploy
 ```
+
+### Shareable pay links
+
+**Copy link** on a saved invoice gives you a URL like
+`https://invoicer.aswincloud.com/i/<32-hex>`. The client opens it, reviews the
+items, and pays with Razorpay Checkout without leaving the page or creating an
+account. The **Email** button includes the same link as a Pay button.
+
+Two rules the code is built around:
+
+1. **The amount is computed server-side** from `computeTotals()` — the same call
+   that renders the total the client is reading. Nothing the browser sends is
+   used, so the charge cannot disagree with the page.
+2. **Only the webhook marks an invoice PAID.** The checkout callback is
+   signature-verified and updates the UI, but Razorpay's server-to-server
+   `order.paid` is the sole authority on status.
+
+The token is the credential — anyone holding the link can view and pay the
+invoice, which is the point. It is minted on first share (never at save time,
+so an invoice that is never shared has no link) and is unrelated to the
+invoice id.
+
+After setting the secrets, add a webhook in the Razorpay dashboard pointing at
+`https://invoicer.aswincloud.com/api/webhook/razorpay` for `order.paid` (and
+`payment.failed`), using the value you set as `RAZORPAY_WEBHOOK_SECRET`. This is
+a **second** webhook alongside the shop's; Razorpay supports several, each with
+its own secret, and the shop's is unaffected. Invoicer receives the shop's
+events too and ignores any order it does not own.
+
+Set `PAY_ENABLED = "false"` to stop taking payments — links still open and
+invoices still render, only the Pay button goes away. Razorpay settles in INR,
+so the button appears on `₹` invoices only.
 
 ### Printing to the thermal printer
 

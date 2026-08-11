@@ -37,6 +37,14 @@ INVOICE_OWNER_EMAIL = "aswin@aswincloud.com"
 PRINT_ENABLED = "true"
 PRINT_RELAY_URL = "https://print.aswincloud.com/print"
 
+# Shareable invoice links paid online with Razorpay: /i/<token> renders the
+# invoice for a client who has no account, and Razorpay's order.paid webhook
+# marks it PAID.
+#
+# Kill switch: set to "false" and deploy to stop taking payments. The link still
+# opens and the invoice still renders — only the Pay button goes away.
+PAY_ENABLED = "true"
+
 # Secrets (NOT here — set once via API/dashboard, never committed):
 #   RESEND_API_KEY, AUTH_SIGNING_KEY
 #   SHOP_INGEST_SECRET — shared with the shop Worker; signs POST /api/ingest/order.
@@ -44,3 +52,9 @@ PRINT_RELAY_URL = "https://print.aswincloud.com/print"
 #   PRINT_RELAY_SECRET — shared with the print relay; signs POST to PRINT_RELAY_URL.
 #                        Must match PRINT_RELAY_SECRET in /etc/tejprint-relay.env
 #                        on the machine running tejprint-relay.py.
+#   RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET — the API key pair. Same Razorpay
+#                        account as the shop; KEY_SECRET never leaves the Worker.
+#   RAZORPAY_WEBHOOK_SECRET — a DIFFERENT string, typed into the Razorpay
+#                        dashboard when creating this Worker's webhook. Signs the
+#                        webhook body. Mixing it up with KEY_SECRET is the
+#                        classic Razorpay bug; see src/razorpay.js.
