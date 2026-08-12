@@ -47,12 +47,96 @@ function payBlock(){
 const payToLines = () =>
   fld("bizPay").split(/\r?\n|,\s*/).map(s => s.trim()).filter(Boolean);
 
-// Fixed en-GB so the day/month order cannot flip with the device locale —
-// 11/08 vs 08/11 on a receipt is a real ambiguity.
-function fmtPaidDate(ms){
-  const d = new Date(Number(ms));
-  if(isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" });
+/* Mirrors fmtDate / plain / amountInWords / placeOfSupply in
+   src/invoice-html.js. The browser cannot import the Worker module, so the rules
+   live twice — test/invoice-words.mjs pins the server side, and any change here
+   must be made there too. */
+
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+/* "12 Aug 2026" from a stored "YYYY-MM-DD" or from epoch ms.
+
+   Not toLocaleDateString: it prints 11/08 or 08/11 depending on the device, and
+   an invoice is a record. And `new Date("2026-08-12")` is UTC midnight, so
+   formatting it locally shows the previous day anywhere west of Greenwich. */
+function fmtDate(value){
+  if(value == null || value === "") return "";
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+  if(iso){
+    const mi = Number(iso[2]) - 1;
+    if(mi < 0 || mi > 11) return String(value);
+    return `${Number(iso[3])} ${MONTHS[mi]} ${iso[1]}`;
+  }
+  const d = new Date(Number(value));
+  if(isNaN(d.getTime())) return String(value);
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+const fmtPaidDate = fmtDate;
+
+// The figure without the currency symbol, for the Rate column — which sits
+// beside Amount, so the two must group identically.
+function plainNum(n){
+  const cur = $("currency").value;
+  return Number(n||0).toLocaleString(cur === "₹" ? "en-IN" : "en-US",
+    {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+const ONES=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten",
+  "Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+const TENS=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+const two=(n)=> n<20 ? ONES[n] : (ONES[n%10] ? `${TENS[Math.floor(n/10)]} ${ONES[n%10]}` : TENS[Math.floor(n/10)]);
+function three(n){
+  const h=Math.floor(n/100), r=n%100, out=[];
+  if(h) out.push(`${ONES[h]} Hundred`);
+  if(r) out.push(two(r));
+  return out.join(" ");
+}
+// Indian grouping: crore, lakh, thousand — 1234567 is "Twelve Lakh …", never
+// "One Million …".
+function numberToWords(n){
+  let num=Math.floor(Math.abs(Number(n)||0));
+  if(num===0) return "Zero";
+  const parts=[];
+  const cr=Math.floor(num/10000000); num%=10000000;
+  const la=Math.floor(num/100000);   num%=100000;
+  const th=Math.floor(num/1000);     num%=1000;
+  if(cr) parts.push(`${cr>999?numberToWords(cr):three(cr)} Crore`);
+  if(la) parts.push(`${three(la)} Lakh`);
+  if(th) parts.push(`${three(th)} Thousand`);
+  if(num) parts.push(three(num));
+  return parts.join(" ");
+}
+// ₹ only: writing the amount out is an Indian convention, and "Dollars … Only"
+// would read as a mistake.
+function amountInWords(total, currency){
+  if((currency||"₹") !== "₹") return "";
+  const n=Number(total)||0;
+  // Round ONCE, then split — flooring rupees separately from rounded paise makes
+  // 99.999 read "Ninety Nine" beside a printed 100.00.
+  const tp=Math.round(Math.abs(n)*100);
+  const rupees=Math.floor(tp/100), paise=tp%100;
+  const head=`${n<0?"Minus ":""}Rupees ${numberToWords(rupees)}`;
+  return paise ? `${head} and ${two(paise)} Paise Only` : `${head} Only`;
+}
+
+const GST_STATES={ "01":"Jammu & Kashmir","02":"Himachal Pradesh","03":"Punjab",
+  "04":"Chandigarh","05":"Uttarakhand","06":"Haryana","07":"Delhi","08":"Rajasthan",
+  "09":"Uttar Pradesh","10":"Bihar","11":"Sikkim","12":"Arunachal Pradesh",
+  "13":"Nagaland","14":"Manipur","15":"Mizoram","16":"Tripura","17":"Meghalaya",
+  "18":"Assam","19":"West Bengal","20":"Jharkhand","21":"Odisha","22":"Chhattisgarh",
+  "23":"Madhya Pradesh","24":"Gujarat","25":"Daman & Diu",
+  "26":"Dadra & Nagar Haveli and Daman & Diu","27":"Maharashtra","28":"Andhra Pradesh",
+  "29":"Karnataka","30":"Goa","31":"Lakshadweep","32":"Kerala","33":"Tamil Nadu",
+  "34":"Puducherry","35":"Andaman & Nicobar Islands","36":"Telangana",
+  "37":"Andhra Pradesh","38":"Ladakh","97":"Other Territory" };
+
+// Required on a GST invoice; the first two digits of the client's GSTIN are the
+// state code. Empty when there is no GSTIN — an invented place of supply would
+// be worse than none.
+function placeOfSupplyFromGst(gstin){
+  const code=String(gstin||"").trim().slice(0,2);
+  if(!/^\d{2}$/.test(code)) return "";
+  return GST_STATES[code] ? `${GST_STATES[code]} (${code})` : "";
 }
 // All fields we re-render the preview from.
 const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clAddr","clGst",
@@ -336,11 +420,13 @@ function render(){
   const cur = $("currency").value;
   const status = v("status") || "UNPAID";
   const payNow = payBlock();
+  const words = amountInWords(t.total, cur);
+  const pos = placeOfSupplyFromGst(v("clGst"));
   const initial = (v("bizName")||"I").trim().charAt(0).toUpperCase();
 
   const rowsHtml = items.filter(i=>i.desc||i.amt).map(i =>
     `<tr><td>${esc(i.desc)}</td><td class="r">${i.qty||""}</td>`+
-    `<td class="r">${i.rate?i.rate.toFixed(2):""}</td>`+
+    `<td class="r">${i.rate?plainNum(i.rate):""}</td>`+
     `<td class="r">${i.amt?fmt(i.amt):""}</td></tr>`).join("")
     || `<tr><td colspan="4" style="color:#9ca3af;text-align:center;padding:20px">Add line items to see them here…</td></tr>`;
 
@@ -361,9 +447,9 @@ function render(){
   <div class="title">
     <h2>INVOICE</h2>
     <div class="meta">
-      ${v("invNo")?`<div>Invoice # <b>${esc(v("invNo"))}</b></div>`:""}
-      ${v("issueDate")?`<div>Issue: <b>${esc(v("issueDate"))}</b></div>`:""}
-      ${v("dueDate")?`<div>Due: <b>${esc(v("dueDate"))}</b></div>`:""}
+      ${v("invNo")?`<div>No. <b>${esc(v("invNo"))}</b></div>`:""}
+      ${v("issueDate")?`<div>Issued <b>${esc(fmtDate(v("issueDate")))}</b></div>`:""}
+      ${v("dueDate")?`<div>Due <b>${esc(fmtDate(v("dueDate")))}</b></div>`:""}
       <div><span class="badge ${esc(status)}">● ${esc(status)}</span></div>
     </div>
   </div>
@@ -376,6 +462,7 @@ function render(){
     <p>${esc(v("clAddr"))}</p>
     ${v("clEmail")?`<p>${esc(v("clEmail"))}</p>`:""}
     ${v("clGst")?`<p>GSTIN: ${esc(v("clGst"))}</p>`:""}
+    ${pos?`<p>Place of supply: ${esc(pos)}</p>`:""}
   </div>
   <div style="text-align:right">
     <div class="lbl${payNow.paid ? " paid" : ""}">${esc(payNow.label)}</div>
@@ -398,8 +485,10 @@ function render(){
   <tr class="grand"><td>Total ${cur?`(${cur})`:""}</td><td class="r">${fmt(t.total)}</td></tr>
 </table></div>
 
+${words?`<div class="pwords"><div class="lbl">Amount in words</div><p>${esc(words)}</p></div>`:""}
 ${v("notes")?`<div class="pfoot"><div class="lbl">Notes / Terms</div><p>${esc(v("notes"))}</p></div>`:""}
-<div class="pnote">Generated with Invoicer · ${esc(v("bizEmail")||"")}</div>`;
+<div class="psign"><div class="sigline"></div>For ${esc(v("bizName")||"Your Business")}<br>Authorised Signatory</div>
+<div class="pnote">${esc([v("bizName"),v("bizPhone"),v("bizEmail")].filter(Boolean).join(" · "))}</div>`;
 }
 
 // ── logo upload (downscaled to a data-URL) ───────────────────────
@@ -841,7 +930,9 @@ function posOps(){
   // already say it, rather than printing the same sentence twice.
   if(!/thank you/i.test(v("notes")))
     ops.push({t:"center", s:"Thank you for your business!", size:PS.footer});
-  ops.push({t:"center", s:"Generated with Invoicer", size:PS.footer});
+  // The business's own line, not ours — this goes to their customer, and every
+  // millimetre of a 57mm roll is paper. GSTIN over our branding.
+  if(v("bizGst")) ops.push({t:"center", s:"GSTIN " + v("bizGst"), size:PS.footer});
   return ops;
 }
 

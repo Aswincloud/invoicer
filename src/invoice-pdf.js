@@ -30,7 +30,7 @@
 // The one import: deciding what sits where "PAY TO" goes is a rule about the
 // document, not about PDF drawing, and a second copy of it here is how the PDF
 // and the email would end up disagreeing on a paid invoice.
-import { paymentBlock } from "./invoice-html.js";
+import { paymentBlock, fmtDate, amountInWords, placeOfSupply, plain } from "./invoice-html.js";
 
 const PT = 1;                     // PDF unit is the point
 const PAGE_W = 595.28;            // A4
@@ -185,13 +185,16 @@ export function renderInvoicePdf(inv, items, totals) {
     p.text(MARGIN, y, l, { size: 8.5, color: "0.36 0.39 0.45" });
     y -= 11;
   }
-  if (inv.biz_email) { p.text(MARGIN, y, inv.biz_email, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 11; }
+  // Phone AND email. The phone was on the screen invoice and in neither the PDF
+  // nor the email, so every copy actually sent to a client had no number on it.
+  const contact = [inv.biz_phone, inv.biz_email].filter(Boolean).join("  ·  ");
+  if (contact) { p.text(MARGIN, y, contact, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 11; }
   if (inv.biz_gst) { p.text(MARGIN, y, "GSTIN: " + inv.biz_gst, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 11; }
 
   // Invoice meta, right column, aligned with the header block above.
   let my = PAGE_H - MARGIN - 30;
-  const meta = [["No.", inv.number], ["Issued", inv.issue_date]];
-  if (inv.due_date) meta.push(["Due", inv.due_date]);
+  const meta = [["No.", inv.number], ["Issued", fmtDate(inv.issue_date)]];
+  if (inv.due_date) meta.push(["Due", fmtDate(inv.due_date)]);
   if (inv.status) meta.push(["Status", inv.status]);
   for (const [k, v] of meta) {
     p.text(PAGE_W - MARGIN - 110, my, k, { size: 8.5, color: "0.36 0.39 0.45" });
@@ -214,6 +217,10 @@ export function renderInvoicePdf(inv, items, totals) {
   }
   if (inv.client_email) { p.text(MARGIN, y, inv.client_email, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 10.5; }
   if (inv.client_gst) { p.text(MARGIN, y, "GSTIN: " + inv.client_gst, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 10.5; }
+  // Required on a GST invoice; derived from the client's GSTIN state code, the
+  // same two digits the editor already uses to choose CGST+SGST vs IGST.
+  const pos = placeOfSupply(inv);
+  if (pos) { p.text(MARGIN, y, "Place of supply: " + pos, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 10.5; }
 
   // Pay-to on an unpaid invoice; the Razorpay reference once it is settled.
   // See paymentBlock() — a paid receipt must not carry payment instructions.
@@ -253,9 +260,11 @@ export function renderInvoicePdf(inv, items, totals) {
       header();
     }
     const amt = (it.qty || 0) * (it.rate || 0);
-    p.text(COL_DESC, y, fit(it.description, COL_QTY - COL_DESC - 24, 9, true), { size: 9, bold: true });
+    // Regular weight, matching the on-screen sheet. Bold here made the emailed
+    // PDF read as a different document from the one the invoice is designed as.
+    p.text(COL_DESC, y, fit(it.description, COL_QTY - COL_DESC - 24, 9), { size: 9 });
     p.text(COL_QTY, y, it.qty ? String(it.qty) : "", { size: 9, color: "0.36 0.39 0.45", align: "right" });
-    p.text(COL_RATE, y, it.rate ? Number(it.rate).toFixed(2) : "", { size: 9, color: "0.36 0.39 0.45", align: "right" });
+    p.text(COL_RATE, y, it.rate ? plain(inv.currency, it.rate) : "", { size: 9, color: "0.36 0.39 0.45", align: "right" });
     p.text(COL_AMT, y, money(amt), { size: 9, align: "right" });
     y -= 8;
     p.line(MARGIN, y, PAGE_W - MARGIN, y);
@@ -267,7 +276,7 @@ export function renderInvoicePdf(inv, items, totals) {
   const labelX = PAGE_W - MARGIN - 150;
   const totRow = (label, val, opts = {}) => {
     p.text(labelX, y, label, { size: 9, color: opts.strong ? "0.11 0.12 0.14" : "0.36 0.39 0.45", bold: !!opts.strong });
-    p.text(COL_AMT, y, (opts.neg ? "- " : "") + money(val), { size: 9, align: "right" });
+    p.text(COL_AMT, y, (opts.neg ? "- " : opts.pos ? "+ " : "") + money(val), { size: 9, align: "right" });
     y -= 14;
   };
 
@@ -280,14 +289,37 @@ export function renderInvoicePdf(inv, items, totals) {
   // it is meaningless — and misleading — when no tax applies.
   if ((totals.disc || totals.shipping) && totals.taxRows.length) totRow("Taxable value", totals.taxable);
   for (const [l, v] of totals.taxRows) totRow(l, v);
-  if (Math.abs(totals.round) >= 0.005) totRow("Round off", Math.abs(totals.round), { neg: totals.round < 0 });
+  // Signed, like the screen: "Round off  0.40" leaves the reader to work out
+  // which way it moved the total.
+  if (Math.abs(totals.round) >= 0.005)
+    totRow("Round off", Math.abs(totals.round), { neg: totals.round < 0, pos: totals.round > 0 });
 
   y -= 4;
   p.line(labelX, y + 8, PAGE_W - MARGIN, y + 8, { width: 1, color: "0.11 0.12 0.14" });
   y -= 6;
   p.text(labelX, y, "TOTAL", { size: 11, bold: true });
   p.text(COL_AMT, y, money(totals.total), { size: 13, bold: true, color: "0.18 0.49 0.33", align: "right" });
-  y -= 30;
+  y -= 26;
+
+  // ── amount in words ──
+  //
+  // Goes on the LEFT, level with where the totals ended: that half of the page
+  // was empty, and this is the row an Indian invoice is expected to carry.
+  const words = amountInWords(totals.total, inv.currency);
+  if (words) {
+    p.text(MARGIN, y + 20, "AMOUNT IN WORDS", { size: 7.5, bold: true, color: "0.36 0.39 0.45" });
+    let wy = y + 8;
+    let line = "";
+    for (const word of words.split(" ")) {
+      const next = line ? line + " " + word : word;
+      if (textWidth(next, 8.5) > CONTENT_W * 0.55) {
+        p.text(MARGIN, wy, line, { size: 8.5 }); wy -= 11; line = word;
+      } else line = next;
+    }
+    if (line) { p.text(MARGIN, wy, line, { size: 8.5 }); wy -= 11; }
+    y = Math.min(y, wy);
+  }
+  y -= 18;
 
   // ── notes ──
   if (inv.notes) {
@@ -309,10 +341,25 @@ export function renderInvoicePdf(inv, items, totals) {
     }
   }
 
+  // ── signature ──
+  //
+  // Bottom right, above the footer rule, on the LAST page only — a signature
+  // block repeated on every page would read as several separate approvals.
+  const sigY = Math.max(y - 26, MARGIN + 66);
+  p.line(PAGE_W - MARGIN - 170, sigY, PAGE_W - MARGIN, sigY, { width: 0.5 });
+  p.text(PAGE_W - MARGIN, sigY - 12, "For " + (inv.biz_name || "Your Business"),
+         { size: 8, color: "0.36 0.39 0.45", align: "right" });
+  p.text(PAGE_W - MARGIN, sigY - 23, "Authorised Signatory",
+         { size: 8, color: "0.36 0.39 0.45", align: "right" });
+
   // ── footer, on every page ──
+  //
+  // The business's own contact line, not ours: this document goes to their
+  // customers, and "Generated with Invoicer" is our branding on their paper.
+  const footLine = [inv.biz_name, inv.biz_phone, inv.biz_email].filter(Boolean).join("  ·  ");
   pages.forEach((pg, i) => {
     pg.line(MARGIN, MARGIN + 22, PAGE_W - MARGIN, MARGIN + 22);
-    pg.text(MARGIN, MARGIN + 10, "Generated with Invoicer", { size: 7.5, color: "0.36 0.39 0.45" });
+    pg.text(MARGIN, MARGIN + 10, footLine, { size: 7.5, color: "0.36 0.39 0.45" });
     if (pages.length > 1) {
       pg.text(PAGE_W - MARGIN, MARGIN + 10, `Page ${i + 1} of ${pages.length}`,
               { size: 7.5, color: "0.36 0.39 0.45", align: "right" });
@@ -330,11 +377,28 @@ export function renderInvoicePdf(inv, items, totals) {
 // not as a string. A single multi-byte character anywhere would shift every
 // offset after it and produce a file that opens as blank or corrupt.
 function assemble(pages) {
-  const enc = new TextEncoder();
+  /* Latin-1, one byte per character — NOT TextEncoder.
+
+     The base-14 fonts use WinAnsiEncoding, which is Latin-1 for everything
+     above ASCII, and pdfString() already guarantees nothing above U+00FF
+     survives. TextEncoder is UTF-8, so it wrote é as two bytes (C3 A9) and the
+     reader dutifully rendered them as the two WinAnsi characters "Ã©".
+
+     Every accented name on every PDF this has ever produced came out mangled —
+     "José Ferrão" as "JosÃ© FerrÃ£o". It went unnoticed because the sample data
+     was ASCII; a "·" separator in the footer is what finally showed it.
+
+     It also matters for the xref table, whose byte offsets are counted here: a
+     multi-byte character shifts every offset after it. */
+  const latin1 = (s) => {
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xFF;
+    return out;
+  };
   const chunks = [];
   let length = 0;
   const push = (s) => {
-    const b = typeof s === "string" ? enc.encode(s) : s;
+    const b = typeof s === "string" ? latin1(s) : s;
     chunks.push(b);
     length += b.length;
     return length;
@@ -375,8 +439,9 @@ function assemble(pages) {
       `/Contents ${contentIds[i]} 0 R >>`);
 
     const stream = pg.toStream();
-    // Length must be the byte length of the stream, not its character count.
-    const bytes = enc.encode(stream);
+    // Length must be the byte length of the stream, not its character count —
+    // and in the SAME encoding the stream is written with, or /Length lies.
+    const bytes = latin1(stream);
     objects[contentIds[i]] = length;
     push(`${contentIds[i]} 0 obj\n<< /Length ${bytes.length} >>\nstream\n`);
     push(bytes);
