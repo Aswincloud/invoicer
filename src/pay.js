@@ -26,7 +26,7 @@
 // is never derived from anything the owner exposes elsewhere.
 
 import { json, bad, now, randToken, sendEmail } from "./lib.js";
-import { computeTotals, renderInvoiceEmail, esc } from "./invoice-html.js";
+import { computeTotals, renderInvoiceEmail, esc, fmtDate } from "./invoice-html.js";
 import {
   createOrder, paymentsConfigured, publicKeyId,
   verifyCallbackSignature, verifyWebhookSignature,
@@ -78,6 +78,10 @@ function payability(env, inv, total) {
   if (!payEnabled(env)) return { ok: false, why: "Online payment is turned off." };
   if (!paymentsConfigured(env)) return { ok: false, why: "Online payment is not set up." };
   if (String(inv.status || "").toUpperCase() === "PAID") return { ok: false, why: "paid" };
+  // A cancelled invoice is not payable. Its link stays valid on purpose — a
+  // client holding one deserves to be told it was withdrawn rather than to meet
+  // a 404 and wonder whether they are being scammed.
+  if (String(inv.status || "").toUpperCase() === "VOID") return { ok: false, why: "void" };
   if ((inv.currency || PAYABLE_CURRENCY) !== PAYABLE_CURRENCY) {
     return { ok: false, why: `Online payment is available for ${PAYABLE_CURRENCY} invoices only.` };
   }
@@ -94,6 +98,7 @@ export async function sharePage(env, token) {
   const t = computeTotals(inv, items);
   const can = payability(env, inv, t.total);
   const isPaid = String(inv.status || "").toUpperCase() === "PAID";
+  const isVoid = String(inv.status || "").toUpperCase() === "VOID";
 
   // The invoice body is renderInvoiceEmail's fragment verbatim. One template
   // across email, PDF and this page means a change to the invoice layout cannot
@@ -105,9 +110,14 @@ export async function sharePage(env, token) {
     (inv.currency || PAYABLE_CURRENCY) === "₹" ? "en-IN" : "en-US",
     { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-  const banner = isPaid
-    ? `<div class="banner paid">Paid${inv.paid_at ? ` on ${new Date(inv.paid_at).toISOString().slice(0, 10)}` : ""} — thank you.</div>`
-    : "";
+  // A cancelled invoice keeps its link working and says so. The alternative —
+  // 404 — leaves a client who was sent this link unable to tell a withdrawn
+  // invoice from a phishing attempt.
+  const banner = isVoid
+    ? `<div class="banner void">This invoice has been cancelled. No payment is due.</div>`
+    : isPaid
+      ? `<div class="banner paid">Paid${inv.paid_at ? ` on ${fmtDate(inv.paid_at)}` : ""} — thank you.</div>`
+      : "";
 
   // Preview crawlers will not render a data: URI, and the logo is stored as one,
   // so it is served as bytes from /i/<token>/logo. Omitted entirely when there
@@ -136,7 +146,7 @@ export async function sharePage(env, token) {
     </div>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script>${payScript(token, bizName, inv)}</script>` :
-    (isPaid || !can.why || can.why === "paid" ? "" :
+    (isPaid || isVoid || !can.why || can.why === "paid" ? "" :
       `<div class="paywrap"><div class="msg">${esc(can.why)}</div></div>`);
 
   // Somewhere to check before paying. "Let me call them first" is what a careful
@@ -181,6 +191,7 @@ export async function sharePage(env, token) {
   .card { background:#fff; border-radius:14px; box-shadow:0 1px 3px rgba(0,0,0,.09); overflow:hidden; }
   .banner { padding:13px 16px; font-weight:700; font-size:14px; }
   .banner.paid { background:#dcfce7; color:#166534; }
+  .banner.void { background:#fee2e2; color:#991b1b; }
   .paywrap { margin-top:18px; text-align:center; }
   .pay { width:100%; max-width:420px; padding:15px 22px; font-size:16px; font-weight:700;
          color:#fff; background:#4f46e5; border:0; border-radius:11px; cursor:pointer; }

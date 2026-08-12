@@ -165,6 +165,9 @@ textarea{resize:vertical}
 .badge.UNPAID,.badge.DUE{background:#fbeed0;color:#7c5510}
 .badge.PAID{background:#d8efe1;color:#1c6b45}
 .badge.DRAFT{background:#e7e9e6;color:#4a5158}
+/* Cancelled, not deleted — struck through so it reads as withdrawn rather
+   than as another ordinary state. */
+.badge.VOID{background:#f0dcdc;color:#8a3535;text-decoration:line-through}
 
 .parties{display:flex;justify-content:space-between;margin:24px 0 6px;gap:22px}
 .parties .lbl{text-transform:uppercase;font-size:9.5px;letter-spacing:.12em;
@@ -281,6 +284,7 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
   font-weight:700;font-family:var(--font-mono);border:1px solid var(--line);color:var(--muted)}
 .inv-badge.PAID{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 45%,var(--line))}
 .inv-badge.UNPAID,.inv-badge.DUE{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 45%,var(--line))}
+.inv-badge.VOID{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,var(--line));text-decoration:line-through}
 @media(max-width:560px){
   .inv-row{grid-template-columns:1fr}
   .inv-right{justify-content:space-between}

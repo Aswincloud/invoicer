@@ -119,6 +119,10 @@
         <div id="solveMsg" class="col2 solve-msg" role="status" aria-live="polite"></div>
         <label>Status<select id="status">
           <option>UNPAID</option><option>PAID</option><option>DUE</option><option>DRAFT</option>
+          <!-- VOID cancels an invoice without deleting it: the number stays
+               spoken for in the record, and the partial unique index in
+               migration 0009 lets a replacement reuse it. -->
+          <option>VOID</option>
         </select></label>
         <label class="col2">Notes / terms<textarea id="notes" rows="2" placeholder="Net 14 days. Thank you for your business!"></textarea></label>
       </div>
