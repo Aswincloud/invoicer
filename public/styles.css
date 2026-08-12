@@ -196,8 +196,18 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
   text-transform:uppercase;letter-spacing:.08em}
 .totbox .grand td.r{font-size:19px;font-weight:600;color:var(--paper-green)}
 
+/* Amount in words — standard on an Indian invoice, and it fills the space the
+   right-floated totals leave empty. Capped at 62% so it never runs under them. */
+.pwords{margin-top:14px;max-width:62%;color:#4b5563}
+.pwords p{font-weight:500;color:var(--paper-ink)}
+/* Authorised signatory, bottom right. inline-block so the rule is only as wide
+   as the text it underlines. */
+.psign{margin-top:36px;text-align:right;font-size:10px;color:var(--paper-soft);
+  line-height:1.6}
+.psign .sigline{display:block;margin-left:auto;width:190px;
+  border-top:1px solid var(--paper-rule);margin-bottom:6px}
 .pfoot{margin-top:28px;color:#4b5563;white-space:pre-line}
-.pfoot .lbl{text-transform:uppercase;font-size:9.5px;letter-spacing:.12em;
+.pfoot .lbl,.pwords .lbl{text-transform:uppercase;font-size:9.5px;letter-spacing:.12em;
   color:var(--paper-soft);font-weight:700;margin-bottom:5px}
 .pnote{margin-top:26px;text-align:center;color:var(--paper-soft);
   font-size:10px;border-top:1px solid var(--paper-rule);padding-top:13px;
