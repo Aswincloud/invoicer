@@ -120,7 +120,7 @@ def fit_font(draw, text, max_w_px, ttf, start_mm, min_mm=1.1, step_mm=0.05):
     return font(ttf, min_mm), min_mm
 
 
-def label_38x25(url):
+def label_38x25(url, top_margin_mm=0.0):
     """Box sticker: QR left, brand and "SCAN TO VERIFY" right.
 
     No printed code. The QR carries the identity, and twelve characters of
@@ -133,7 +133,12 @@ def label_38x25(url):
     pad, gap = px(1.5), px(1.2)
     qr_mm = 21.0                      # as large as 25mm of height allows
     qr, module_mm = qr_image(url, qr_mm)      # already a whole number of dots
-    im.paste(qr, (pad, (H - qr.size[1]) // 2))
+    # Content is centred in what is left BELOW the top margin, not in the whole
+    # label: printing hard against a die-cut edge looks like a misfeed even when
+    # the alignment is right, and any drift eats into the design rather than
+    # into white space.
+    top = px(top_margin_mm)
+    im.paste(qr, (pad, top + (H - top - qr.size[1]) // 2))
 
     x = pad + qr.size[0] + gap
     col_w = W - x - pad
@@ -148,7 +153,7 @@ def label_38x25(url):
     lh_b = f_brand.size * 1.12
     lh_s = f_small.size * 1.18
     total = lh_b * len(brand_lines) + px(1.0) + lh_s * 2
-    y = (H - total) / 2
+    y = top + (H - top - total) / 2
 
     for line in brand_lines:
         d.text((x, y), line, font=f_brand, fill=0); y += lh_b
@@ -202,6 +207,9 @@ def main():
                     help="where the label starts across the 48mm head, mm")
     ap.add_argument("--head-offset", type=float, default=15.0,
                     help="print head to paper exit, mm (measured with run/ruler.py)")
+    ap.add_argument("--top-margin", type=float, default=2.5,
+                    help="blank mm inside the top of each label before the "
+                         "content starts (default 2.5)")
     ap.add_argument("--lead-in", type=float, default=None,
                     help="blank mm before the first label; default skips to the "
                          "next whole label. Pass 0 to continue an aligned roll.")
@@ -224,7 +232,7 @@ def main():
 
     labels, module_mm = [], None
     for c in codes:
-        im, module_mm = label_38x25(VERIFY_BASE + c)
+        im, module_mm = label_38x25(VERIFY_BASE + c, a.top_margin)
         labels.append(im)
 
     # The head sits `head_offset` mm BEHIND the slot you align against, so a
@@ -254,6 +262,7 @@ def main():
           f"{roll.size[0]/MM:.2f} x {roll.size[1]/MM:.2f} mm")
     print(f"  pitch              {pitch:.1f}mm  (25mm label + {a.gap:.1f}mm gap)")
     print(f"  x offset           {a.x_offset:.1f}mm across the 48mm head")
+    print(f"  top margin         {a.top_margin:.1f}mm inside each label")
     print(f"  lead-in            {lead:.1f}mm blank "
           f"(head sits {a.head_offset:.0f}mm behind the exit)")
     print(f"  QR module          {module_mm:.2f}mm "
