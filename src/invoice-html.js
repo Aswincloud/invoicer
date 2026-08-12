@@ -301,7 +301,7 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
     return `<tr>
       <td style="padding:11px 10px;border-bottom:1px solid ${RULE};font-weight:600">${esc(i.description)}</td>
       <td align="right" style="padding:11px 10px;border-bottom:1px solid ${RULE};font-family:${MONO};color:${SOFT}">${i.qty || ""}</td>
-      <td align="right" style="padding:11px 10px;border-bottom:1px solid ${RULE};font-family:${MONO};color:${SOFT}">${i.rate ? plain(cur, i.rate) : ""}</td>
+      <td align="right" style="padding:11px 10px;border-bottom:1px solid ${RULE};font-family:${MONO};color:${SOFT}">${plain(cur, i.rate)}</td>
       <td align="right" style="padding:11px 10px;border-bottom:1px solid ${RULE};font-family:${MONO}">${money(cur, amt)}</td></tr>`;
   }).join("");
 
