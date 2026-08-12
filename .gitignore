@@ -8,3 +8,4 @@ dist/
 # never commit secrets
 .env
 .env.*
+__pycache__/

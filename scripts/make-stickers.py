@@ -55,8 +55,13 @@ BRAND = "Aswin3DPrints"
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 CODE_LEN = 10                    # 32^10 ≈ 1.1e15
 
-DPI = 600                        # label printers are 203–600; 600 renders clean
-MM = DPI / 25.4                  # pixels per mm
+# The printer's OWN resolution, not a nicer round number. At 203.2dpi there are
+# exactly 8 dots per millimetre, so every dimension here lands on a whole dot and
+# nothing is resampled anywhere in the chain. Rendering at 600 and rasterising at
+# 203.2 put the strip at 385 dots against a 384-dot head — one dot over, and the
+# driver would have rescaled the QR to fit.
+DPI = 203.2
+MM = DPI / 25.4                  # exactly 8
 
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 
@@ -88,15 +93,15 @@ def qr_image(data, target_mm):
     """
     qr = segno.make(data, error="m")
     modules = qr.symbol_size(scale=1, border=4)[0]      # includes the quiet zone
-    scale = max(1, int(px(target_mm) / modules))
+    # A WHOLE number of dots per module, and no resize afterwards. A module
+    # spread over 4.3 dots gets rounded unevenly across the symbol, and a
+    # misshapen module is one a phone may fail to read.
+    scale = max(1, int(px(target_mm) // modules))
     buf = io.BytesIO()
     qr.save(buf, kind="png", scale=scale, border=4)
     buf.seek(0)
     img = Image.open(buf).convert("L")
-    # Measured against the size it is PLACED at, not the size it was rendered
-    # at — the caller resizes to target_mm, and reporting the pre-resize figure
-    # overstated it.
-    return img, target_mm / modules
+    return img, scale / MM
 
 
 def fit_font(draw, text, max_w_px, ttf, start_mm, min_mm=1.1, step_mm=0.05):
@@ -115,88 +120,65 @@ def fit_font(draw, text, max_w_px, ttf, start_mm, min_mm=1.1, step_mm=0.05):
     return font(ttf, min_mm), min_mm
 
 
-def label_38x25(code, url):
-    """Box sticker: QR left, brand and code stacked right."""
+def label_38x25(url):
+    """Box sticker: QR left, brand and "SCAN TO VERIFY" right.
+
+    No printed code. The QR carries the identity, and twelve characters of
+    serial took a third of a 38mm label to say something no customer types in.
+    """
     W, H = px(38), px(25)
     im = Image.new("L", (W, H), 255)
     d = ImageDraw.Draw(im)
 
-    pad, gap = px(1.2), px(1.0)
-    qr_mm = 19.0                      # 19 keeps modules at ~0.46mm — see main()
-    qr, module_mm = qr_image(url, qr_mm)
-    qr = qr.resize((px(qr_mm), px(qr_mm)), Image.NEAREST)
-    im.paste(qr, (pad, (H - px(qr_mm)) // 2))
+    pad, gap = px(1.5), px(1.2)
+    qr_mm = 21.0                      # as large as 25mm of height allows
+    qr, module_mm = qr_image(url, qr_mm)      # already a whole number of dots
+    im.paste(qr, (pad, (H - qr.size[1]) // 2))
 
-    x = pad + px(qr_mm) + gap
-    col_w = W - x - pad               # what is actually left for text
+    x = pad + qr.size[0] + gap
+    col_w = W - x - pad
 
-    f_brand, _ = fit_font(d, BRAND, col_w, "DejaVuSans-Bold.ttf", 2.2)
-    f_small, _ = fit_font(d, "SCAN TO VERIFY", col_w, "DejaVuSans.ttf", 1.5)
+    # The brand splits over two lines so it can be set larger than a single
+    # 13-character line would allow in the column that remains beside the QR.
+    one_line = font("DejaVuSans-Bold.ttf", 1.9)
+    brand_lines = [BRAND] if d.textlength(BRAND, font=one_line) <= col_w else ["Aswin", "3DPrints"]
+    f_brand, _ = fit_font(d, max(brand_lines, key=len), col_w, "DejaVuSans-Bold.ttf", 2.6)
+    f_small, _ = fit_font(d, "SCAN TO", col_w, "DejaVuSans.ttf", 1.7)
 
-    # One line if it fits at a readable size; otherwise split at a group
-    # boundary — never leaving a hyphen stranded at the start of a line.
-    p = pretty(code)
-    f_code, size = fit_font(d, p, col_w, "DejaVuSansMono-Bold.ttf", 2.3, min_mm=1.7)
-    code_lines = [p]
-    if d.textlength(p, font=f_code) > col_w:
-        code_lines = [code[:5], code[5:]]
-        f_code, size = fit_font(d, code_lines[0], col_w,
-                                "DejaVuSansMono-Bold.ttf", 2.6, min_mm=1.7)
-
-    # Stack the block and centre it vertically against the QR.
-    lh_brand = f_brand.size * 1.25
-    lh_small = f_small.size * 1.2
-    lh_code = f_code.size * 1.2
-    total = lh_brand + lh_small + px(0.8) + lh_code * len(code_lines)
+    lh_b = f_brand.size * 1.12
+    lh_s = f_small.size * 1.18
+    total = lh_b * len(brand_lines) + px(1.0) + lh_s * 2
     y = (H - total) / 2
 
-    d.text((x, y), BRAND, font=f_brand, fill=0); y += lh_brand
-    d.text((x, y), "SCAN TO VERIFY", font=f_small, fill=105); y += lh_small + px(0.8)
-    for line in code_lines:
-        d.text((x, y), line, font=f_code, fill=0); y += lh_code
-
-    d.rectangle([0, 0, W - 1, H - 1], outline=200, width=1)   # cut guide
+    for line in brand_lines:
+        d.text((x, y), line, font=f_brand, fill=0); y += lh_b
+    y += px(1.0)
+    d.text((x, y), "SCAN TO", font=f_small, fill=95); y += lh_s
+    d.text((x, y), "VERIFY", font=f_small, fill=95)
     return im, module_mm
 
 
-def label_50x15(code, url):
-    """Receipt strip: the code, large. No QR — see the note in main()."""
-    W, H = px(50), px(15)
-    im = Image.new("L", (W, H), 255)
-    d = ImageDraw.Draw(im)
+def strip(labels, label_mm, gap_mm, x_offset_mm, head_mm=48.0):
+    """The labels laid out down a continuous roll, at the roll's own pitch.
 
-    f_brand = font("DejaVuSans-Bold.ttf", 2.4)
-    f_small = font("DejaVuSans.ttf", 1.7)
-    f_code = font("DejaVuSansMono-Bold.ttf", 3.6)
+    Full head width (48mm = 384 dots at 203.2dpi) so nothing is scaled at print
+    time, and each label occupies exactly one PITCH: its own height plus the
+    die-cut gap. The gap is printed as blank rows rather than fed by a command,
+    for the same reason the receipt pads with rows — a feed command is optional
+    in ESC/POS and this printer ignores at least one of them, whereas a blank
+    row advances the paper by exactly 0.125mm.
 
-    d.text((px(2.5), px(2.0)), BRAND, font=f_brand, fill=0)
-    d.text((px(2.5), px(5.2)), "PRODUCT CODE", font=f_small, fill=110)
-    d.text((px(2.5), px(8.0)), pretty(code), font=f_code, fill=0)
-
-    d.rectangle([0, 0, W - 1, H - 1], outline=200, width=1)
-    return im
-
-
-def a4_sheet(labels, label_mm, cols_gap_mm=2.0):
-    """Grid of 38x25 labels on A4, for cutting by hand."""
-    W, H = px(210), px(297)
+    This printer has no gap sensor: it cannot find the labels, so the geometry
+    has to be exact and the first label is aligned by hand.
+    """
+    lw, lh = label_mm
+    pitch = lh + gap_mm
+    W = px(head_mm)
+    H = px(pitch) * len(labels)
     sheet = Image.new("L", (W, H), 255)
-    lw, lh = px(label_mm[0]), px(label_mm[1])
-    gap = px(cols_gap_mm)
-    margin = px(6)
-
-    cols = (W - 2 * margin + gap) // (lw + gap)
-    rows = (H - 2 * margin + gap) // (lh + gap)
-    placed = 0
-    for r in range(rows):
-        for c in range(cols):
-            if placed >= len(labels):
-                break
-            x = margin + c * (lw + gap)
-            y = margin + r * (lh + gap)
-            sheet.paste(labels[placed], (x, y))
-            placed += 1
-    return sheet, placed, cols, rows
+    for i, im in enumerate(labels):
+        sheet.paste(im, (px(x_offset_mm), px(pitch) * i))
+    return sheet, pitch
 
 
 def inside_git_repo(path):
@@ -213,8 +195,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("count", type=int, nargs="?", default=20)
     ap.add_argument("--out", default=os.path.expanduser("~/stickers"))
+    ap.add_argument("--gap", type=float, default=2.0,
+                    help="die-cut gap between labels, mm (default 2)")
+    ap.add_argument("--x-offset", type=float, default=0.0,
+                    help="where the label starts across the 48mm head, mm")
     ap.add_argument("--dry-run", action="store_true",
-                    help="render the PDFs but do not record the codes")
+                    help="render but do not record the codes")
     a = ap.parse_args()
 
     ledger = os.path.join(a.out, "codes.jsonl")
@@ -228,37 +214,36 @@ def main():
     os.makedirs(outdir, exist_ok=True)
 
     codes = [make_code() for _ in range(a.count)]
-    # Astronomically unlikely at these sizes, but a duplicate code is exactly the
-    # failure this whole thing exists to prevent, so it is checked rather than
-    # assumed.
     assert len(set(codes)) == len(codes), "duplicate code generated"
 
-    big, small, module_mm = [], [], None
+    labels, module_mm = [], None
     for c in codes:
-        url = VERIFY_BASE + c
-        im, module_mm = label_38x25(c, url)
-        big.append(im)
-        small.append(label_50x15(c, url))
+        im, module_mm = label_38x25(VERIFY_BASE + c)
+        labels.append(im)
 
-    big[0].save(os.path.join(outdir, "labels-38x25.pdf"), save_all=True,
-                append_images=big[1:], resolution=DPI)
-    small[0].save(os.path.join(outdir, "labels-50x15.pdf"), save_all=True,
-                  append_images=small[1:], resolution=DPI)
-    sheet, placed, cols, rows = a4_sheet(big, (38, 25))
-    sheet.save(os.path.join(outdir, "sheet-a4-38x25.pdf"), resolution=DPI)
-    big[0].save(os.path.join(outdir, "preview-38x25.png"), dpi=(DPI, DPI))
-    small[0].save(os.path.join(outdir, "preview-50x15.png"), dpi=(DPI, DPI))
+    roll, pitch = strip(labels, (38, 25), a.gap, a.x_offset)
+    # PNG is the printable artifact, not PDF. Going through a PDF means
+    # pdftoppm re-rasterises it, and its rounding turned an exact 864-row strip
+    # into 865 — a 0.116% stretch that walked the fourth label 0.1mm down the
+    # roll. Cumulative drift is the one error a gap-sensorless label print
+    # cannot absorb. This bitmap is already at the head's resolution, so it is
+    # sent exactly as built.
+    roll_path = os.path.join(outdir, "labels-strip.png")
+    roll.save(roll_path, dpi=(DPI, DPI))
+    roll.save(os.path.join(outdir, "labels-strip.pdf"), resolution=DPI)  # to look at
+    labels[0].save(os.path.join(outdir, "preview-label.png"), dpi=(DPI, DPI))
 
-    print(f"{a.count} codes -> {outdir}")
-    print(f"  labels-38x25.pdf     one per page, {38}x{25}mm")
-    print(f"  labels-50x15.pdf     one per page, {50}x{15}mm")
-    print(f"  sheet-a4-38x25.pdf   {cols}x{rows} grid, {placed} of {a.count} placed")
-    print(f"  QR module size       {module_mm:.2f}mm "
-          f"({'OK' if module_mm >= 0.4 else 'TOO SMALL — phones will struggle'})")
-    print(f"  URL                  {VERIFY_BASE}<code>  ({len(VERIFY_BASE)+CODE_LEN} chars)")
+    print(f"{a.count} labels -> {outdir}")
+    print(f"  labels-strip.png   {roll.size[0]} x {roll.size[1]} dots = "
+          f"{roll.size[0]/MM:.2f} x {roll.size[1]/MM:.2f} mm")
+    print(f"  pitch              {pitch:.1f}mm  (25mm label + {a.gap:.1f}mm gap)")
+    print(f"  x offset           {a.x_offset:.1f}mm across the 48mm head")
+    print(f"  QR module          {module_mm:.2f}mm "
+          f"({'OK' if module_mm >= 0.4 else 'TOO SMALL'})")
+    print(f"\n  print with:  ~/tejprint/print-labels.sh {roll_path}")
 
     if a.dry_run:
-        print("\nDry run — nothing recorded. The codes above exist only in these PDFs.")
+        print("\nDry run — nothing recorded.")
         return 0
 
     os.makedirs(a.out, exist_ok=True)
@@ -269,8 +254,7 @@ def main():
                                 "created_at": datetime.now(timezone.utc).isoformat()}) + "\n")
     total = sum(1 for _ in open(ledger, encoding="utf-8"))
     print(f"\nRecorded {a.count} codes in {ledger} ({total} total).")
-    print("Back this file up. It is the only record of which codes are genuine,")
-    print("and a verify page built later will import it.")
+    print("Back this file up — it is the only record of which codes are genuine.")
     return 0
 
 
