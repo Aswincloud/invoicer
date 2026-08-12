@@ -265,7 +265,10 @@ export function renderInvoicePdf(inv, items, totals) {
     // PDF read as a different document from the one the invoice is designed as.
     p.text(COL_DESC, y, fit(it.description, COL_QTY - COL_DESC - 24, 9), { size: 9 });
     p.text(COL_QTY, y, it.qty ? String(it.qty) : "", { size: 9, color: "0.36 0.39 0.45", align: "right" });
-    p.text(COL_RATE, y, it.rate ? plain(inv.currency, it.rate) : "", { size: 9, color: "0.36 0.39 0.45", align: "right" });
+    // A zero rate prints "0.00", not blank: the Amount column beside it already
+    // printed 0.00, so a blank here made one row contradict itself, and blank
+    // reads as missing data rather than as free.
+    p.text(COL_RATE, y, plain(inv.currency, it.rate), { size: 9, color: "0.36 0.39 0.45", align: "right" });
     p.text(COL_AMT, y, money(amt), { size: 9, align: "right" });
     y -= 8;
     p.line(MARGIN, y, PAGE_W - MARGIN, y);

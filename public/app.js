@@ -243,12 +243,16 @@ function readItems(){
   return [...document.querySelectorAll("#items .item")].map(row => {
     const d = row.querySelector(".d").value;
     const rawQ = row.querySelector(".q").value.trim();
-    const r = num(row.querySelector(".r").value);
+    const rawR = row.querySelector(".r").value.trim();
+    const r = num(rawR);
     // Blank Qty means 1 — the placeholder says "1", and charging a rate × 0
     // silently zeroed the line, which is never what someone meant to invoice.
     const q = rawQ === "" ? 1 : num(rawQ);
     const amt = q*r;
-    row.querySelector(".a").value = amt ? amt.toFixed(2) : "";
+    // Blank only while nothing has been entered. Once a rate is typed — even
+    // "0" — the amount shows, so a free line reads as 0.00 instead of looking
+    // like a row somebody forgot to fill in.
+    row.querySelector(".a").value = (amt || rawR !== "") ? amt.toFixed(2) : "";
     return {desc:d, qty:q, rate:r, amt};
   });
 }
@@ -486,8 +490,11 @@ function render(){
 
   const rowsHtml = items.filter(i=>i.desc||i.amt).map(i =>
     `<tr><td>${esc(i.desc)}</td><td class="r">${i.qty||""}</td>`+
-    `<td class="r">${i.rate?plainNum(i.rate):""}</td>`+
-    `<td class="r">${i.amt?fmt(i.amt):""}</td></tr>`).join("")
+    // Zeros print as 0.00 rather than blank. A line that reached the invoice is
+    // a real line, and a blank price reads as missing data when what it means
+    // is free.
+    `<td class="r">${plainNum(i.rate)}</td>`+
+    `<td class="r">${fmt(i.amt)}</td></tr>`).join("")
     || `<tr><td colspan="4" style="color:#9ca3af;text-align:center;padding:20px">Add line items to see them here…</td></tr>`;
 
   const taxHtml = t.taxRows.map(([l,val]) =>
