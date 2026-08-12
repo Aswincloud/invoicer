@@ -30,7 +30,8 @@
 // The one import: deciding what sits where "PAY TO" goes is a rule about the
 // document, not about PDF drawing, and a second copy of it here is how the PDF
 // and the email would end up disagreeing on a paid invoice.
-import { paymentBlock, fmtDate, amountInWords, placeOfSupply, plain } from "./invoice-html.js";
+import { paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
+         itemUnits, fmtUnits } from "./invoice-html.js";
 
 const PT = 1;                     // PDF unit is the point
 const PAGE_W = 595.28;            // A4
@@ -280,6 +281,14 @@ export function renderInvoicePdf(inv, items, totals) {
     y -= 14;
   };
 
+  // Units in the box, above the money. Counts quantities rather than lines —
+  // see itemUnits().
+  const units = itemUnits(items);
+  if (units) {
+    p.text(labelX, y, "Items", { size: 9, color: "0.36 0.39 0.45" });
+    p.text(COL_AMT, y, fmtUnits(units), { size: 9, color: "0.36 0.39 0.45", align: "right" });
+    y -= 14;
+  }
   totRow("Subtotal", totals.subtotal);
   if (totals.disc) totRow(`Discount (${inv.discount_pct || 0}%)`, totals.disc, { neg: true });
   if (totals.shipping) {
