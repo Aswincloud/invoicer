@@ -49,6 +49,30 @@ export function computeTotals(inv, items) {
 // would print as "0.00" and read as a bug.
 export const showRoundOff = (t) => Math.abs(t.round) >= 0.005;
 
+/* How many things are in the box.
+
+   UNITS, not lines — the sum of the quantities, which is what a till receipt
+   means by "items" and what a customer can count against what they were handed.
+   Eight lines and twenty-one units are both true of the same invoice, and only
+   one of them can be checked without reading.
+
+   Negative-amount lines are excluded: ingest.js models a promo discount as a
+   line item with qty 1 and a negative rate, so counting it as goods would
+   overstate every discounted order by one.
+
+   Mirrored by itemUnits() in public/app.js for the preview and the receipt. */
+export function itemUnits(items) {
+  return (items || []).reduce((n, i) => {
+    const qty = Number(i.qty) || 0;
+    return qty * (Number(i.rate) || 0) < 0 ? n : n + qty;
+  }, 0);
+}
+
+// Whole numbers print bare; a fractional quantity (billed hours, metres of
+// filament) keeps its decimals rather than being rounded into a lie.
+export const fmtUnits = (n) =>
+  Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2)));
+
 /* What belongs where "PAY TO" sits.
 
    A settled invoice must not carry payment instructions. Handing someone a
@@ -289,6 +313,7 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
   const pay = paymentBlock(inv);
   const pos = placeOfSupply(inv);
   const words = amountInWords(t.total, cur);
+  const units = itemUnits(items);
 
   // Only on an unpaid invoice: a Pay button on a settled one invites a second
   // payment. A bulletproof <a>, not a <button> — mail clients do not run scripts.
@@ -335,6 +360,8 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
    ${rows}
   </table>
   <table align="right" cellpadding="0" cellspacing="0" style="margin-top:16px;font-size:12px;width:56%">
+   ${units ? `<tr><td style="padding:6px 10px;color:${SOFT}">Items</td>
+      <td align="right" style="padding:6px 10px;font-family:${MONO};color:${SOFT}">${esc(fmtUnits(units))}</td></tr>` : ""}
    ${totRow("Subtotal", t.subtotal)}
    ${t.disc ? totRow(`Discount (${discPct}%)`, t.disc, { neg: true }) : ""}
    ${t.shipping ? totRow(inv.shipping_mode ? `Shipping (${inv.shipping_mode})` : "Shipping", t.shipping) : ""}

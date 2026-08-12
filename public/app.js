@@ -145,6 +145,24 @@ function docTitle(){
   return $("taxMode").value === "none" ? "BILL OF SUPPLY" : "TAX INVOICE";
 }
 
+/* Units in the box — the sum of the quantities, not the number of lines.
+
+   That is what a till receipt means by "items": eight lines and twenty-one
+   units are both true of one invoice, and only the second can be checked
+   against what the customer is holding.
+
+   Negative-amount lines are skipped, because a promo discount is modelled as a
+   line item with qty 1 and a negative rate (see ingest.js) and is not goods.
+
+   Mirrors itemUnits() in src/invoice-html.js. */
+function itemUnits(items){
+  return (items||[]).reduce((n,i)=>{
+    const qty = Number(i.qty)||0;
+    return qty * (Number(i.rate)||0) < 0 ? n : n + qty;
+  }, 0);
+}
+const fmtUnits = (n) => Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2)));
+
 // Required on a GST invoice; the first two digits of the client's GSTIN are the
 // state code. Empty when there is no GSTIN — an invented place of supply would
 // be worse than none.
@@ -436,6 +454,7 @@ function render(){
   const status = v("status") || "UNPAID";
   const payNow = payBlock();
   const words = amountInWords(t.total, cur);
+  const units = itemUnits(items);
   const pos = placeOfSupplyFromGst(v("clGst"));
   const initial = (v("bizName")||"I").trim().charAt(0).toUpperCase();
 
@@ -491,6 +510,7 @@ function render(){
 </table>
 
 <div class="totbox"><table>
+  ${units?`<tr><td>Items</td><td class="r">${esc(fmtUnits(units))}</td></tr>`:""}
   <tr><td>Subtotal</td><td class="r">${fmt(t.subtotal)}</td></tr>
   ${t.disc?`<tr><td>Discount (${num($("discount").value)}%)</td><td class="r">– ${fmt(t.disc)}</td></tr>`:""}
   ${t.shipping?`<tr><td>Shipping${shipMode()?` (${esc(shipMode())})`:""}</td><td class="r">${fmt(t.shipping)}</td></tr>`:""}
@@ -906,6 +926,12 @@ function posOps(){
   // fit:true throughout — a wrapped money label reads as two rows and breaks
   // the column ("Shipping (Hand" / "delivery)"). Shrinking the row a quarter
   // point keeps one label against one figure, which is what a receipt needs.
+  // Directly under the items it counts, above the money.
+  const units = itemUnits(items);
+  if(units){
+    ops.push({t:"kv", k:"Items", val:fmtUnits(units), size:PS.totals, fit:true});
+    ops.push({t:"gap", h:1});
+  }
   ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:PS.totals, fit:true});
   if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:PS.totals, fit:true});
   if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:PS.totals, fit:true});
