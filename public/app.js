@@ -130,6 +130,21 @@ const GST_STATES={ "01":"Jammu & Kashmir","02":"Himachal Pradesh","03":"Punjab",
   "34":"Puducherry","35":"Andaman & Nicobar Islands","36":"Telangana",
   "37":"Andhra Pradesh","38":"Ladakh","97":"Other Territory" };
 
+/* What the document is actually called.
+
+   "TAX INVOICE" was hardcoded on the receipt, and it is not a decoration: under
+   GST it is the document a REGISTERED supplier issues when charging tax. A
+   supply without tax is a Bill of Supply, and a business with no GSTIN issues
+   neither — it issues an invoice.
+
+   Derived rather than pinned to a setting, so it cannot go stale: with no GSTIN
+   this reads "INVOICE" today, and starts telling the truth on its own if a
+   GSTIN is ever filled in. */
+function docTitle(){
+  if(!fld("bizGst")) return "INVOICE";
+  return $("taxMode").value === "none" ? "BILL OF SUPPLY" : "TAX INVOICE";
+}
+
 // Required on a GST invoice; the first two digits of the client's GSTIN are the
 // state code. Empty when there is no GSTIN — an invented place of supply would
 // be worse than none.
@@ -479,7 +494,7 @@ function render(){
   <tr><td>Subtotal</td><td class="r">${fmt(t.subtotal)}</td></tr>
   ${t.disc?`<tr><td>Discount (${num($("discount").value)}%)</td><td class="r">– ${fmt(t.disc)}</td></tr>`:""}
   ${t.shipping?`<tr><td>Shipping${shipMode()?` (${esc(shipMode())})`:""}</td><td class="r">${fmt(t.shipping)}</td></tr>`:""}
-  ${(t.disc||t.shipping)?`<tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
+  ${(t.disc||t.shipping)&&t.taxRows.length?`<tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
   ${taxHtml}
   ${showRound(t)?`<tr><td>Round off</td><td class="r">${t.round<0?"– ":"+ "}${fmt(Math.abs(t.round))}</td></tr>`:""}
   <tr class="grand"><td>Total ${cur?`(${cur})`:""}</td><td class="r">${fmt(t.total)}</td></tr>
@@ -857,12 +872,12 @@ function posOps(){
   if(v("bizGst")) ops.push({t:"center", s:"GSTIN: "+v("bizGst"), size:PS.bizMeta});
 
   ops.push({t:"rule"});
-  ops.push({t:"center", s:"TAX INVOICE", bold:true, size:PS.docType, track:true});
+  ops.push({t:"center", s:docTitle(), bold:true, size:PS.docType, track:true});
   ops.push({t:"rule"});
 
   if(v("invNo"))     ops.push({t:"kv", k:"No.",    val:v("invNo")});
-  if(v("issueDate")) ops.push({t:"kv", k:"Date",   val:v("issueDate")});
-  if(v("dueDate"))   ops.push({t:"kv", k:"Due",    val:v("dueDate")});
+  if(v("issueDate")) ops.push({t:"kv", k:"Date",   val:fmtDate(v("issueDate"))});
+  if(v("dueDate"))   ops.push({t:"kv", k:"Due",    val:fmtDate(v("dueDate"))});
   ops.push({t:"kv", k:"Status", val:v("status") || "UNPAID"});
 
   if(v("clName") || v("clAddr") || v("clGst")){
@@ -894,7 +909,11 @@ function posOps(){
   ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:PS.totals, fit:true});
   if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:PS.totals, fit:true});
   if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:PS.totals, fit:true});
-  if(t.disc || t.shipping) ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:PS.totals, fit:true});
+  // Only when a tax actually follows it: "Taxable" names the base a tax was
+  // computed on, so on a no-tax invoice it is a number with no meaning. The
+  // email and the PDF already had this condition; the receipt did not.
+  if((t.disc || t.shipping) && t.taxRows.length)
+    ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:PS.totals, fit:true});
   t.taxRows.forEach(([l,val]) => ops.push({t:"kv", k:l, val:money(val), size:PS.totals, fit:true}));
   if(showRound(t))
     ops.push({t:"kv", k:"Round off", val:(t.round<0?"-":"+")+money(Math.abs(t.round)), size:PS.totals, fit:true});
@@ -908,6 +927,15 @@ function posOps(){
   ops.push({t:"left",   s:"TOTAL"+(cur?` (${posCur(cur)})`:""), size:PS.grandLabel, bold:true});
   ops.push({t:"right",  s:money(t.total), size:PS.grand, bold:true, fit:true});
   ops.push({t:"rule", heavy:true});
+
+  // The figure written out, as the A4 carries it. It is the check against a
+  // total being altered after the fact, and ~4mm of paper is a fair price for
+  // the one line on a receipt that cannot be quietly changed.
+  const words = amountInWords(t.total, cur);
+  if(words){
+    ops.push({t:"wrap", s:words, size:PS.prose});
+    ops.push({t:"gap", h:1});
+  }
 
   // One op per typed line, so a line break survives onto the paper. These used
   // to be joined with " · " and " ", which turned a deliberately formatted
