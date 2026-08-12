@@ -50,6 +50,10 @@ Local secrets go in `.dev.vars` (git-ignored) — see **Configuration** below.
 - **Business logo** — upload once, downscaled to a data-URL, shown atop the
   invoice (preview + PDF).
 - **My Invoices** dashboard — save, reopen to edit, re-download, email, delete.
+- **Editing edits.** Reopening an invoice and saving updates it rather than
+  creating another; a **paid** invoice is locked, and invoice numbers are unique
+  per account. Cancel one with the **VOID** status — the record and its number
+  survive, and a replacement may reuse the number.
 - **Email invoice to client** server-side via Resend.
 - **Shareable pay link** — one URL the client opens to review the invoice and
   pay it with Razorpay; the invoice marks itself **PAID** when the money lands.
@@ -57,6 +61,7 @@ Local secrets go in `.dev.vars` (git-ignored) — see **Configuration** below.
 ## Architecture
 
 ```
+scripts/           one-off maintenance (dedupe-invoices.mjs)
 src/               Cloudflare Worker
   index.js         router: static assets via ASSETS binding + /api/* backend
   lib.js           JSON/cookie/HMAC helpers, Resend email

@@ -1,0 +1,27 @@
+-- One live invoice per number, per user.
+--
+-- Until PUT /api/invoices/:id existed, Save and Email both CREATED an invoice
+-- every time they were pressed, so editing and re-sending produced copies. That
+-- left 25 invoices under 14 numbers, including five copies of one and three
+-- copies of another all marked PAID at three different amounts.
+--
+-- A second, unrelated cause: invoice numbers are PREFIX-YEAR-<4 random digits>,
+-- which is 9000 slots. Two entirely different invoices collided on
+-- INV-AC-2026-2257. Blind picking gives a 43% chance of a collision within 100
+-- invoices, so the application now asks for an unused number — and this index is
+-- what makes it impossible rather than merely unlikely.
+--
+-- PARTIAL, excluding VOID, for two reasons:
+--   * a cancelled invoice keeps its number so the record of it survives, and
+--     several voided copies of one number must therefore stay legal;
+--   * issuing a replacement under the same number after voiding is normal
+--     practice, and a total index would forbid it.
+--
+-- Scoped to (user_id, number): two businesses using this app may legitimately
+-- both issue an "INV-2026-1001".
+--
+-- APPLYING THIS BEFORE scripts/dedupe-invoices.mjs HAS RUN WILL FAIL, because
+-- the duplicate rows above still exist. That is deliberate — a failed migration
+-- is a better outcome than an index quietly not created.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_user_number
+  ON invoices(user_id, number) WHERE status <> 'VOID';

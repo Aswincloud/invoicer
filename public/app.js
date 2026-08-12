@@ -26,6 +26,32 @@ let BIZ_LOGO = "";
    somebody else's payment reference. */
 let PAY_REF = null;                       // { number, id, at } | null
 
+/* The invoice currently open in the editor, or null for a new one.
+
+   Without this, Save and Email had no way to say "the one I opened" — both
+   POSTed, so every press CREATED an invoice. That is how production ended up
+   with 25 invoices under 14 numbers, including three copies of one marked PAID
+   at three different amounts.
+
+   Adopted after a successful create too, so the second press of Save updates
+   the invoice the first press made. */
+let CURRENT_ID = null;
+
+/* Ask the server for an invoice number it is not already using.
+
+   The number stays PREFIX-YEAR-<4 random digits> — sequential numbering would
+   tell a customer how many invoices have been issued — but 4 digits is 9000
+   slots, and picking blind collided two unrelated invoices in production
+   already. Falls back to a local guess if the call fails: an unchecked number
+   is better than a blank field, and the unique index catches it on save. */
+async function freshInvoiceNumber(){
+  try {
+    const r = await api("/invoices/next-number");
+    if(r && r.number) return r.number;
+  } catch(_){ /* offline or signed out — fall through */ }
+  return "INV-" + new Date().getFullYear() + "-" + String(Math.floor(Math.random()*9000)+1000);
+}
+
 // Mirrors paymentBlock() in src/invoice-html.js — same rule, applied to the form
 // rather than to a database row. A settled invoice shows how it was paid, never
 // how to pay it.
@@ -648,8 +674,8 @@ function init(){
   if(!$("issueDate").value) $("issueDate").value = todayISO(0);
   // Due date is optional — left blank by default. A user's Settings "due in
   // days" default (applyDefaults) will fill it if they've set one.
-  if(!$("invNo").value)     $("invNo").value = "INV-" + new Date().getFullYear() + "-" +
-      String(Math.floor(Math.random()*9000)+1000);
+  if(!$("invNo").value)
+    freshInvoiceNumber().then(nu => { if(!CURRENT_ID) { $("invNo").value = nu; render(); } });
 
   // One empty row to type into. Qty defaults to 1 (the common case); the
   // description and rate are left blank rather than seeded with a sample —
@@ -697,8 +723,9 @@ function init(){
     applyInference();
     $("status").value = "UNPAID";
     PAY_REF = null;              // a blank invoice carries no payment reference
+    CURRENT_ID = null;           // ...and is not an edit of anything
     $("items").innerHTML=""; addItem();
-    $("invNo").value = "INV-"+new Date().getFullYear()+"-"+String(Math.floor(Math.random()*9000)+1000);
+    freshInvoiceNumber().then(nu => { $("invNo").value = nu; render(); });
     $("issueDate").value=todayISO(0); $("dueDate").value="";  // due date optional
     render();
   };
@@ -1231,19 +1258,42 @@ function wireBackend(){
     catch(e){ msg.className="msg err"; msg.textContent="Could not send: "+e.message; }
   };
 
+  /* Save the invoice, updating the one that is open rather than making another.
+
+     Both this and Email used to POST unconditionally, so every press created a
+     row. Now: PUT when we know which invoice we are editing, POST when it is
+     genuinely new — and adopt the new id, so pressing Save twice updates once
+     instead of producing twins.
+
+     (Business profile / defaults are owned by the Settings modal; do NOT PUT
+     /profile here — collect() has no biz fields and would blank them out.) */
+  async function persistInvoice(){
+    const body = JSON.stringify(collect());
+    if(CURRENT_ID){
+      const r = await api("/invoices/"+CURRENT_ID, {method:"PUT", body});
+      return { id: CURRENT_ID, total: r.total };
+    }
+    const r = await api("/invoices", {method:"POST", body});
+    CURRENT_ID = r.id;
+    return r;
+  }
+
   $("btnSave").onclick = async () => {
-    // Save = create the invoice only. (Business profile / defaults are owned by
-    // the Settings modal; do NOT PUT /profile here — collect() has no biz fields
-    // and would blank them out.)
-    try{ const r=await api("/invoices",{method:"POST",body:JSON.stringify(collect())});
-      alert("Saved ✓  (total "+$("currency").value+" "+r.total+")"); }
-    catch(e){ alert("Save failed: "+e.message); }
+    try{
+      const r = await persistInvoice();
+      alert("Saved ✓  (total "+$("currency").value+" "+r.total+")");
+      render();   // a PUT can change nothing visible, but the status may have
+    }catch(e){
+      // The server refuses a paid invoice with a 409 and an explanation; show
+      // that rather than burying it in "Save failed".
+      alert("Save failed: "+e.message);
+    }
   };
   $("btnEmail").onclick = async () => {
     const to = prompt("Send invoice to (client email):", $("clEmail").value||"");
     if(!to) return;
     try{
-      const s=await api("/invoices",{method:"POST",body:JSON.stringify(collect())});
+      const s = await persistInvoice();
       const pdfBase64 = await tryRenderPdf();   // attach PDF if it renders
       await api("/invoices/"+s.id+"/email",{method:"POST",body:JSON.stringify({to, pdfBase64})});
       alert("Invoice emailed to "+to+" ✓"+(pdfBase64?" (PDF attached)":""));
@@ -1278,10 +1328,10 @@ function applyDefaults(d){
   if(d.dueDays!=="" && d.dueDays!=null){
     const n=parseInt(d.dueDays,10); if(Number.isFinite(n)) $("dueDate").value = todayISO(n);
   }
-  if(d.prefix){
-    // rewrite the auto invoice number with the user's prefix
-    $("invNo").value = d.prefix + "-" + new Date().getFullYear() + "-" +
-      String(Math.floor(Math.random()*9000)+1000);
+  if(d.prefix && !CURRENT_ID){
+    // Rewrite the auto number to carry the user's prefix — but never while an
+    // existing invoice is open: renumbering a saved document loses it.
+    freshInvoiceNumber().then(nu => { if(!CURRENT_ID) { $("invNo").value = nu; render(); } });
   }
   render();
 }
@@ -1434,6 +1484,7 @@ async function openInvoiceInEditor(id){
     // preview and the thermal receipt can print it. Keyed to this invoice's
     // number so it cannot leak onto a different invoice (Save always inserts a
     // new row rather than updating this one).
+    CURRENT_ID = inv.id || id;   // subsequent saves update this row
     PAY_REF = inv.rzp_payment_id || inv.paid_at
       ? { number: (inv.number || "").trim(), id: inv.rzp_payment_id || "", at: inv.paid_at || 0 }
       : null;

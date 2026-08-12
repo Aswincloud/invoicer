@@ -116,9 +116,14 @@ async function api(request, env, url, ctx) {
   if (p === "/api/invoices" && m === "POST") return createInvoice(env, user, body);
   if (p === "/api/print"    && m === "POST") return printReceipt(env, user, body);
 
+  // Above the /:id route below, or "next-number" is parsed as an invoice id.
+  if (p === "/api/invoices/next-number" && m === "GET")
+    return nextInvoiceNumber(env, user, url);
+
   let match;
   if ((match = p.match(/^\/api\/invoices\/([^/]+)$/))) {
     if (m === "GET")    return getInvoice(env, user, match[1]);
+    if (m === "PUT")    return updateInvoice(env, user, match[1], body);
     if (m === "DELETE") return deleteInvoice(env, user, match[1]);
   }
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/email$/)) && m === "POST")
@@ -242,22 +247,67 @@ async function listInvoices(env, user) {
   return json({ invoices: results || [] });
 }
 
-async function createInvoice(env, user, b) {
-  const id = uid(); const t = now();
-  const items = Array.isArray(b.items) ? b.items : [];
-  const inv = {
+/* The editable half of an invoice, read off a request body.
+
+   Shared by create and update so the two cannot drift on what a field is called
+   or how it is clamped. Everything NOT in here — share_token, the rzp_* columns,
+   paid_at, source, source_ref, created_at — is owned by the server and survives
+   an edit untouched. */
+function invoiceFields(b) {
+  return {
     number: b.number || "", issue_date: b.issueDate || "", due_date: b.dueDate || "",
     currency: b.currency || "₹", tax_mode: b.taxMode || "gst",
     tax_rate: +b.taxRate || 0, discount_pct: +b.discount || 0,
     shipping: +b.shipping || 0, shipping_mode: (b.shippingMode || "").slice(0, 60),
     // Stored as 0/1 so SQLite keeps it an INTEGER, and snapshot per invoice: the
-    // total column below is computed with it, so a later toggle must not change
-    // what an already-sent invoice re-renders as.
+    // total column is computed with it, so a later toggle must not change what
+    // an already-sent invoice re-renders as.
     round_off: b.roundOff ? 1 : 0,
     status: b.status || "UNPAID", notes: b.notes || "",
     client_name: b.clName || "", client_email: b.clEmail || "",
     client_addr: b.clAddr || "", client_gst: b.clGst || "",
   };
+}
+
+// Line items are replaced wholesale rather than diffed: they have no stable
+// identity in the form (a row is a position, not a thing), so "which row is
+// this?" has no answer to diff against.
+async function writeLineItems(env, invoiceId, items) {
+  await env.DB.prepare("DELETE FROM line_items WHERE invoice_id=?").bind(invoiceId).run();
+  const stmt = env.DB.prepare(
+    "INSERT INTO line_items (id,invoice_id,pos,description,qty,rate) VALUES (?,?,?,?,?,?)"
+  );
+  const batch = items.map((it, i) =>
+    stmt.bind(uid(), invoiceId, i, it.description || it.desc || "", +it.qty || 0, +it.rate || 0));
+  if (batch.length) await env.DB.batch(batch);
+}
+
+/* Is this number already spoken for by another of this user's invoices?
+
+   The number field is typed by a human, so a clash is refused rather than
+   silently rewritten — quietly renumbering someone's invoice is how you end up
+   with a document whose number nobody can find again.
+
+   VOID rows are ignored, matching the partial unique index in migration 0009:
+   a cancelled invoice keeps its number for the record, and reusing that number
+   for its replacement is normal practice. */
+async function numberTaken(env, user, number, exceptId = null) {
+  if (!number) return false;
+  const row = await env.DB.prepare(
+    `SELECT id FROM invoices
+      WHERE user_id=? AND number=? AND status <> 'VOID' AND id <> ?`
+  ).bind(user.id, number, exceptId || "").first();
+  return Boolean(row);
+}
+
+async function createInvoice(env, user, b) {
+  const id = uid(); const t = now();
+  const items = Array.isArray(b.items) ? b.items : [];
+  const inv = invoiceFields(b);
+
+  if (await numberTaken(env, user, inv.number))
+    return bad(`Invoice number ${inv.number} is already in use.`, 409);
+
   const { total } = computeTotals(inv, items);
 
   await env.DB.prepare(
@@ -269,15 +319,96 @@ async function createInvoice(env, user, b) {
          inv.status, inv.notes,
          inv.client_name, inv.client_email, inv.client_addr, inv.client_gst, total, t, t).run();
 
-  // line items
-  const stmt = env.DB.prepare(
-    "INSERT INTO line_items (id,invoice_id,pos,description,qty,rate) VALUES (?,?,?,?,?,?)"
-  );
-  const batch = items.map((it, i) =>
-    stmt.bind(uid(), id, i, it.description || it.desc || "", +it.qty || 0, +it.rate || 0));
-  if (batch.length) await env.DB.batch(batch);
+  await writeLineItems(env, id, items);
 
   return json({ ok: true, id, total });
+}
+
+/* Edit an invoice in place.
+
+   Until this existed, Save and Email both created a NEW invoice every press —
+   which is how production ended up with 25 invoices under 14 numbers, including
+   five copies of one and three copies of another marked PAID at three different
+   amounts.
+
+   A PAID invoice is refused. It is a record of money that has moved: an invoice
+   paid through the share link carries rzp_payment_id and the exact rzp_amount
+   that was charged, and letting a later edit move the total away from that
+   produces a document contradicting the customer's bank statement — the failure
+   ingest.js exists to prevent on the shop path.
+
+   The lock is decided from the STORED row, never from the submitted body. A
+   check against `b.status` would be no lock at all: posting status:"UNPAID"
+   would unlock any paid invoice. */
+async function updateInvoice(env, user, id, b) {
+  const existing = await env.DB.prepare(
+    "SELECT id, status, rzp_payment_id FROM invoices WHERE id=? AND user_id=?"
+  ).bind(id, user.id).first();
+  if (!existing) return bad("not found", 404);
+
+  const paid = String(existing.status || "").toUpperCase() === "PAID" || existing.rzp_payment_id;
+  if (paid) {
+    // 409, not 403: the request is well-formed and the caller is entitled to
+    // this invoice — it is the invoice's state that refuses.
+    return bad("This invoice is paid and can no longer be edited. " +
+               "Issue a credit note or a new invoice instead.", 409);
+  }
+
+  const items = Array.isArray(b.items) ? b.items : [];
+  const inv = invoiceFields(b);
+
+  if (await numberTaken(env, user, inv.number, id))
+    return bad(`Invoice number ${inv.number} is already in use.`, 409);
+
+  const { total } = computeTotals(inv, items);
+
+  // Named columns only. `created_at`, `share_token`, `rzp_order_id`,
+  // `rzp_amount`, `rzp_payment_id`, `paid_at`, `source` and `source_ref` are
+  // deliberately absent — a shared pay link must keep working across an edit,
+  // and the payment trail is not the form's to rewrite.
+  await env.DB.prepare(
+    `UPDATE invoices SET number=?, issue_date=?, due_date=?, currency=?, tax_mode=?,
+       tax_rate=?, discount_pct=?, shipping=?, shipping_mode=?, round_off=?,
+       status=?, notes=?, client_name=?, client_email=?, client_addr=?, client_gst=?,
+       total=?, updated_at=?
+     WHERE id=? AND user_id=?`
+  ).bind(inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
+         inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode, inv.round_off,
+         inv.status, inv.notes, inv.client_name, inv.client_email, inv.client_addr,
+         inv.client_gst, total, now(), id, user.id).run();
+
+  await writeLineItems(env, id, items);
+
+  return json({ ok: true, id, total, updated: true });
+}
+
+/* A random invoice number this user is not already using.
+
+   The format stays PREFIX-YEAR-<4 digits> — the alternative, sequential
+   numbering, tells a customer how many invoices you have issued. But 4 digits is
+   9000 slots, and picking blind gave a 43% chance of a collision within 100
+   invoices: production already has two entirely unrelated invoices sharing
+   INV-AC-2026-2257 (Rs 350 paid, and Rs 25,000 unpaid).
+
+   Checking here makes a collision unlikely; the unique index in migration 0009
+   makes it impossible. */
+async function nextInvoiceNumber(env, user, url) {
+  const prefix = (url.searchParams.get("prefix") || user.def_prefix || "INV")
+    .replace(/[^\w-]/g, "").slice(0, 20) || "INV";
+  const year = new Date(now()).getUTCFullYear();
+
+  const { results } = await env.DB.prepare(
+    "SELECT number FROM invoices WHERE user_id=? AND status <> 'VOID'"
+  ).bind(user.id).all();
+  const used = new Set((results || []).map((r) => r.number));
+
+  for (let i = 0; i < 40; i++) {
+    const n = `${prefix}-${year}-${Math.floor(Math.random() * 9000) + 1000}`;
+    if (!used.has(n)) return json({ number: n });
+  }
+  // 40 blind misses means the 9000-number space is genuinely crowded for this
+  // year. Say so rather than returning a number that will be rejected on save.
+  return bad("Could not find a free invoice number — too many used this year.", 409);
 }
 
 async function loadInvoice(env, user, id) {
