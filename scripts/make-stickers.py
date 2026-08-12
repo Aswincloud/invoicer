@@ -158,7 +158,7 @@ def label_38x25(url):
     return im, module_mm
 
 
-def strip(labels, label_mm, gap_mm, x_offset_mm, head_mm=48.0):
+def strip(labels, label_mm, gap_mm, x_offset_mm, lead_mm=0.0, head_mm=48.0):
     """The labels laid out down a continuous roll, at the roll's own pitch.
 
     Full head width (48mm = 384 dots at 203.2dpi) so nothing is scaled at print
@@ -174,10 +174,11 @@ def strip(labels, label_mm, gap_mm, x_offset_mm, head_mm=48.0):
     lw, lh = label_mm
     pitch = lh + gap_mm
     W = px(head_mm)
-    H = px(pitch) * len(labels)
+    lead = px(lead_mm)
+    H = lead + px(pitch) * len(labels)
     sheet = Image.new("L", (W, H), 255)
     for i, im in enumerate(labels):
-        sheet.paste(im, (px(x_offset_mm), px(pitch) * i))
+        sheet.paste(im, (px(x_offset_mm), lead + px(pitch) * i))
     return sheet, pitch
 
 
@@ -199,6 +200,11 @@ def main():
                     help="die-cut gap between labels, mm (default 2)")
     ap.add_argument("--x-offset", type=float, default=0.0,
                     help="where the label starts across the 48mm head, mm")
+    ap.add_argument("--head-offset", type=float, default=15.0,
+                    help="print head to paper exit, mm (measured with run/ruler.py)")
+    ap.add_argument("--lead-in", type=float, default=None,
+                    help="blank mm before the first label; default skips to the "
+                         "next whole label. Pass 0 to continue an aligned roll.")
     ap.add_argument("--dry-run", action="store_true",
                     help="render but do not record the codes")
     a = ap.parse_args()
@@ -221,7 +227,17 @@ def main():
         im, module_mm = label_38x25(VERIFY_BASE + c)
         labels.append(im)
 
-    roll, pitch = strip(labels, (38, 25), a.gap, a.x_offset)
+    # The head sits `head_offset` mm BEHIND the slot you align against, so a
+    # label whose top edge is at the exit has already run 15mm past the head and
+    # printing would start 15mm down it. Reverse feed would fix this and this
+    # printer ignores it (see escpos.py), so the strip carries the difference as
+    # blank rows instead: enough to bring the NEXT label's top edge to the head.
+    #
+    # Nothing is wasted by that. The label straddling the head already has 15mm
+    # past it and could never have been printed on.
+    pitch_mm = 25 + a.gap
+    lead = a.lead_in if a.lead_in is not None else (pitch_mm - a.head_offset) % pitch_mm
+    roll, pitch = strip(labels, (38, 25), a.gap, a.x_offset, lead)
     # PNG is the printable artifact, not PDF. Going through a PDF means
     # pdftoppm re-rasterises it, and its rounding turned an exact 864-row strip
     # into 865 — a 0.116% stretch that walked the fourth label 0.1mm down the
@@ -238,9 +254,13 @@ def main():
           f"{roll.size[0]/MM:.2f} x {roll.size[1]/MM:.2f} mm")
     print(f"  pitch              {pitch:.1f}mm  (25mm label + {a.gap:.1f}mm gap)")
     print(f"  x offset           {a.x_offset:.1f}mm across the 48mm head")
+    print(f"  lead-in            {lead:.1f}mm blank "
+          f"(head sits {a.head_offset:.0f}mm behind the exit)")
     print(f"  QR module          {module_mm:.2f}mm "
           f"({'OK' if module_mm >= 0.4 else 'TOO SMALL'})")
-    print(f"\n  print with:  ~/tejprint/print-labels.sh {roll_path}")
+    print(f"\n  Align a label's TOP EDGE at the paper exit, then:")
+    print(f"    ~/tejprint/print-labels.sh {roll_path}")
+    print(f"  Printing again without re-aligning? add --lead-in 0.")
 
     if a.dry_run:
         print("\nDry run — nothing recorded.")
