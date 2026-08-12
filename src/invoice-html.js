@@ -7,9 +7,17 @@ export const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 function money(cur, n) {
+  return (cur ? cur + " " : "") + plain(cur, n);
+}
+
+// The same figure without the currency symbol — for the Rate column, which sits
+// directly beside Amount. Rate used to be a bare toFixed(2), so "1200.00" was
+// printed next to "₹ 1,200.00": two numeric columns, two groupings, one of them
+// looking unfinished.
+export function plain(cur, n) {
   const loc = cur === "₹" ? "en-IN" : "en-US";
-  return (cur ? cur + " " : "") +
-    Number(n || 0).toLocaleString(loc, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return Number(n || 0).toLocaleString(loc,
+    { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function computeTotals(inv, items) {
@@ -71,13 +79,135 @@ export function paymentBlock(inv) {
 export const payToLines = (inv) =>
   String(inv.biz_pay || "").split(/\n|,\s*/).map((s) => s.trim()).filter(Boolean);
 
-// Epoch ms to "11 Aug 2026". Fixed en-GB so the day/month order cannot flip
-// with the runtime's locale — a receipt is a record, and 11/08 vs 08/11 on one
-// is a genuine ambiguity.
-export function fmtPaidDate(ms) {
-  const d = new Date(Number(ms));
-  if (!Number.isFinite(d.getTime())) return "";
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/* "12 Aug 2026", from either a stored "YYYY-MM-DD" or epoch ms.
+
+   Built by hand rather than with toLocaleDateString because both inputs have a
+   trap. A locale-formatted date puts 11/08 or 08/11 depending on where it is
+   read, and an invoice is a record — that ambiguity is not acceptable on one.
+   And `new Date("2026-08-12")` parses as UTC midnight, so in any timezone west
+   of Greenwich formatting it locally prints the previous day. */
+export function fmtDate(value) {
+  if (value == null || value === "") return "";
+
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+  if (iso) {
+    const [, y, m, d] = iso;
+    const mi = Number(m) - 1;
+    if (mi < 0 || mi > 11) return String(value);
+    return `${Number(d)} ${MONTHS[mi]} ${y}`;
+  }
+
+  const ms = Number(value);
+  if (!Number.isFinite(ms)) return String(value);
+  const dt = new Date(ms);
+  if (!Number.isFinite(dt.getTime())) return "";
+  // Epoch ms is an instant; render it in UTC so the same invoice never shows
+  // two different dates to two people.
+  return `${dt.getUTCDate()} ${MONTHS[dt.getUTCMonth()]} ${dt.getUTCFullYear()}`;
+}
+
+// Kept as a name of its own because the paid date is an instant (epoch ms) while
+// issue/due are calendar dates; fmtDate handles both, this just says which.
+export const fmtPaidDate = fmtDate;
+
+/* ── amount in words ─────────────────────────────────────────────────────────
+
+   Standard on an Indian invoice, and not decoration: it is the check against a
+   figure being altered after issue, which is why it is written out.
+
+   Indian numbering, not western — the groups are crore, lakh, thousand, then
+   hundreds, so 1234567 reads "Twelve Lakh Thirty Four Thousand Five Hundred
+   Sixty Seven", never "One Million Two Hundred...". */
+const ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight",
+  "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+  "Seventeen", "Eighteen", "Nineteen"];
+const TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy",
+  "Eighty", "Ninety"];
+
+function twoDigits(n) {
+  if (n < 20) return ONES[n];
+  const t = TENS[Math.floor(n / 10)];
+  const o = ONES[n % 10];
+  return o ? `${t} ${o}` : t;
+}
+
+function threeDigits(n) {
+  const h = Math.floor(n / 100), rest = n % 100;
+  const parts = [];
+  if (h) parts.push(`${ONES[h]} Hundred`);
+  if (rest) parts.push(twoDigits(rest));
+  return parts.join(" ");
+}
+
+// The integer part only, in the Indian grouping.
+export function numberToWords(n) {
+  let num = Math.floor(Math.abs(Number(n) || 0));
+  if (num === 0) return "Zero";
+
+  const parts = [];
+  const crore = Math.floor(num / 10000000); num %= 10000000;
+  const lakh = Math.floor(num / 100000);    num %= 100000;
+  const thousand = Math.floor(num / 1000);  num %= 1000;
+
+  // Each group is itself at most three digits, except crore which can run
+  // higher — "One Hundred Twenty Crore" is correct, so it recurses.
+  if (crore) parts.push(`${crore > 999 ? numberToWords(crore) : threeDigits(crore)} Crore`);
+  if (lakh) parts.push(`${threeDigits(lakh)} Lakh`);
+  if (thousand) parts.push(`${threeDigits(thousand)} Thousand`);
+  if (num) parts.push(threeDigits(num));
+  return parts.join(" ");
+}
+
+/* The full line: "Rupees Six Thousand Eight Hundred Sixty Eight Only".
+
+   Only for ₹ — writing amounts out this way is an Indian convention, and
+   "Dollars ... Only" on a USD invoice would look like a mistake rather than a
+   nicety. Returns "" for anything else, and the callers omit the row. */
+export function amountInWords(total, currency) {
+  if ((currency || "₹") !== "₹") return "";
+  const n = Number(total) || 0;
+  // Round ONCE to paise, then split. Flooring the rupees separately from the
+  // rounded paise makes 99.999 read "Ninety Nine ... Only" while the figure
+  // beside it prints 100.00 — the exact disagreement this row exists to catch.
+  const totalPaise = Math.round(Math.abs(n) * 100);
+  const rupees = Math.floor(totalPaise / 100);
+  const paise = totalPaise % 100;
+  const sign = n < 0 ? "Minus " : "";
+  const head = `${sign}Rupees ${numberToWords(rupees)}`;
+  return paise
+    ? `${head} and ${twoDigits(paise)} Paise Only`
+    : `${head} Only`;
+}
+
+/* ── place of supply ─────────────────────────────────────────────────────────
+
+   Required on a GST invoice. The first two digits of a GSTIN are the state
+   code, which is what the app already uses to decide CGST+SGST vs IGST — this
+   puts the conclusion on the document instead of leaving it implied. */
+const GST_STATES = {
+  "01": "Jammu & Kashmir", "02": "Himachal Pradesh", "03": "Punjab",
+  "04": "Chandigarh", "05": "Uttarakhand", "06": "Haryana", "07": "Delhi",
+  "08": "Rajasthan", "09": "Uttar Pradesh", 10: "Bihar", 11: "Sikkim",
+  12: "Arunachal Pradesh", 13: "Nagaland", 14: "Manipur", 15: "Mizoram",
+  16: "Tripura", 17: "Meghalaya", 18: "Assam", 19: "West Bengal",
+  20: "Jharkhand", 21: "Odisha", 22: "Chhattisgarh", 23: "Madhya Pradesh",
+  24: "Gujarat", 25: "Daman & Diu", 26: "Dadra & Nagar Haveli and Daman & Diu",
+  27: "Maharashtra", 28: "Andhra Pradesh", 29: "Karnataka", 30: "Goa",
+  31: "Lakshadweep", 32: "Kerala", 33: "Tamil Nadu", 34: "Puducherry",
+  35: "Andaman & Nicobar Islands", 36: "Telangana", 37: "Andhra Pradesh",
+  38: "Ladakh", 97: "Other Territory",
+};
+
+// "Karnataka (29)", or "" when there is no GSTIN to derive it from — an invented
+// place of supply would be worse than none.
+export function placeOfSupply(inv) {
+  const code = String(inv.client_gst || "").trim().slice(0, 2);
+  if (!/^\d{2}$/.test(code)) return "";
+  const name = GST_STATES[code] || GST_STATES[Number(code)];
+  return name ? `${name} (${code})` : "";
 }
 
 // "Ledger desk" email — mirrors the on-screen invoice: warm-neutral sheet,
@@ -147,16 +277,18 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
     return `<tr>
       <td style="padding:11px 10px;border-bottom:1px solid ${RULE};font-weight:600">${esc(i.description)}</td>
       <td align="right" style="padding:11px 10px;border-bottom:1px solid ${RULE};font-family:${MONO};color:${SOFT}">${i.qty || ""}</td>
-      <td align="right" style="padding:11px 10px;border-bottom:1px solid ${RULE};font-family:${MONO};color:${SOFT}">${i.rate ? Number(i.rate).toFixed(2) : ""}</td>
+      <td align="right" style="padding:11px 10px;border-bottom:1px solid ${RULE};font-family:${MONO};color:${SOFT}">${i.rate ? plain(cur, i.rate) : ""}</td>
       <td align="right" style="padding:11px 10px;border-bottom:1px solid ${RULE};font-family:${MONO}">${money(cur, amt)}</td></tr>`;
   }).join("");
 
   const totRow = (label, val, opts = {}) =>
     `<tr><td style="padding:6px 10px;color:${SOFT}${opts.strong ? `;font-weight:600;color:${INK}` : ""}">${esc(label)}</td>
-      <td align="right" style="padding:6px 10px;font-family:${MONO};color:${opts.strong ? INK : SOFT}">${opts.neg ? "– " : ""}${money(cur, val)}</td></tr>`;
+      <td align="right" style="padding:6px 10px;font-family:${MONO};color:${opts.strong ? INK : SOFT}">${opts.neg ? "– " : opts.pos ? "+ " : ""}${money(cur, val)}</td></tr>`;
 
   const taxRows = t.taxRows.map(([l, v]) => totRow(l, v)).join("");
   const pay = paymentBlock(inv);
+  const pos = placeOfSupply(inv);
+  const words = amountInWords(t.total, cur);
 
   // Only on an unpaid invoice: a Pay button on a settled one invites a second
   // payment. A bulletproof <a>, not a <button> — mail clients do not run scripts.
@@ -174,20 +306,20 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
       ? `<img src="${esc(logo)}" alt="${esc(inv.biz_name || "Logo")}" style="max-width:150px;max-height:60px;display:block;margin-bottom:10px">`
       : `<span style="display:inline-block;width:44px;height:44px;background:${GREEN};color:#fff;font-family:${MONO};font-size:21px;font-weight:600;text-align:center;line-height:44px;border-radius:9px">${esc(initial)}</span>`}
      <div style="margin-top:9px"><b style="font-size:18px">${esc(inv.biz_name || "Your Business")}</b><br>
-     <span style="color:${SOFT};font-size:12px">${esc(inv.biz_addr)}<br>${esc(inv.biz_email)}</span></div>
+     <span style="color:${SOFT};font-size:12px">${esc(inv.biz_addr)}<br>${[inv.biz_phone, inv.biz_email].filter(Boolean).map(esc).join(" &nbsp;·&nbsp; ")}</span></div>
    </td>
    <td align="right" valign="top" style="padding:16px 0">
      <div style="font-size:24px;font-weight:700;color:${GREEN};letter-spacing:4px">INVOICE</div>
      <div style="font-size:12px;color:${SOFT};margin-top:8px">
        No. <b style="font-family:${MONO};color:${INK}">${esc(inv.number)}</b><br>
-       Issued <b style="font-family:${MONO};color:${INK}">${esc(inv.issue_date)}</b>${inv.due_date ? `<br>Due <b style="font-family:${MONO};color:${INK}">${esc(inv.due_date)}</b>` : ""}
+       Issued <b style="font-family:${MONO};color:${INK}">${esc(fmtDate(inv.issue_date))}</b>${inv.due_date ? `<br>Due <b style="font-family:${MONO};color:${INK}">${esc(fmtDate(inv.due_date))}</b>` : ""}
      </div>
    </td></tr>
   </table>
   <table width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0;font-size:12px">
    <tr><td valign="top" width="58%">
      <div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700">Billed To</div>
-     <b style="font-size:13px">${esc(inv.client_name || "Client")}</b><br><span style="color:${SOFT}">${esc(inv.client_addr)}<br>${esc(inv.client_email)}${inv.client_gst ? "<br>GSTIN: " + esc(inv.client_gst) : ""}</span>
+     <b style="font-size:13px">${esc(inv.client_name || "Client")}</b><br><span style="color:${SOFT}">${esc(inv.client_addr)}<br>${esc(inv.client_email)}${inv.client_gst ? "<br>GSTIN: " + esc(inv.client_gst) : ""}${pos ? `<br>Place of supply: ${esc(pos)}` : ""}</span>
    </td>
    <td valign="top" align="right">
      <div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${pay.kind === "paid" ? GREEN : SOFT};font-weight:700">${esc(pay.label)}</div>
@@ -208,13 +340,22 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
    ${t.shipping ? totRow(inv.shipping_mode ? `Shipping (${inv.shipping_mode})` : "Shipping", t.shipping) : ""}
    ${(t.disc || t.shipping) && t.taxRows.length ? totRow("Taxable value", t.taxable) : ""}
    ${taxRows}
-   ${showRoundOff(t) ? totRow("Round off", Math.abs(t.round), { neg: t.round < 0 }) : ""}
+   ${showRoundOff(t) ? totRow("Round off", Math.abs(t.round), { neg: t.round < 0, pos: t.round > 0 }) : ""}
    <tr><td style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${SANS};font-weight:700;text-transform:uppercase;letter-spacing:.6px">Total ${cur ? `(${esc(cur)})` : ""}</td>
        <td align="right" style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${MONO};font-weight:600;font-size:18px;color:${GREEN}">${money(cur, t.total)}</td></tr>
   </table>
   <div style="clear:both"></div>
+  ${words ? `<div style="margin-top:14px;font-size:11px;color:${SOFT};max-width:62%">
+     <span style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;font-weight:700">Amount in words</span><br>
+     <span style="color:${INK}">${esc(words)}</span></div>` : ""}
   ${payButton}
   ${inv.notes ? `<div style="margin-top:28px;font-size:11px;color:${SOFT};white-space:pre-line"><div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700;margin-bottom:4px">Notes / Terms</div>${esc(inv.notes)}</div>` : ""}
-  <div style="margin-top:26px;text-align:center;color:${SOFT};font-size:10px;font-family:${MONO};letter-spacing:.3px;border-top:1px solid ${RULE};padding-top:13px">Generated with Invoicer</div>
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:34px">
+   <tr><td align="right">
+     <div style="display:inline-block;border-top:1px solid ${RULE};padding-top:6px;min-width:190px;text-align:center;font-size:10px;color:${SOFT}">
+       For ${esc(inv.biz_name || "Your Business")}<br>Authorised Signatory</div>
+   </td></tr>
+  </table>
+  <div style="margin-top:22px;text-align:center;color:${SOFT};font-size:10px;font-family:${MONO};letter-spacing:.3px;border-top:1px solid ${RULE};padding-top:13px">${esc([inv.biz_name, inv.biz_phone, inv.biz_email].filter(Boolean).join(" · "))}</div>
  </div>`;
 }
