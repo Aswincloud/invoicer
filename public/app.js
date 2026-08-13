@@ -1114,7 +1114,9 @@ async function renderPosReceipt(){
   return doc;
 }
 
-// Save the receipt to disk. The fallback whenever printing isn't available.
+// Save the receipt to disk. Reached only by the Download button — printing no
+// longer falls back to this, because a download nobody asked for reads as
+// success when the paper never came out.
 function savePosReceipt(doc){
   const no = ($("invNo").value.trim() || "receipt").replace(/[^\w.-]+/g, "-");
   // Named for the paper it's meant for, not the page width — someone
@@ -1175,11 +1177,14 @@ async function printPosReceipt(){
         body: JSON.stringify({pdfBase64: uri.slice(uri.indexOf(",") + 1)})});
       done("Printed ✓");
     } catch(e) {
-      // Say what went wrong AND hand over the PDF, so a printer that's off or
-      // out of paper costs a download rather than the whole receipt.
+      // Report the failure and stop. This used to also download the PDF, but a
+      // silent download is the wrong answer at a counter: the receipt did not
+      // print, and quietly producing a file in the browser's downloads folder
+      // reads as partial success while the customer is still waiting. Say it
+      // failed, plainly; the Download button is right there if a file is wanted.
       console.warn("print failed:", e);
-      savePosReceipt(doc);
-      alert("Couldn't print (" + (e.message || e) + ").\nThe PDF was downloaded instead.");
+      alert("Couldn't print the receipt.\n\n" + (e.message || e) +
+            "\n\nNothing was printed. Try again, or use Download for a PDF.");
     }
   });
 }
