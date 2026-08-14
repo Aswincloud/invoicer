@@ -1424,8 +1424,9 @@ function renderInvoiceList(list){
     row.innerHTML =
       `<div class="inv-main">
          <div class="inv-num">${esc(inv.number||"(no number)")}</div>
-         <div class="inv-sub">${esc(inv.client_name||"—")} · ${esc(invDate(inv.issue_date))}
-           ${st?` · <span class="inv-badge ${esc(st)}">${esc(st)}</span>`:""}</div>
+         <div class="inv-sub">
+           <span class="inv-who">${esc(inv.client_name||"—")} · ${esc(invDate(inv.issue_date))}</span>
+           ${st?`<span class="inv-badge ${esc(st)}">${esc(st)}</span>`:""}</div>
        </div>
        <div class="inv-right">
          <span class="inv-amt">${esc(invAmt(inv.currency, inv.total))}</span>

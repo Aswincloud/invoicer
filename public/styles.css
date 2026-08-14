@@ -271,8 +271,14 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
 .inv-row:hover{border-color:color-mix(in srgb,var(--muted) 45%,var(--line))}
 .inv-main{min-width:0}
 .inv-num{font-family:var(--font-mono);font-weight:600;font-size:13.5px}
+/* Truncate the name, never the status. This line was one nowrap run with an
+   ellipsis, and the badge sat at the end of it — so on a narrow row the status
+   was the first thing clipped away, which is the one part of the line you
+   cannot reconstruct by guessing. A long client name is legible truncated; a
+   missing PAID reads as unpaid. */
 .inv-sub{color:var(--muted);font-size:11.5px;margin-top:4px;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  display:flex;align-items:center;gap:7px;min-width:0}
+.inv-who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .inv-right{display:flex;align-items:center;gap:8px;flex:none}
 .inv-amt{font-family:var(--font-mono);font-weight:600;font-size:13.5px;
   font-variant-numeric:tabular-nums;margin-right:2px}
@@ -281,7 +287,8 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
 .inv-acts .del{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,var(--line))}
 .inv-acts .del:hover{background:color-mix(in srgb,var(--danger) 14%,transparent)}
 .inv-badge{display:inline-block;padding:1px 8px;border-radius:6px;font-size:10px;
-  font-weight:700;font-family:var(--font-mono);border:1px solid var(--line);color:var(--muted)}
+  font-weight:700;font-family:var(--font-mono);border:1px solid var(--line);color:var(--muted);
+  flex:none}                       /* holds its width while the name gives way */
 .inv-badge.PAID{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 45%,var(--line))}
 .inv-badge.UNPAID,.inv-badge.DUE{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 45%,var(--line))}
 .inv-badge.VOID{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,var(--line));text-decoration:line-through}
