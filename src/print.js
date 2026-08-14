@@ -16,10 +16,16 @@
 
 import { json, bad, hmacHex } from "./lib.js";
 
-// One job is ~11s of printing, and the relay serialises them, so a second job
-// waits behind the first. 45s covers a queued job without hanging a browser
-// tab forever if the relay never answers.
-const RELAY_TIMEOUT_MS = 45_000;
+// Measured over three days of real jobs: a successful print takes 16.3–24.1s,
+// and the relay serialises them, so a second job waits behind the first.
+//
+// The bridge also drops off WiFi intermittently, which the printer script now
+// retries (up to ~11s of extra attempts) rather than failing the job outright.
+// A recovered print therefore lands around 27–35s. At the old 45s the slowest
+// of those would abort here while the relay kept printing — reporting failure
+// on a receipt that physically came out, which is worse than waiting. 60s
+// keeps the honest-but-slow case honest, and still well under the relay's 180s.
+const RELAY_TIMEOUT_MS = 60_000;
 
 // Matches the client-side cap in index.js for emailed PDFs. A 57mm receipt is
 // ~11KB of base64; this is generous while still bounding what we forward.
