@@ -1,6 +1,8 @@
 // Server-side invoice HTML (for the "email invoice to client" feature).
 // Kept email-safe: inline styles, table layout, no <style>/@page.
 
+import { qrMatrix, qrPngBase64 } from "./qr.js";
+
 // Exported so the public pay page escapes with the same function this template
 // does, rather than carrying a second copy that can drift from it.
 export const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
@@ -283,13 +285,37 @@ export function logoAttachment(dataUri) {
   };
 }
 
+/* The order-online QR, as a CID attachment.
+
+   Same reasoning as logoAttachment above: mail clients strip data: URIs, so the
+   pixels have to travel as an attachment. This is the one surface that needs a
+   raster at all — both PDFs draw the modules as vectors — which is why qr.js
+   carries a small PNG encoder.
+
+   Returns { attachment, src } or null when this business has no shop link. */
+export function qrAttachment(inv) {
+  const content = qrPngBase64(qrMatrix(inv && inv.qr_url), 6);
+  if (!content) return null;
+
+  const cid = "orderqr@invoicer";
+  return {
+    src: `cid:${cid}`,
+    attachment: {
+      filename: "order-qr.png",
+      content,
+      content_id: cid,
+      content_type: "image/png",
+    },
+  };
+}
+
 // `logoSrc` overrides what the <img> points at, so the same template serves both
 // the email (a cid: reference) and any browser context (the data: URI as before).
 // Defaulting to inv.biz_logo keeps every existing caller working unchanged.
 // `payUrl` adds a Pay button to the emailed copy. Optional and last, so every
 // existing caller (ingest.js, emailInvoice, and the public pay page — which has
 // its own button and must NOT get a second one) is unaffected by its addition.
-export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
+export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qrSrc = null) {
   const cur = inv.currency || "₹";
   const t = computeTotals(inv, items);
   const initial = (inv.biz_name || "I").charAt(0).toUpperCase();
@@ -314,6 +340,30 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
   const pos = placeOfSupply(inv);
   const words = amountInWords(t.total, cur);
   const units = itemUnits(items);
+
+  /* "Scan for other products and order online".
+
+     The link is spelled out beside the QR rather than left implicit in it. This
+     copy is read on a phone as often as on paper, and scanning a code with the
+     device already holding it is awkward — so whoever is reading gets something
+     tappable, and whoever printed it gets something scannable.
+
+     Rendered only when the business carries a shop link, so the businesses that
+     have no shop send exactly the email they sent before. */
+  const qrImg = qrSrc || "";
+  const orderQr = inv.qr_url
+    ? `<table cellpadding="0" cellspacing="0" style="margin-top:28px">
+        <tr>
+         ${qrImg ? `<td valign="middle" style="padding-right:14px">
+           <img src="${esc(qrImg)}" width="104" height="104" alt="Scan to order online"
+                style="display:block;border:1px solid ${RULE};border-radius:6px"></td>` : ""}
+         <td valign="middle">
+           <div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700">Order online</div>
+           <div style="font-size:11.5px;color:${INK};margin-top:3px">${esc(String(inv.qr_caption || "").trim() || "Scan for more products & order online")}</div>
+           <a href="${esc(inv.qr_url)}" style="font-size:11px;color:${GREEN};word-break:break-all">${esc(inv.qr_url)}</a>
+         </td></tr>
+       </table>`
+    : "";
 
   // Only on an unpaid invoice: a Pay button on a settled one invites a second
   // payment. A bulletproof <a>, not a <button> — mail clients do not run scripts.
@@ -377,6 +427,7 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null) {
      <span style="color:${INK}">${esc(words)}</span></div>` : ""}
   ${payButton}
   ${inv.notes ? `<div style="margin-top:28px;font-size:11px;color:${SOFT};white-space:pre-line"><div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700;margin-bottom:4px">Notes / Terms</div>${esc(inv.notes)}</div>` : ""}
+  ${orderQr}
   <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:34px">
    <tr><td align="right">
      <div style="display:inline-block;border-top:1px solid ${RULE};padding-top:6px;min-width:190px;text-align:center;font-size:10px;color:${SOFT}">

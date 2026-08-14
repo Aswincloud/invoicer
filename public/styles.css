@@ -123,6 +123,13 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--ring);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 20%,transparent)}
 textarea{resize:vertical}
 
+/* Business switcher — which trading name is issuing this invoice. */
+.biz-switch{display:flex;align-items:flex-end;gap:9px;flex-wrap:wrap}
+.biz-switch-sel{flex:1 1 160px;min-width:0}
+.biz-switch-acts{display:flex;gap:6px;flex:none}
+.biz-switch-acts .btn{padding:9px 11px}
+.biz-switch-acts .btn:disabled{opacity:.45;cursor:not-allowed}
+
 /* ── Line items — stacked: description full-width, figures beneath ── */
 #items{margin-top:12px;display:flex;flex-direction:column;gap:10px}
 .item{border:1px solid var(--line);border-radius:11px;padding:11px 12px;
@@ -210,6 +217,12 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
 .psign .sigline{display:block;margin-left:auto;width:190px;
   border-top:1px solid var(--paper-rule);margin-bottom:6px}
 .pfoot{margin-top:28px;color:#4b5563;white-space:pre-line}
+/* Order QR on the sheet. Fixed colours, like the rest of the invoice: this is a
+   document, and it must look the same whether the workspace is light or dark. */
+.pqr{margin-top:26px;display:flex;align-items:center;gap:13px}
+.pqr svg{border:1px solid var(--paper-rule);border-radius:6px;display:block;flex:none}
+.pqr-txt{color:#4b5563;font-size:11px}
+.pqr-txt p{margin-top:2px;color:var(--paper-ink)}
 .pfoot .lbl,.pwords .lbl{text-transform:uppercase;font-size:9.5px;letter-spacing:.12em;
   color:var(--paper-soft);font-weight:700;margin-bottom:5px}
 .pnote{margin-top:26px;text-align:center;color:var(--paper-soft);

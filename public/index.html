@@ -42,6 +42,17 @@
     <details open class="grp">
       <summary>Your business <span id="bizHint" class="hint">(saved on this device)</span></summary>
       <div class="grid2">
+        <!-- Which trading name is issuing this invoice. Signed-in only: the list
+             lives on the account, and a signed-out browser has exactly one. -->
+        <div class="col2 biz-switch" id="bizSwitch" hidden>
+          <label class="biz-switch-sel">Business
+            <select id="bizPicker"></select>
+          </label>
+          <div class="biz-switch-acts">
+            <button type="button" id="bizNew" class="btn ghost sm">＋ New</button>
+            <button type="button" id="bizDelete" class="btn ghost sm">Delete</button>
+          </div>
+        </div>
         <div class="col2 logo-field">
           <span class="logo-lbl">Logo <span class="hint">(shown atop the invoice)</span></span>
           <div class="logo-row">
@@ -58,6 +69,9 @@
         <label>Phone<input id="bizPhone" placeholder="+91 90000 00000"></label>
         <label>GSTIN / Tax ID<input id="bizGst" placeholder="34ABCDE1234F1Z9"></label>
         <label class="col2">Payment details<textarea id="bizPay" rows="2" placeholder="A/C 1234… · IFSC … · UPI aswincloud@hdfcbank"></textarea></label>
+        <label class="col2">Order / shop link <span class="hint">(printed as a QR — leave blank for none)</span>
+          <input id="bizQrUrl" type="url" placeholder="https://3d-prints.aswincloud.com"></label>
+        <label class="col2">QR caption<input id="bizQrCaption" placeholder="Scan for more products &amp; order online"></label>
       </div>
     </details>
 

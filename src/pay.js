@@ -27,6 +27,7 @@
 
 import { json, bad, now, randToken, sendEmail } from "./lib.js";
 import { computeTotals, renderInvoiceEmail, esc, fmtDate } from "./invoice-html.js";
+import { BIZ_SELECT, BIZ_JOIN } from "./business.js";
 import {
   createOrder, paymentsConfigured, publicKeyId,
   verifyCallbackSignature, verifyWebhookSignature,
@@ -57,9 +58,12 @@ async function loadByToken(env, token) {
   if (!TOKEN_RE.test(String(token || ""))) return null;
 
   const inv = await env.DB.prepare(
-    `SELECT i.*, u.email AS owner_email, u.biz_name, u.biz_email, u.biz_addr,
-            u.biz_phone, u.biz_gst, u.biz_pay, u.biz_logo
+    // The business is joined through the invoice, not the user: the public page
+    // for a 3DPrints invoice must show 3DPrints' name and pay-to details even
+    // after the account's default has moved on. See src/business.js.
+    `SELECT i.*, u.email AS owner_email, ${BIZ_SELECT}
        FROM invoices i JOIN users u ON u.id = i.user_id
+       ${BIZ_JOIN}
       WHERE i.share_token = ?`
   ).bind(token).first();
   if (!inv) return null;
@@ -513,8 +517,9 @@ async function handleOrderPaid(env, ctx, evt, eventId) {
   if (!rzpOrderId) return;
 
   const inv = await env.DB.prepare(
-    `SELECT i.*, u.email AS owner_email, u.biz_name
+    `SELECT i.*, u.email AS owner_email, b.biz_name
        FROM invoices i JOIN users u ON u.id = i.user_id
+       ${BIZ_JOIN}
       WHERE i.rzp_order_id = ?`
   ).bind(rzpOrderId).first();
 

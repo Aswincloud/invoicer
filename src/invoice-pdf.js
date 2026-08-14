@@ -32,6 +32,7 @@
 // and the email would end up disagreeing on a paid invoice.
 import { paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
          itemUnits, fmtUnits } from "./invoice-html.js";
+import { qrMatrix, QR_QUIET } from "./qr.js";
 
 const PT = 1;                     // PDF unit is the point
 const PAGE_W = 595.28;            // A4
@@ -351,6 +352,38 @@ export function renderInvoicePdf(inv, items, totals) {
       }
       if (line) { p.text(MARGIN, y, line, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 11; }
     }
+  }
+
+  // ── order-online QR, bottom left ──
+  //
+  // Drawn as filled rectangles rather than an embedded image. This writer has no
+  // image support at all — no XObjects, not even for the logo — and a QR is
+  // nothing but a grid of black squares, so vectors avoid that entire machinery
+  // and stay sharp at any zoom or print resolution.
+  //
+  // Runs of adjacent dark modules in a row collapse into ONE rectangle. A 29x29
+  // code is 841 modules; emitted individually that is ~34KB of content stream on
+  // every invoice, and merging typically cuts it by two thirds for free.
+  const qr = qrMatrix(inv.qr_url);
+  if (qr) {
+    const BOX = 78;                                   // ~27mm including quiet zone
+    const mod = BOX / (qr.length + QR_QUIET * 2);
+    const qTop = Math.max(y - 18, MARGIN + 108);
+
+    for (let r = 0; r < qr.length; r++) {
+      let c = 0;
+      while (c < qr.length) {
+        if (!qr[r][c]) { c++; continue; }
+        let run = 1;
+        while (c + run < qr.length && qr[r][c + run]) run++;
+        p.rect(MARGIN + (c + QR_QUIET) * mod, qTop - (r + QR_QUIET + 1) * mod,
+               run * mod, mod, "0 0 0");
+        c += run;
+      }
+    }
+
+    const caption = String(inv.qr_caption || "").trim() || "Scan to order online";
+    p.text(MARGIN, qTop - BOX - 2, fit(caption, 190, 7.5), { size: 7.5, color: "0.36 0.39 0.45" });
   }
 
   // ── signature ──

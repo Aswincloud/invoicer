@@ -3,11 +3,15 @@ import {
   json, bad, uid, randToken, now, sign, unsign, parseCookies, cookie,
   sendEmail, isEmail,
 } from "./lib.js";
-import { renderInvoiceEmail, computeTotals, logoAttachment } from "./invoice-html.js";
+import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment } from "./invoice-html.js";
 import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
 import { ingestOrder } from "./ingest.js";
 import { printReceipt } from "./print.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
+import {
+  attachBusiness, businessById, defaultBusiness, publicBusiness,
+  businessValues, BIZ_WRITE_COLUMNS,
+} from "./business.js";
 import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
@@ -108,10 +112,17 @@ async function api(request, env, url, ctx) {
   // --- everything below requires a session ---
   const user = await currentUser(request, env);
   if (p === "/api/me" && m === "GET")
-    return json({ user: user ? publicUser(user) : null });
+    return json({ user: user ? await publicUser(env, user) : null });
   if (!user) return bad("unauthorized", 401);
 
+  let match;
   if (p === "/api/profile" && m === "PUT")   return saveProfile(env, user, body);
+  if (p === "/api/businesses" && m === "GET")  return listBusinesses(env, user);
+  if (p === "/api/businesses" && m === "POST") return createBusiness(env, user, body);
+  if ((match = p.match(/^\/api\/businesses\/([^/]+)$/))) {
+    if (m === "PUT")    return updateBusiness(env, user, match[1], body);
+    if (m === "DELETE") return deleteBusiness(env, user, match[1]);
+  }
   if (p === "/api/invoices" && m === "GET")  return listInvoices(env, user);
   if (p === "/api/invoices" && m === "POST") return createInvoice(env, user, body);
   if (p === "/api/print"    && m === "POST") return printReceipt(env, user, body);
@@ -120,7 +131,6 @@ async function api(request, env, url, ctx) {
   if (p === "/api/invoices/next-number" && m === "GET")
     return nextInvoiceNumber(env, user, url);
 
-  let match;
   if ((match = p.match(/^\/api\/invoices\/([^/]+)$/))) {
     if (m === "GET")    return getInvoice(env, user, match[1]);
     if (m === "PUT")    return updateInvoice(env, user, match[1], body);
@@ -134,18 +144,28 @@ async function api(request, env, url, ctx) {
   return bad("not found", 404);
 }
 
-const publicUser = (u) => ({
-  id: u.id, email: u.email,
-  biz: { bizName: u.biz_name, bizEmail: u.biz_email, bizAddr: u.biz_addr,
-         bizPhone: u.biz_phone, bizGst: u.biz_gst, bizPay: u.biz_pay,
-         bizLogo: u.biz_logo || "" },
-  defaults: {
-    currency: u.def_currency || "", taxMode: u.def_tax_mode || "",
-    taxRate: u.def_tax_rate || "", discount: u.def_discount || "",
-    notes: u.def_notes || "", dueDays: u.def_due_days || "",
-    prefix: u.def_prefix || "",
-  },
-});
+/* What the browser gets about the signed-in account.
+
+   `businesses` is the real answer now. `biz` and `defaults` are kept beside it,
+   mirroring whichever business is default, because they are what an older cached
+   copy of app.js reads — a deploy where the Worker updates before a browser
+   picks up the new script must not blank somebody's letterhead mid-invoice. */
+async function publicUser(env, u) {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM businesses WHERE user_id=? ORDER BY is_default DESC, created_at ASC"
+  ).bind(u.id).all();
+
+  const list = (results || []).map(publicBusiness);
+  const active = list.find((x) => x.isDefault) || list[0] || null;
+
+  return {
+    id: u.id, email: u.email,
+    businesses: list,
+    defaultBusinessId: active ? active.id : null,
+    biz: active ? active.biz : {},
+    defaults: active ? active.defaults : {},
+  };
+}
 
 // ── magic-link auth ──────────────────────────────────────────────
 async function authRequest(env, body) {
@@ -225,17 +245,103 @@ async function authLogout(request, env) {
   return json({ ok: true }, 200, { "Set-Cookie": cookie(SESSION_COOKIE, "", { del: true }) });
 }
 
-// ── profile ──────────────────────────────────────────────────────
+// ── businesses ───────────────────────────────────────────────────
+//
+// One account, several trading names. Each carries its own identity, its own
+// invoice-number prefix and its own tax defaults, and each may carry a shop link
+// that gets printed as a QR. See src/business.js.
+
+const WRITE_PLACEHOLDERS = BIZ_WRITE_COLUMNS.split(",").map(() => "?").join(",");
+
+/* PUT /api/profile — edit a business in place.
+
+   Still called "profile" because that is what the form is, but it now writes to
+   a row in `businesses` rather than to the user. Without an explicit id it edits
+   the default, which is exactly what the single-business case wants and keeps
+   an older cached app.js working. */
 async function saveProfile(env, user, b) {
-  const d = b.defaults || {};
+  const target = b.businessId
+    ? await businessById(env, user.id, b.businessId)
+    : await defaultBusiness(env, user.id);
+  if (!target) return bad("no such business", 404);
+
+  const sets = BIZ_WRITE_COLUMNS.split(",").map((c) => `${c.trim()}=?`).join(",");
+  await env.DB.prepare(`UPDATE businesses SET ${sets} WHERE id=? AND user_id=?`)
+    .bind(...businessValues(b), target.id, user.id).run();
+
+  return json({ ok: true, id: target.id });
+}
+
+async function listBusinesses(env, user) {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM businesses WHERE user_id=? ORDER BY is_default DESC, created_at ASC"
+  ).bind(user.id).all();
+  return json({ businesses: (results || []).map(publicBusiness) });
+}
+
+async function createBusiness(env, user, b) {
+  const name = String(b.bizName || "").trim();
+  if (!name) return bad("a business needs a name");
+
+  const id = uid();
+  const first = !(await defaultBusiness(env, user.id));
   await env.DB.prepare(
-    `UPDATE users SET biz_name=?,biz_email=?,biz_addr=?,biz_phone=?,biz_gst=?,biz_pay=?,biz_logo=?,
-       def_currency=?,def_tax_mode=?,def_tax_rate=?,def_discount=?,def_notes=?,def_due_days=?,def_prefix=?
-     WHERE id=?`
-  ).bind(b.bizName||"", b.bizEmail||"", b.bizAddr||"", b.bizPhone||"", b.bizGst||"", b.bizPay||"",
-         String(b.bizLogo||"").slice(0, 200000),
-         d.currency||"", d.taxMode||"", d.taxRate||"", d.discount||"", d.notes||"",
-         String(d.dueDays||""), d.prefix||"", user.id).run();
+    `INSERT INTO businesses (id,user_id,${BIZ_WRITE_COLUMNS},is_default,created_at)
+     VALUES (?,?,${WRITE_PLACEHOLDERS},?,?)`
+  ).bind(id, user.id, ...businessValues(b), first ? 1 : 0, now()).run();
+
+  return json({ ok: true, id });
+}
+
+/* PUT /api/businesses/:id — edit, and optionally make it the default. */
+async function updateBusiness(env, user, id, b) {
+  const target = await businessById(env, user.id, id);
+  if (!target) return bad("no such business", 404);
+
+  const sets = BIZ_WRITE_COLUMNS.split(",").map((c) => `${c.trim()}=?`).join(",");
+  const batch = [
+    env.DB.prepare(`UPDATE businesses SET ${sets} WHERE id=? AND user_id=?`)
+      .bind(...businessValues(b), id, user.id),
+  ];
+  if (b.makeDefault) {
+    batch.unshift(env.DB.prepare("UPDATE businesses SET is_default=0 WHERE user_id=?").bind(user.id));
+    batch.push(env.DB.prepare("UPDATE businesses SET is_default=1 WHERE id=? AND user_id=?")
+      .bind(id, user.id));
+  }
+  await env.DB.batch(batch);
+  return json({ ok: true, id });
+}
+
+/* DELETE /api/businesses/:id
+
+   Refused while any invoice was issued under it. Deleting would either orphan
+   those invoices or, worse, silently re-point them at another business — which
+   would rewrite the trading name and GSTIN on documents already sent to
+   customers and to the tax authority. Archiving is a feature for another day;
+   refusing is the honest answer today. */
+async function deleteBusiness(env, user, id) {
+  const target = await businessById(env, user.id, id);
+  if (!target) return bad("no such business", 404);
+
+  const used = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM invoices WHERE business_id=? AND user_id=?"
+  ).bind(id, user.id).first();
+  if (used && used.n > 0) {
+    return bad(`This business has ${used.n} invoice${used.n === 1 ? "" : "s"} issued under it `
+             + `and cannot be deleted — their name, GSTIN and payment details come from it.`, 409);
+  }
+
+  const { results } = await env.DB.prepare(
+    "SELECT id FROM businesses WHERE user_id=? AND id<>? ORDER BY created_at ASC"
+  ).bind(user.id, id).all();
+  if (!results || !results.length) return bad("an account needs at least one business", 409);
+
+  const batch = [env.DB.prepare("DELETE FROM businesses WHERE id=? AND user_id=?").bind(id, user.id)];
+  // Never leave the account without a default.
+  if (target.is_default) {
+    batch.push(env.DB.prepare("UPDATE businesses SET is_default=1 WHERE id=?").bind(results[0].id));
+  }
+  await env.DB.batch(batch);
   return json({ ok: true });
 }
 
@@ -310,11 +416,19 @@ async function createInvoice(env, user, b) {
 
   const { total } = computeTotals(inv, items);
 
+  // Which business is issuing this. Validated against the account rather than
+  // trusted, and pinned now rather than looked up at render time — this is the
+  // column that stops a reprint two months from now carrying whichever trading
+  // name happens to be selected then.
+  const biz = (b.businessId && await businessById(env, user.id, b.businessId))
+           || await defaultBusiness(env, user.id);
+
   await env.DB.prepare(
-    `INSERT INTO invoices (id,user_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
+    `INSERT INTO invoices (id,user_id,business_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
        discount_pct,shipping,shipping_mode,round_off,status,notes,client_name,client_email,client_addr,client_gst,total,created_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(id, user.id, inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(id, user.id, biz ? biz.id : null,
+         inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
          inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode, inv.round_off,
          inv.status, inv.notes,
          inv.client_name, inv.client_email, inv.client_addr, inv.client_gst, total, t, t).run();
@@ -363,9 +477,12 @@ async function updateInvoice(env, user, id, b) {
   const { total } = computeTotals(inv, items);
 
   // Named columns only. `created_at`, `share_token`, `rzp_order_id`,
-  // `rzp_amount`, `rzp_payment_id`, `paid_at`, `source` and `source_ref` are
-  // deliberately absent — a shared pay link must keep working across an edit,
-  // and the payment trail is not the form's to rewrite.
+  // `rzp_amount`, `rzp_payment_id`, `paid_at`, `source`, `source_ref` and
+  // `business_id` are deliberately absent — a shared pay link must keep working
+  // across an edit, the payment trail is not the form's to rewrite, and the
+  // business that issued an invoice is not an editable property of it. Moving an
+  // invoice between trading names would change the GSTIN on a document already
+  // sent; that is a credit note, not an edit.
   await env.DB.prepare(
     `UPDATE invoices SET number=?, issue_date=?, due_date=?, currency=?, tax_mode=?,
        tax_rate=?, discount_pct=?, shipping=?, shipping_mode=?, round_off=?,
@@ -393,8 +510,15 @@ async function updateInvoice(env, user, id, b) {
    Checking here makes a collision unlikely; the unique index in migration 0009
    makes it impossible. */
 async function nextInvoiceNumber(env, user, url) {
-  const prefix = (url.searchParams.get("prefix") || user.def_prefix || "INV")
-    .replace(/[^\w-]/g, "").slice(0, 20) || "INV";
+  // The prefix is a property of the business now. An explicit ?prefix= wins —
+  // that is the client telling us which business is filling the form — and the
+  // account's default business is the fallback for a caller that sends none.
+  let asked = url.searchParams.get("prefix");
+  if (!asked) {
+    const biz = await defaultBusiness(env, user.id);
+    asked = biz ? biz.def_prefix : "";
+  }
+  const prefix = String(asked || "INV").replace(/[^\w-]/g, "").slice(0, 20) || "INV";
   const year = new Date(now()).getUTCFullYear();
 
   const { results } = await env.DB.prepare(
@@ -418,12 +542,9 @@ async function loadInvoice(env, user, id) {
   const { results } = await env.DB.prepare(
     "SELECT description,qty,rate,pos FROM line_items WHERE invoice_id=? ORDER BY pos"
   ).bind(id).all();
-  // attach business snapshot from the user for rendering
-  Object.assign(inv, {
-    biz_name: user.biz_name, biz_email: user.biz_email, biz_addr: user.biz_addr,
-    biz_phone: user.biz_phone, biz_gst: user.biz_gst, biz_pay: user.biz_pay,
-    biz_logo: user.biz_logo || "",
-  });
+  // Attach the business that ISSUED this invoice, not whichever one the account
+  // happens to have selected now. See src/business.js.
+  await attachBusiness(env, inv);
   return { inv, items: results || [] };
 }
 
@@ -449,7 +570,11 @@ async function emailInvoice(env, user, id, b) {
   // URI, and every mail client strips those, so it has to travel as an
   // attachment. This path had the bug too — the dashboard's "email invoice"
   // button has been sending a broken image for as long as logos have existed.
-  const logo = logoAttachment(user.biz_logo);
+  //
+  // Read off the invoice, not the user: loadInvoice has already attached the
+  // business that issued it, so emailing an old AswinCloud invoice sends the
+  // AswinCloud logo even while 3DPrints is the account's current default.
+  const logo = logoAttachment(r.inv.biz_logo);
 
   // Mint the share token here too, so an emailed invoice always carries a link
   // the client can pay from — without the owner having to remember to press
@@ -466,10 +591,14 @@ async function emailInvoice(env, user, id, b) {
     payUrl = shareUrl(env, token);
   }
 
-  const html = renderInvoiceEmail(r.inv, r.items, logo ? logo.src : "", payUrl);
+  // The order QR travels the same way the logo does, and for the same reason.
+  const qr = qrAttachment(r.inv);
+  const html = renderInvoiceEmail(r.inv, r.items, logo ? logo.src : "", payUrl,
+                                  qr ? qr.src : "");
 
   const attachments = [];
   if (logo) attachments.push(logo.attachment);
+  if (qr) attachments.push(qr.attachment);
 
   // The PDF. The browser sends one when it has the invoice rendered (a bitmap of
   // the on-screen sheet, which matches what the user is looking at). Accept it
@@ -490,7 +619,7 @@ async function emailInvoice(env, user, id, b) {
     }
   }
 
-  const bizName = user.biz_name ? user.biz_name.trim() : "";
+  const bizName = String(r.inv.biz_name || "").trim();
   const res = await sendEmail(env, {
     to,
     fromName: `${bizName || "Invoicer"} Billing`,
