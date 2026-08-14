@@ -1004,8 +1004,14 @@ function posOps(){
   // On a settled receipt this is the Razorpay reference, not the UPI id — the
   // customer has already paid, and printing payment instructions on their copy
   // is how a duplicate payment happens. See payBlock().
+  // Print the marker whenever the invoice is settled, even with no reference
+  // lines beneath it. Only an online payment has a Razorpay ref; one settled by
+  // hand — cash or a UPI transfer at the counter — has nothing to print under
+  // the heading, and gating on lines.length dropped the whole block. The
+  // customer's copy then said nothing about payment at all: no PAID, and no
+  // pay-to either, since a paid invoice correctly suppresses that.
   const payNow = payBlock();
-  if(payNow.lines.length){
+  if(payNow.paid || payNow.lines.length){
     ops.push({t:"left", s:payNow.label.toUpperCase(), size:PS.label, bold:true});
     payNow.lines.forEach(l => ops.push({t:"wrap", s:l, size:PS.prose}));
   }
@@ -1418,8 +1424,9 @@ function renderInvoiceList(list){
     row.innerHTML =
       `<div class="inv-main">
          <div class="inv-num">${esc(inv.number||"(no number)")}</div>
-         <div class="inv-sub">${esc(inv.client_name||"—")} · ${esc(invDate(inv.issue_date))}
-           ${st?` · <span class="inv-badge ${esc(st)}">${esc(st)}</span>`:""}</div>
+         <div class="inv-sub">
+           <span class="inv-who">${esc(inv.client_name||"—")} · ${esc(invDate(inv.issue_date))}</span>
+           ${st?`<span class="inv-badge ${esc(st)}">${esc(st)}</span>`:""}</div>
        </div>
        <div class="inv-right">
          <span class="inv-amt">${esc(invAmt(inv.currency, inv.total))}</span>
