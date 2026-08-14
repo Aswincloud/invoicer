@@ -60,11 +60,21 @@ const ORDER = () => ({
 });
 
 // ── fake D1 ───────────────────────────────────────────────────────
-function makeDB({ users = [USER], invoices = [] } = {}) {
+function makeDB({ users = [USER], invoices = [], businesses = null } = {}) {
   const db = {
     users: users.map((u) => ({ ...u })),
     invoices: invoices.map((i) => ({ ...i })),
     line_items: [],
+    // One business per user, built from that user's biz_* fields — exactly what
+    // migration 0010 does to existing accounts. Seeding it this way keeps the
+    // assertions below meaningful: the shop path now reads the header off a
+    // business row, and this is the row it would read in production.
+    businesses: businesses || users.map((u, i) => ({
+      id: `b-${i + 1}`, user_id: u.id, is_default: 1, created_at: 1,
+      biz_name: u.biz_name || "", biz_email: u.biz_email || "", biz_addr: u.biz_addr || "",
+      biz_phone: u.biz_phone || "", biz_gst: u.biz_gst || "", biz_pay: u.biz_pay || "",
+      biz_logo: u.biz_logo || "", qr_url: "", qr_caption: "",
+    })),
   };
 
   const run = (sql, a) => {
@@ -79,8 +89,17 @@ function makeDB({ users = [USER], invoices = [] } = {}) {
       const i = db.invoices.find((x) => x.source_ref === a[0]);
       return { first: i || null };
     }
+    if (s.startsWith("SELECT * FROM businesses WHERE user_id=?")) {
+      const rows = db.businesses
+        .filter((x) => x.user_id === a[0])
+        .sort((x, y) => (y.is_default - x.is_default) || (x.created_at - y.created_at));
+      return { first: rows[0] || null, results: rows };
+    }
+    if (s.startsWith("SELECT * FROM businesses WHERE id=? AND user_id=?")) {
+      return { first: db.businesses.find((x) => x.id === a[0] && x.user_id === a[1]) || null };
+    }
     if (s.startsWith("INSERT INTO invoices")) {
-      const [id, user_id, number, issue_date, due_date, currency, tax_mode, tax_rate,
+      const [id, user_id, business_id, number, issue_date, due_date, currency, tax_mode, tax_rate,
              discount_pct, shipping, shipping_mode, round_off, status, notes,
              client_name, client_email, client_addr, client_gst, total,
              source, source_ref] = a;
@@ -91,8 +110,8 @@ function makeDB({ users = [USER], invoices = [] } = {}) {
       if (!db.__noUnique && source_ref && db.invoices.some((x) => x.source_ref === source_ref)) {
         throw new Error("UNIQUE constraint failed: invoices.source_ref");
       }
-      db.invoices.push({ id, user_id, number, issue_date, due_date, currency, tax_mode,
-        tax_rate, discount_pct, shipping, shipping_mode, round_off, status, notes,
+      db.invoices.push({ id, user_id, business_id, number, issue_date, due_date, currency,
+        tax_mode, tax_rate, discount_pct, shipping, shipping_mode, round_off, status, notes,
         client_name, client_email, client_addr, client_gst, total, source, source_ref });
       return { meta: { changes: 1 } };
     }

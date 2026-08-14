@@ -24,8 +24,9 @@
 // that it is an open "email anyone an invoice from Aswin's business" endpoint.
 
 import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex } from "./lib.js";
-import { renderInvoiceEmail, computeTotals, logoAttachment } from "./invoice-html.js";
+import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment } from "./invoice-html.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
+import { bizFields, defaultBusiness } from "./business.js";
 
 const REPLAY_WINDOW_MS = 5 * 60 * 1000;
 
@@ -76,10 +77,14 @@ export async function ingestOrder(request, env) {
 
   // ── who is issuing it ──
   //
-  // The invoice header (business name, GSTIN, pay-to details) lives on the user
-  // row, so an invoice cannot be raised without one. Resolved from CONFIG, never
-  // from the request — otherwise the caller could pick whose business name
-  // appears on an invoice.
+  // The invoice header (business name, GSTIN, pay-to details) comes from one of
+  // the account's businesses, so an invoice cannot be raised without one.
+  // Resolved from CONFIG, never from the request — otherwise the caller could
+  // pick whose business name appears on an invoice.
+  //
+  // A shop order is always billed under the account's DEFAULT business. The
+  // request has no say: letting it choose would hand a caller the ability to
+  // issue invoices under any of Aswin's trading names, GSTIN included.
   const ownerEmail = String(env.INVOICE_OWNER_EMAIL || "").trim().toLowerCase();
   if (!ownerEmail) {
     console.error("INVOICE_OWNER_EMAIL is not set — cannot attribute the invoice");
@@ -105,6 +110,15 @@ export async function ingestOrder(request, env) {
     return json({ ok: true, duplicate: true, id: existing.id, number: existing.number });
   }
 
+  const biz = await defaultBusiness(env, user.id);
+  if (!biz) {
+    // 0010 gives every account one, so this means the account was created after
+    // the migration without a business being made for it. Refusing beats
+    // sending an invoice headed "Your Business" with no GSTIN on it.
+    console.error("no business configured for", ownerEmail);
+    return json({ error: "invoicing is not configured" }, 503);
+  }
+
   const built = buildInvoice(b, receipt, user);
   if (built.error) return bad(built.error, 400);
   const { inv, items, total } = built;
@@ -114,12 +128,13 @@ export async function ingestOrder(request, env) {
 
   try {
     await env.DB.prepare(
-      `INSERT INTO invoices (id,user_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
+      `INSERT INTO invoices (id,user_id,business_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
          discount_pct,shipping,shipping_mode,round_off,status,notes,client_name,client_email,
          client_addr,client_gst,total,source,source_ref,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
-      id, user.id, inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
+      id, user.id, biz ? biz.id : null,
+      inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
       inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode, inv.round_off,
       inv.status, inv.notes, inv.client_name, inv.client_email, inv.client_addr,
       inv.client_gst, total, "shop", receipt, t, t,
@@ -146,21 +161,20 @@ export async function ingestOrder(request, env) {
   //
   // Same render and same transport as the dashboard's "email invoice" button, so
   // there is one invoice template and one delivery path, not two that drift.
-  const rendered = { ...inv, total, biz_name: user.biz_name, biz_email: user.biz_email,
-                     biz_addr: user.biz_addr, biz_phone: user.biz_phone,
-                     biz_gst: user.biz_gst, biz_pay: user.biz_pay,
-                     biz_logo: user.biz_logo || "" };
-  const bizName = (user.biz_name || "").trim();
+  const rendered = { ...inv, total, ...bizFields(biz) };
+  const bizName = String(rendered.biz_name || "").trim();
 
   // The logo travels as a CID attachment, not as the stored data: URI — mail
   // clients strip those, which is why the first invoices arrived with a broken
   // image where the logo should be. logoAttachment() returns null when there is
   // no logo or it is not a usable image, and the template then falls back to the
   // initial badge rather than rendering a broken <img>.
-  const logo = logoAttachment(user.biz_logo);
+  const logo = logoAttachment(rendered.biz_logo);
+  const qr = qrAttachment(rendered);
 
   const attachments = [];
   if (logo) attachments.push(logo.attachment);
+  if (qr) attachments.push(qr.attachment);
 
   // A PDF copy, generated here rather than in a browser — there is no browser on
   // this path. Wrapped, because a layout bug in the generator must not cost the
@@ -182,7 +196,9 @@ export async function ingestOrder(request, env) {
     to: inv.client_email,
     fromName: `${bizName || "Invoicer"} Billing`,
     subject: `Invoice ${inv.number} — order ${receipt}`,
-    html: renderInvoiceEmail(rendered, items, logo ? logo.src : ""),
+    // No payUrl: a shop order is already paid, so the fourth argument stays null
+    // and the QR goes in the fifth.
+    html: renderInvoiceEmail(rendered, items, logo ? logo.src : "", null, qr ? qr.src : ""),
     text: `Invoice ${inv.number} for order ${receipt}. Total ${inv.currency} ${total.toFixed(2)}. A PDF copy is attached.`,
     attachments: attachments.length ? attachments : undefined,
   });

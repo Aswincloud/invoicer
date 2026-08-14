@@ -14,6 +14,34 @@ const BIZ_FIELDS = ["bizName","bizEmail","bizAddr","bizPhone","bizGst","bizPay"]
 // separately from BIZ_FIELDS and persisted alongside them.
 let BIZ_LOGO = "";
 
+/* The account's businesses, and which one is filling the form.
+
+   One account, several trading names — AswinCloud and Aswin3DPrints — each with
+   its own identity, its own invoice-number prefix, its own tax defaults and
+   optionally a shop link printed as a QR.
+
+   BIZ_LIST entries are the shape publicBusiness() sends: {id, isDefault, biz,
+   defaults, qrRows}. `qrRows` is the QR already encoded server-side — the
+   browser never builds one, because it cannot import src/qr.js and a second
+   encoder is a second thing to keep in step. */
+let BIZ_LIST = [];
+let ACTIVE_BIZ = null;
+let BIZ_QR_CAPTION = "";
+
+const activeBiz = () => BIZ_LIST.find((b) => b.id === ACTIVE_BIZ) || BIZ_LIST[0] || null;
+
+/* The QR modules for the receipt, or null when this business has no shop link.
+   Read from the form's URL field so the preview reacts as it is typed, but the
+   MODULES only exist for a saved URL — encoding happens on the server. */
+function activeQrRows(){
+  const b = activeBiz();
+  if(!b || !b.qrRows) return null;
+  // The field can be edited without saving; a stale matrix for a different URL
+  // would print a QR pointing somewhere the user has just changed away from.
+  if(fld("bizQrUrl") !== (b.biz.qrUrl || "")) return null;
+  return b.qrRows;
+}
+
 /* The Razorpay reference for the invoice currently loaded in the editor.
 
    The preview and the thermal receipt render from FORM state, and the payment
@@ -46,7 +74,13 @@ let CURRENT_ID = null;
    is better than a blank field, and the unique index catches it on save. */
 async function freshInvoiceNumber(){
   try {
-    const r = await api("/invoices/next-number");
+    // The prefix belongs to the business, not the account: 3DPrints numbers
+    // INV-3DP-… while AswinCloud numbers INV-AC-…. Sent explicitly so the
+    // number matches the business currently filling the form, rather than
+    // whichever one the account happens to default to.
+    const b = activeBiz();
+    const pre = b && b.defaults && b.defaults.prefix ? b.defaults.prefix : "";
+    const r = await api("/invoices/next-number" + (pre ? "?prefix=" + encodeURIComponent(pre) : ""));
     if(r && r.number) return r.number;
   } catch(_){ /* offline or signed out — fall through */ }
   return "INV-" + new Date().getFullYear() + "-" + String(Math.floor(Math.random()*9000)+1000);
@@ -198,6 +232,12 @@ function placeOfSupplyFromGst(gstin){
   return GST_STATES[code] ? `${GST_STATES[code]} (${code})` : "";
 }
 // All fields we re-render the preview from.
+// The QR pair sit beside BIZ_FIELDS rather than in it: BIZ_FIELDS is the set of
+// plain text fields copied verbatim between the form, localStorage and the
+// account, and these two need the extra step of being re-encoded server-side
+// before they can be printed.
+const BIZ_QR_FIELDS = ["bizQrUrl","bizQrCaption"];
+
 const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clAddr","clGst",
   "invNo","currency","issueDate","dueDate","discount","taxMode","taxRate",
   "shipping","shippingMode","shippingModeOther","status","notes"];
@@ -555,8 +595,46 @@ function render(){
 
 ${words?`<div class="pwords"><div class="lbl">Amount in words</div><p>${esc(words)}</p></div>`:""}
 ${v("notes")?`<div class="pfoot"><div class="lbl">Notes / Terms</div><p>${esc(v("notes"))}</p></div>`:""}
+${qrSvgBlock()}
 <div class="psign"><div class="sigline"></div>For ${esc(v("bizName")||"Your Business")}<br>Authorised Signatory</div>
 <div class="pnote">${esc([v("bizName"),v("bizPhone"),v("bizEmail")].filter(Boolean).join(" · "))}</div>`;
+}
+
+/* The order QR on the on-screen sheet.
+
+   Not decoration, and not optional: emailInvoice sends the A4 PDF the BROWSER
+   rendered whenever it has one, and that PDF is a bitmap of this preview. A QR
+   that appeared only in the server-side PDF would therefore be missing from
+   most emailed invoices — the ones sent from a tab with the invoice open.
+
+   Inline SVG rather than an <img>: no data-URL to build, no asynchronous decode
+   to race html2canvas, and it stays crisp when that bitmap is taken at 2x.
+   Adjacent dark modules merge into one <rect> for the same reason the PDFs do
+   it — a few dozen rects instead of several hundred. */
+function qrSvgBlock(){
+  const rows = activeQrRows();
+  if(!rows) return "";
+
+  const n = rows.length, q = QR_QUIET_MODULES, span = n + q * 2;
+  let rects = "";
+  for(let r = 0; r < n; r++){
+    const row = rows[r];
+    let c = 0;
+    while(c < n){
+      if(row.charAt(c) !== "1"){ c++; continue; }
+      let run = 1;
+      while(c + run < n && row.charAt(c + run) === "1") run++;
+      rects += `<rect x="${c+q}" y="${r+q}" width="${run}" height="1"/>`;
+      c += run;
+    }
+  }
+  const cap = fld("bizQrCaption") || "Scan for more products & order online";
+  return `<div class="pqr">
+    <svg viewBox="0 0 ${span} ${span}" width="96" height="96" shape-rendering="crispEdges"
+         role="img" aria-label="Scan to order online">
+      <rect width="${span}" height="${span}" fill="#fff"/><g fill="#000">${rects}</g></svg>
+    <div class="pqr-txt"><div class="lbl">Order online</div><p>${esc(cap)}</p></div>
+  </div>`;
 }
 
 // ── logo upload (downscaled to a data-URL) ───────────────────────
@@ -643,9 +721,27 @@ function wireLogo(){
 // Defaults are preserved from ME so we never blank them. No-op when signed out.
 async function persistProfile(){
   if(!ME) return;
-  const biz={}; BIZ_FIELDS.forEach(f=>biz[f]=$(f).value); biz.bizLogo=BIZ_LOGO;
-  ME.biz = {...(ME.biz||{}), ...biz, bizLogo: BIZ_LOGO}; // keep local mirror fresh
-  try{ await api("/profile",{method:"PUT",body:JSON.stringify({...biz, defaults: ME.defaults||{}})}); }
+  const biz={}; BIZ_FIELDS.forEach(f=>biz[f]=$(f).value);
+  biz.bizLogo=BIZ_LOGO;
+  biz.qrUrl=fld("bizQrUrl");
+  biz.qrCaption=fld("bizQrCaption");
+  ME.biz = {...(ME.biz||{}), ...biz};                  // keep local mirror fresh
+
+  // Addressed to a business, not to the account. Without the id this would edit
+  // whichever one is default — so typing in the form while 3DPrints is selected
+  // would quietly rewrite AswinCloud's letterhead.
+  const target = activeBiz();
+  const defaults = (target && target.defaults) || ME.defaults || {};
+  try{
+    await api("/profile",{method:"PUT",
+      body:JSON.stringify({...biz, businessId: target ? target.id : null, defaults})});
+    // The QR is encoded server-side, so a changed shop link only becomes
+    // printable once it has been saved and read back.
+    await refreshBusinesses();
+    const again = activeBiz();
+    if(again) BIZ_QR_CAPTION = again.biz.qrCaption || "";
+    render();
+  }
   catch(e){ /* non-fatal; stays in localStorage */ }
 }
 const persistLogo = persistProfile; // logo pick/clear reuse the same push
@@ -663,6 +759,8 @@ document.addEventListener("DOMContentLoaded", wireLogo);
 function saveBiz(){
   const data = {}; BIZ_FIELDS.forEach(f => data[f] = $(f).value);
   data.bizLogo = BIZ_LOGO;
+  data.qrUrl = fld("bizQrUrl");
+  data.qrCaption = fld("bizQrCaption");
   try{ localStorage.setItem(BIZ_KEY, JSON.stringify(data)); }catch(e){}
 }
 function loadBiz(){
@@ -670,7 +768,90 @@ function loadBiz(){
     const d = JSON.parse(localStorage.getItem(BIZ_KEY)||"{}");
     BIZ_FIELDS.forEach(f => { if(d[f]!=null) $(f).value = d[f]; });
     if(typeof d.bizLogo==="string") BIZ_LOGO = d.bizLogo;
+    if(typeof d.qrUrl==="string") $("bizQrUrl").value = d.qrUrl;
+    if(typeof d.qrCaption==="string") $("bizQrCaption").value = d.qrCaption;
   }catch(e){}
+}
+
+/* ── switching between businesses ─────────────────────────────────
+
+   The list comes from the account (ME.businesses). localStorage still holds a
+   single profile and always will: it is the signed-out fallback, where there is
+   one business by definition and nothing to switch between. So no migration is
+   needed here — an existing stored blob keeps loading into the form exactly as
+   it did, and signing in replaces it with the account's list. */
+
+function renderBizPicker(){
+  const wrap = $("bizSwitch"), sel = $("bizPicker");
+  if(!wrap || !sel) return;
+
+  // Only meaningful signed in, and only worth showing once there is a choice to
+  // make — or a way to make one, which is why it appears at a single business
+  // too (the ＋ New button is how the second one gets created).
+  wrap.hidden = !ME;
+  if(!ME) return;
+
+  sel.innerHTML = BIZ_LIST.map(b =>
+    `<option value="${esc(b.id)}"${b.id===ACTIVE_BIZ?" selected":""}>`+
+    `${esc(b.biz.bizName || "Untitled business")}</option>`).join("");
+  $("bizDelete").disabled = BIZ_LIST.length < 2;
+}
+
+/* Fill the form from one business, and adopt its defaults.
+
+   Not while an existing invoice is open: that invoice was ISSUED by a business,
+   the server will not let the business change on an edit, and quietly rewriting
+   the letterhead in front of the user would be a lie about what is stored. */
+function applyBiz(id){
+  const b = BIZ_LIST.find((x) => x.id === id);
+  if(!b) return;
+  ACTIVE_BIZ = id;
+
+  BIZ_FIELDS.forEach(f => { $(f).value = b.biz[f] || ""; });
+  BIZ_LOGO = b.biz.bizLogo || "";
+  $("bizQrUrl").value = b.biz.qrUrl || "";
+  $("bizQrCaption").value = b.biz.qrCaption || "";
+  BIZ_QR_CAPTION = b.biz.qrCaption || "";
+  syncLogoUI();
+  saveBiz();
+
+  // applyDefaults already refuses to renumber while an invoice is open.
+  applyDefaults(b.defaults || {});
+  renderBizPicker();
+  applyInference();
+  render();
+}
+
+async function createBizProfile(){
+  const name = (prompt("Name for the new business?") || "").trim();
+  if(!name) return;
+  try{
+    const r = await api("/businesses", {method:"POST", body:JSON.stringify({bizName:name})});
+    await refreshBusinesses();
+    applyBiz(r.id);
+  }catch(e){ alert("Couldn't create it: " + (e.message || e)); }
+}
+
+async function deleteBizProfile(){
+  const b = activeBiz();
+  if(!b) return;
+  if(BIZ_LIST.length < 2) return;
+  if(!confirm(`Delete "${b.biz.bizName || "this business"}"?\n\n`+
+              `Invoices already issued under it keep their details, so it can `+
+              `only be deleted if it has none.`)) return;
+  try{
+    await api("/businesses/" + encodeURIComponent(b.id), {method:"DELETE"});
+    await refreshBusinesses();
+    applyBiz((BIZ_LIST[0] || {}).id);
+  }catch(e){ alert(e.message || e); }
+}
+
+async function refreshBusinesses(){
+  const r = await api("/businesses");
+  BIZ_LIST = r.businesses || [];
+  if(!BIZ_LIST.find((x) => x.id === ACTIVE_BIZ))
+    ACTIVE_BIZ = (BIZ_LIST.find((x) => x.isDefault) || BIZ_LIST[0] || {}).id || null;
+  renderBizPicker();
 }
 
 // ── init ─────────────────────────────────────────────────────────
@@ -713,11 +894,15 @@ function init(){
   // Business fields persist locally always, and to the account (debounced) when
   // signed in — so a logged-in user's profile lives in the cloud DB, not just
   // this device.
-  BIZ_FIELDS.forEach(f => $(f).addEventListener("input", () => { saveBiz(); persistProfileDebounced(); }));
+  [...BIZ_FIELDS, ...BIZ_QR_FIELDS].forEach(f =>
+    $(f).addEventListener("input", () => { saveBiz(); persistProfileDebounced(); render(); }));
   $("btnAddItem").onclick = () => { addItem(); update(); };
   $("btnPrint").onclick = () => window.print();
   $("btnPos").onclick = downloadPosReceipt;
   $("btnPosPrint").onclick = printPosReceipt;
+  $("bizPicker").onchange = (e) => applyBiz(e.target.value);
+  $("bizNew").onclick      = createBizProfile;
+  $("bizDelete").onclick   = deleteBizProfile;
   $("btnReset").onclick = () => {
     if(!confirm("Start a new blank invoice? (Your saved business details are kept.)")) return;
     ["clName","clEmail","clAddr","clGst","notes","shipping","shippingMode",
@@ -763,6 +948,9 @@ function collect(){
     discount:v("discount"),shipping:v("shipping"),shippingMode:shipMode(),
     roundOff:$("roundOff").checked,
     status:v("status"),notes:v("notes"),
+    // Which business is issuing it. Ignored by the server on an edit — the
+    // issuing business is fixed at creation.
+    businessId: ACTIVE_BIZ,
     clName:v("clName"),clEmail:v("clEmail"),clAddr:v("clAddr"),clGst:v("clGst"),
     items:readItems().filter(i=>i.desc||i.amt).map(i=>({description:i.desc,qty:i.qty,rate:i.rate}))};
 }
@@ -857,6 +1045,21 @@ const POS_L = 1.5;                           // margin for paper wander
 const POS_R = POS_W - POS_L;                 // 46.5mm
 const POS_PAD = POS_L;                       // kept for callers reading POS_PAD
 const POS_CONTENT = POS_R - POS_L;           // 45mm of content
+
+/* QR sizing, in printer dots rather than millimetres.
+
+   The head is 384 dots across 48.00mm — exactly 8 dots/mm at 203.2dpi — and
+   print-receipt.sh thresholds at 176 with no dithering. A module that is not a
+   whole number of dots therefore straddles a dot column and is decided by
+   rounding, which shows up as ragged module edges and a code a phone gives up
+   on. 4 dots = 0.5mm keeps every module edge on a dot boundary.
+
+   At 4 dots a 29-module (version 3) code is 14.5mm, 18.5mm once the mandatory
+   4-module quiet zone is counted — comfortably inside the 45mm content width,
+   with room to spare for the larger versions a longer URL produces. */
+const DOTS_PER_MM = 8;
+const QR_DOTS = 4;
+const QR_QUIET_MODULES = 4;
 
 /* Sizes are per role rather than one global multiplier.
 
@@ -1019,6 +1222,18 @@ function posOps(){
     ops.push({t:"gap", h:1});
     lines(v("notes")).forEach(l => ops.push({t:"wrap", s:l, size:PS.prose}));
   }
+  // "Scan for other products and order online" — last, because it is an advert
+  // and everything above it is the record of the sale. Only for a business that
+  // has a shop link; the modules come from the server (see src/qr.js), so a
+  // business without one adds nothing to the receipt at all.
+  const qr = activeQrRows();
+  if(qr){
+    ops.push({t:"gap", h:2});
+    ops.push({t:"qr", rows:qr});
+    const cap = (BIZ_QR_CAPTION || "").trim() || "Scan for more products & order online";
+    ops.push({t:"center", s:cap, size:PS.footer});
+  }
+
   ops.push({t:"gap", h:1.5});
   // The stock thank-you is a nicety, not a fixture — skip it when the notes
   // already say it, rather than printing the same sentence twice.
@@ -1085,6 +1300,42 @@ function posDraw(doc, ops){
         doc.text(line, L, y);
         if(idx === keyLines.length - 1) doc.text(op.val, R, y, {align:"right"});
       });
+      continue;
+    }
+    if(op.t === "qr"){
+      // Drawn as filled squares, not an image: jsPDF's addImage would raster a
+      // PNG that pdftoppm then re-samples on the way to the print head, and two
+      // resamplings of a 1-bit pattern is how a QR stops scanning. Rectangles
+      // survive both steps.
+      //
+      // The module size is chosen in PRINTER DOTS, not millimetres. The head is
+      // 8 dots/mm and the pipeline thresholds at 176 without dithering, so a
+      // module of 3.5 dots lands half on and half off a dot column and comes out
+      // ragged. QR_DOTS is a whole number for that reason — see the note there.
+      const n = op.rows.length;
+      const mod = QR_DOTS / DOTS_PER_MM;               // mm per module
+      const span = (n + QR_QUIET_MODULES * 2) * mod;
+      const x0 = (L + R) / 2 - span / 2;               // centred in the ink window
+      y += 1.2;
+
+      doc.setFillColor(0, 0, 0);
+      for(let r = 0; r < n; r++){
+        const row = op.rows[r];
+        let c = 0;
+        while(c < n){
+          if(row.charAt(c) !== "1"){ c++; continue; }
+          // Merge a run of dark modules into one rectangle: fewer, larger fills
+          // rasterise more predictably than hundreds of abutting 0.5mm squares,
+          // which can leave hairline seams the threshold turns white.
+          let run = 1;
+          while(c + run < n && row.charAt(c + run) === "1") run++;
+          doc.rect(x0 + (c + QR_QUIET_MODULES) * mod,
+                   y + (r + QR_QUIET_MODULES) * mod,
+                   run * mod, mod, "F");
+          c += run;
+        }
+      }
+      y += span;
       continue;
     }
     // center / right / left / wrap all wrap at the content width. Centring is
@@ -1170,9 +1421,8 @@ async function downloadPosReceipt(){
    waits for the paper to actually come out, so "Printed" means printed rather
    than "queued somewhere".
 
-   A failure falls back to downloading the PDF. Printing depends on a BLE link,
-   a bridge and a roll of paper, and none of those being available is a reason
-   to leave someone with no receipt at all. */
+   A failure is reported and nothing else happens — see the catch below for why
+   it does not quietly hand over a PDF instead. */
 async function printPosReceipt(){
   await withBusy($("btnPosPrint"), "Printing…", async (done) => {
     const doc = await buildPosReceipt();
@@ -1219,12 +1469,23 @@ async function refreshMe(){
   $("btnSettings").hidden = !on;
   $("btnInvoices").hidden = !on;
   $("bizHint").textContent = on ? "(synced to your account)" : "(saved on this device)";
-  if(on && ME.biz){
+  // The account's businesses replace whatever the device had cached. Signed out,
+  // BIZ_LIST is empty and the form keeps working off localStorage exactly as it
+  // did before any of this existed.
+  BIZ_LIST = on ? (ME.businesses || []) : [];
+  ACTIVE_BIZ = on ? (ME.defaultBusinessId || (BIZ_LIST[0] || {}).id || null) : null;
+  renderBizPicker();
+
+  if(on && BIZ_LIST.length){
+    applyBiz(ACTIVE_BIZ);
+  } else if(on && ME.biz){
+    // An account with no businesses should not exist after migration 0010, but
+    // falling back to the flat profile beats blanking somebody's letterhead.
     BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; });
     if(typeof ME.biz.bizLogo==="string" && ME.biz.bizLogo) BIZ_LOGO=ME.biz.bizLogo;
     saveBiz(); syncLogoUI();
+    applyDefaults(ME.defaults);
   }
-  if(on) applyDefaults(ME.defaults);
   render();
 }
 
