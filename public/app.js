@@ -14,6 +14,11 @@ const BIZ_FIELDS = ["bizName","bizEmail","bizAddr","bizPhone","bizGst","bizPay"]
 // separately from BIZ_FIELDS and persisted alongside them.
 let BIZ_LOGO = "";
 
+// The authorised signatory's signature, as a 1-bit mask ("<w>:<h>:<base64>").
+// Same deal as the logo — uploaded, not typed, so it lives here rather than in
+// BIZ_FIELDS. See fileToSignature() for why it is a mask and not an image.
+let BIZ_SIGN = "";
+
 /* The account's businesses, and which one is filling the form.
 
    One account, several trading names — AswinCloud and Aswin3DPrints — each with
@@ -596,8 +601,19 @@ function render(){
 ${words?`<div class="pwords"><div class="lbl">Amount in words</div><p>${esc(words)}</p></div>`:""}
 ${v("notes")?`<div class="pfoot"><div class="lbl">Notes / Terms</div><p>${esc(v("notes"))}</p></div>`:""}
 ${qrSvgBlock()}
-<div class="psign"><div class="sigline"></div>For ${esc(v("bizName")||"Your Business")}<br>Authorised Signatory</div>
+<div class="psign">${signImgTag()}<div class="sigline"></div>For ${esc(v("bizName")||"Your Business")}<br>Authorised Signatory</div>
 <div class="pnote">${esc([v("bizName"),v("bizPhone"),v("bizEmail")].filter(Boolean).join(" · "))}</div>`;
+}
+
+/* The signature on the on-screen sheet.
+
+   Same reason the QR is drawn here rather than only server-side: emailInvoice
+   sends the PDF the BROWSER rendered when it has one, and that PDF is a bitmap
+   of this sheet. A signature present only in the server-side PDF would be
+   missing from most emailed invoices. */
+function signImgTag(){
+  const url = signDataUrl();
+  return url ? `<img class="psign-img" src="${esc(url)}" alt="">` : "";
 }
 
 /* The order QR on the on-screen sheet.
@@ -715,6 +731,167 @@ function wireLogoTrio(pickId, fileId, clrId){
 function wireLogo(){
   wireLogoTrio("logoPick", "logoFile", "logoClear");        // main business form
   wireLogoTrio("setLogoPick", "setLogoFile", "setLogoClear"); // settings modal
+  wireSignTrio("signPick", "signFile", "signClear");
+}
+
+/* ── the authorised signatory's signature ─────────────────────────
+
+   Stored as a 1-bit mask, "<w>:<h>:<base64>", packed HERE rather than sent as
+   an image. Two reasons, both in src/signature.js at length: the Worker would
+   otherwise need a PNG decoder (an inflater) purely to find the ink, and one
+   bit per pixel is what makes the PDF and the thermal receipt render the same
+   marks rather than each thresholding a greyscale image its own way. */
+
+const SIGN_MAX = 720;      // px on the longest edge — ~34KB packed, ~300dpi on A4
+const SIGN_THRESHOLD = 176; // the printer's own cut-off, so WYSIWYG on paper
+
+function fileToSignature(file){
+  return new Promise((resolve, reject) => {
+    if(!file) return reject(new Error("no file"));
+    if(!/^image\//.test(file.type)) return reject(new Error("Please choose an image file."));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("That image couldn't be loaded."));
+      img.onload = () => {
+        /* Two passes, because the ink has to be FOUND before it can be sized.
+
+           A signature exported from a phone is a small squiggle floating in a
+           large transparent canvas — this one is 1399x584 of ink inside
+           1536x1024. Packing that verbatim stores mostly emptiness and, worse,
+           makes "36mm wide on the receipt" mean 36mm of mostly blank space with
+           a small signature in the middle. So: rasterise, find the bounding box
+           of the actual ink, then scale THAT to the target size. */
+        const NATIVE = 1600;
+        const s0 = Math.min(1, NATIVE/Math.max(img.width, img.height));
+        const w0 = Math.max(1, Math.round(img.width*s0));
+        const h0 = Math.max(1, Math.round(img.height*s0));
+        const c0 = document.createElement("canvas"); c0.width=w0; c0.height=h0;
+        const x0 = c0.getContext("2d");
+        // White first: the source is ink on TRANSPARENCY, and transparency has
+        // to become paper. Composite straight onto the canvas and every clear
+        // pixel reads as black.
+        x0.fillStyle = "#fff"; x0.fillRect(0,0,w0,h0);
+        x0.drawImage(img, 0, 0, w0, h0);
+
+        const d0 = x0.getImageData(0,0,w0,h0).data;
+        const dark = (i) => (0.299*d0[i] + 0.587*d0[i+1] + 0.114*d0[i+2]) < SIGN_THRESHOLD;
+        let minX=w0, minY=h0, maxX=-1, maxY=-1;
+        for(let y=0; y<h0; y++){
+          for(let x=0; x<w0; x++){
+            if(!dark((y*w0 + x)*4)) continue;
+            if(x<minX) minX=x; if(x>maxX) maxX=x;
+            if(y<minY) minY=y; if(y>maxY) maxY=y;
+          }
+        }
+        if(maxX < 0) return reject(new Error(
+          "That image has no dark strokes to use — a signature needs to be dark ink on a light or transparent background."));
+
+        // A hair of margin so the outermost stroke is not shaved by rounding.
+        const pad = 2;
+        minX = Math.max(0, minX-pad); minY = Math.max(0, minY-pad);
+        maxX = Math.min(w0-1, maxX+pad); maxY = Math.min(h0-1, maxY+pad);
+        const cw = maxX-minX+1, ch = maxY-minY+1;
+
+        const scale = Math.min(1, SIGN_MAX/Math.max(cw, ch));
+        const w = Math.max(1, Math.round(cw*scale));
+        const h = Math.max(1, Math.round(ch*scale));
+        const c = document.createElement("canvas"); c.width=w; c.height=h;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#fff"; ctx.fillRect(0,0,w,h);
+        ctx.drawImage(c0, minX, minY, cw, ch, 0, 0, w, h);
+
+        const px = ctx.getImageData(0,0,w,h).data;
+        const stride = (w + 7) >> 3;
+        const bits = new Uint8Array(stride*h);
+        for(let y=0; y<h; y++){
+          for(let x=0; x<w; x++){
+            const i = (y*w + x)*4;
+            // Rec. 601 luma, the weighting the print pipeline's own greyscale
+            // conversion uses, so what is stored is what gets printed.
+            const lum = 0.299*px[i] + 0.587*px[i+1] + 0.114*px[i+2];
+            if(lum < SIGN_THRESHOLD) bits[y*stride + (x>>3)] |= 1 << (7-(x&7));
+          }
+        }
+
+        let bin = "";
+        for(let i=0; i<bits.length; i++) bin += String.fromCharCode(bits[i]);
+        resolve(`${w}:${h}:${btoa(bin)}`);
+      };
+      img.src = String(reader.result||"");
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/* The mask as something a browser can draw: a data-URL, built once and cached.
+
+   jsPDF's addImage and an <img> both want a real image, and rebuilding this on
+   every render() — which runs on each keystroke — would repaint a 720px canvas
+   for nothing. */
+let _signCache = { key:"", url:"" };
+function signDataUrl(){
+  const mask = BIZ_SIGN;
+  if(!mask) return "";
+  if(_signCache.key === mask) return _signCache.url;
+
+  const m = /^(\d{1,5}):(\d{1,5}):([A-Za-z0-9+/=]+)$/.exec(mask);
+  if(!m) return "";
+  const w = Number(m[1]), h = Number(m[2]);
+  let bin; try{ bin = atob(m[3]); }catch(_){ return ""; }
+  const stride = (w + 7) >> 3;
+  if(bin.length !== stride*h) return "";
+
+  // The receipt sizes by width and needs the true proportions, or a signature
+  // that is not roughly 2.4:1 comes out stretched.
+  SIGN_RATIO = h / w;
+
+  const c = document.createElement("canvas"); c.width=w; c.height=h;
+  const ctx = c.getContext("2d");
+  const img = ctx.createImageData(w, h);
+  for(let y=0; y<h; y++){
+    for(let x=0; x<w; x++){
+      const on = (bin.charCodeAt(y*stride + (x>>3)) >> (7-(x&7))) & 1;
+      const i = (y*w + x)*4;
+      // Ink is opaque navy; everything else is transparent, so the signature
+      // sits on the sheet rather than in a white box.
+      img.data[i] = on ? 13 : 255;
+      img.data[i+1] = on ? 28 : 255;
+      img.data[i+2] = on ? 74 : 255;
+      img.data[i+3] = on ? 255 : 0;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  _signCache = { key: mask, url: c.toDataURL("image/png") };
+  return _signCache.url;
+}
+
+function syncSignUI(){
+  const img=$("signPreview"); if(!img) return;
+  const url = signDataUrl();
+  if(url){ img.src=url; img.hidden=false; $("signPlaceholder").hidden=true; $("signClear").hidden=false; }
+  else { img.hidden=true; $("signPlaceholder").hidden=false; $("signClear").hidden=true; }
+}
+
+function wireSignTrio(pickId, fileId, clrId){
+  const pick=$(pickId), file=$(fileId), clr=$(clrId);
+  if(!pick) return;
+  pick.onclick = () => file.click();
+  file.onchange = async () => {
+    const f = file.files && file.files[0];
+    file.value = "";
+    if(!f) return;
+    try{
+      BIZ_SIGN = await fileToSignature(f);
+      saveBiz(); syncSignUI(); render();
+      if(ME) persistProfile();
+    }catch(e){ alert(e.message || "Could not use that signature."); }
+  };
+  clr.onclick = () => {
+    BIZ_SIGN = ""; saveBiz(); syncSignUI(); render();
+    if(ME) persistProfile();
+  };
 }
 
 // Push the current business profile (fields + logo) to the account, best-effort.
@@ -725,6 +902,7 @@ async function persistProfile(){
   biz.bizLogo=BIZ_LOGO;
   biz.qrUrl=fld("bizQrUrl");
   biz.qrCaption=fld("bizQrCaption");
+  biz.bizSign=BIZ_SIGN;
   ME.biz = {...(ME.biz||{}), ...biz};                  // keep local mirror fresh
 
   // Addressed to a business, not to the account. Without the id this would edit
@@ -761,6 +939,7 @@ function saveBiz(){
   data.bizLogo = BIZ_LOGO;
   data.qrUrl = fld("bizQrUrl");
   data.qrCaption = fld("bizQrCaption");
+  data.bizSign = BIZ_SIGN;
   try{ localStorage.setItem(BIZ_KEY, JSON.stringify(data)); }catch(e){}
 }
 function loadBiz(){
@@ -770,6 +949,7 @@ function loadBiz(){
     if(typeof d.bizLogo==="string") BIZ_LOGO = d.bizLogo;
     if(typeof d.qrUrl==="string") $("bizQrUrl").value = d.qrUrl;
     if(typeof d.qrCaption==="string") $("bizQrCaption").value = d.qrCaption;
+    if(typeof d.bizSign==="string") BIZ_SIGN = d.bizSign;
   }catch(e){}
 }
 
@@ -809,10 +989,12 @@ function applyBiz(id){
 
   BIZ_FIELDS.forEach(f => { $(f).value = b.biz[f] || ""; });
   BIZ_LOGO = b.biz.bizLogo || "";
+  BIZ_SIGN = b.biz.bizSign || "";
   $("bizQrUrl").value = b.biz.qrUrl || "";
   $("bizQrCaption").value = b.biz.qrCaption || "";
   BIZ_QR_CAPTION = b.biz.qrCaption || "";
   syncLogoUI();
+  syncSignUI();
   saveBiz();
 
   // applyDefaults already refuses to renumber while an invoice is open.
@@ -859,6 +1041,7 @@ function todayISO(d=0){ const t=new Date(); t.setDate(t.getDate()+d); return t.t
 function init(){
   loadBiz();
   syncLogoUI();
+  syncSignUI();
   if(!$("issueDate").value) $("issueDate").value = todayISO(0);
   // Due date is optional — left blank by default. A user's Settings "due in
   // days" default (applyDefaults) will fill it if they've set one.
@@ -1061,6 +1244,15 @@ const DOTS_PER_MM = 8;
 const QR_DOTS = 4;
 const QR_QUIET_MODULES = 4;
 
+/* Signature width on the receipt: 36mm = 288 dots of the 360 printable.
+
+   Chosen by rasterising the real signature at 203.2dpi and thresholding at 176
+   — the literal pipeline — at 30, 36, 40 and 45mm. All four stayed legible; 36
+   leaves a margin either side and costs about 12mm of roll. The aspect ratio is
+   read from the mask so a taller or wider signature is not distorted. */
+const SIGN_MM = 36;
+let SIGN_RATIO = 0.42;
+
 /* Sizes are per role rather than one global multiplier.
 
    A single scale is capped by the receipt's longest line, and that line is
@@ -1222,6 +1414,15 @@ function posOps(){
     ops.push({t:"gap", h:1});
     lines(v("notes")).forEach(l => ops.push({t:"wrap", s:l, size:PS.prose}));
   }
+  // The signature, above the QR and the thank-you: it closes the record of the
+  // sale, and the advert comes after it.
+  const signUrl = signDataUrl();
+  if(signUrl){
+    ops.push({t:"gap", h:1.5});
+    ops.push({t:"sign", url:signUrl, w:SIGN_MM});
+    ops.push({t:"center", s:"Authorised Signatory", size:PS.footer});
+  }
+
   // "Scan for other products and order online" — last, because it is an advert
   // and everything above it is the record of the sale. Only for a business that
   // has a shop link; the modules come from the server (see src/qr.js), so a
@@ -1300,6 +1501,19 @@ function posDraw(doc, ops){
         doc.text(line, L, y);
         if(idx === keyLines.length - 1) doc.text(op.val, R, y, {align:"right"});
       });
+      continue;
+    }
+    if(op.t === "sign"){
+      // A raster, unlike the QR — a signature is not a grid of squares. jsPDF
+      // embeds it and pdftoppm resamples it on the way to the head; measured
+      // through that exact pipeline it stays legible down to 30mm, and 36mm is
+      // what was chosen. Width is a whole number of dots for the same reason
+      // QR_DOTS is.
+      const w = op.w;
+      const h = w * (SIGN_RATIO || 0.42);
+      y += 1.2;
+      doc.addImage(op.url, "PNG", (L + R) / 2 - w / 2, y, w, h, undefined, "FAST");
+      y += h;
       continue;
     }
     if(op.t === "qr"){
@@ -1483,7 +1697,8 @@ async function refreshMe(){
     // falling back to the flat profile beats blanking somebody's letterhead.
     BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; });
     if(typeof ME.biz.bizLogo==="string" && ME.biz.bizLogo) BIZ_LOGO=ME.biz.bizLogo;
-    saveBiz(); syncLogoUI();
+    if(typeof ME.biz.bizSign==="string") BIZ_SIGN=ME.biz.bizSign;
+    saveBiz(); syncLogoUI(); syncSignUI();
     applyDefaults(ME.defaults);
   }
   render();

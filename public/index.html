@@ -72,6 +72,16 @@
         <label class="col2">Order / shop link <span class="hint">(printed as a QR — leave blank for none)</span>
           <input id="bizQrUrl" type="url" placeholder="https://3d-prints.aswincloud.com"></label>
         <label class="col2">QR caption<input id="bizQrCaption" placeholder="Scan for more products &amp; order online"></label>
+        <div class="col2 logo-field">
+          <span class="logo-lbl">Signature <span class="hint">(printed above "Authorised Signatory")</span></span>
+          <div class="logo-row">
+            <img id="signPreview" class="logo-thumb sign-thumb" alt="" hidden>
+            <div id="signPlaceholder" class="logo-thumb logo-empty sign-thumb">—</div>
+            <input id="signFile" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+            <button type="button" id="signPick" class="btn ghost sm">Upload signature</button>
+            <button type="button" id="signClear" class="btn ghost sm" hidden>Remove</button>
+          </div>
+        </div>
       </div>
     </details>
 

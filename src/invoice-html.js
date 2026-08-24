@@ -2,6 +2,7 @@
 // Kept email-safe: inline styles, table layout, no <style>/@page.
 
 import { qrMatrix, qrPngBase64 } from "./qr.js";
+import { signPngBase64 } from "./signature.js";
 
 // Exported so the public pay page escapes with the same function this template
 // does, rather than carrying a second copy that can drift from it.
@@ -309,13 +310,38 @@ export function qrAttachment(inv) {
   };
 }
 
+/* The signature, as a CID attachment.
+
+   Same CID mechanism as the logo and the QR — mail clients strip data: URIs.
+   The stored value is a 1-bit mask rather than an image, so the pixels are
+   built here with the encoder in bitmap.js.
+
+   Returns null when the business has no signature, which is also what keeps
+   this off the public pay page: sharePage never asks for one. */
+export function signAttachment(inv) {
+  const content = signPngBase64(inv && inv.biz_sign);
+  if (!content) return null;
+
+  const cid = "signature@invoicer";
+  return {
+    src: `cid:${cid}`,
+    attachment: {
+      filename: "signature.png",
+      content,
+      content_id: cid,
+      content_type: "image/png",
+    },
+  };
+}
+
 // `logoSrc` overrides what the <img> points at, so the same template serves both
 // the email (a cid: reference) and any browser context (the data: URI as before).
 // Defaulting to inv.biz_logo keeps every existing caller working unchanged.
 // `payUrl` adds a Pay button to the emailed copy. Optional and last, so every
 // existing caller (ingest.js, emailInvoice, and the public pay page — which has
 // its own button and must NOT get a second one) is unaffected by its addition.
-export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qrSrc = null) {
+export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qrSrc = null,
+                                   signSrc = null) {
   const cur = inv.currency || "₹";
   const t = computeTotals(inv, items);
   const initial = (inv.biz_name || "I").charAt(0).toUpperCase();
@@ -430,8 +456,12 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qr
   ${orderQr}
   <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:34px">
    <tr><td align="right">
-     <div style="display:inline-block;border-top:1px solid ${RULE};padding-top:6px;min-width:190px;text-align:center;font-size:10px;color:${SOFT}">
-       For ${esc(inv.biz_name || "Your Business")}<br>Authorised Signatory</div>
+     <div style="display:inline-block;min-width:190px;text-align:center">
+       ${signSrc ? `<img src="${esc(signSrc)}" alt="" height="46"
+            style="display:block;margin:0 auto -6px;max-width:180px">` : ""}
+       <div style="border-top:1px solid ${RULE};padding-top:6px;font-size:10px;color:${SOFT}">
+         For ${esc(inv.biz_name || "Your Business")}<br>Authorised Signatory</div>
+     </div>
    </td></tr>
   </table>
   <div style="margin-top:22px;text-align:center;color:${SOFT};font-size:10px;font-family:${MONO};letter-spacing:.3px;border-top:1px solid ${RULE};padding-top:13px">${esc([inv.biz_name, inv.biz_phone, inv.biz_email].filter(Boolean).join(" · "))}</div>

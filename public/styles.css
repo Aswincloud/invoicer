@@ -219,6 +219,13 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
 .pfoot{margin-top:28px;color:#4b5563;white-space:pre-line}
 /* Order QR on the sheet. Fixed colours, like the rest of the invoice: this is a
    document, and it must look the same whether the workspace is light or dark. */
+/* A signature is wide and short; the square logo thumbnail would letterbox it
+   into something unreadable at a glance. */
+.sign-thumb{width:104px;object-fit:contain}
+/* On the sheet: sits ON the rule, so descenders cross it the way a real
+   signature does. Fixed colours — this is the document, not the workspace. */
+.psign-img{display:block;margin:0 auto -8px;max-width:190px;max-height:52px;object-fit:contain}
+
 .pqr{margin-top:26px;display:flex;align-items:center;gap:13px}
 .pqr svg{border:1px solid var(--paper-rule);border-radius:6px;display:block;flex:none}
 .pqr-txt{color:#4b5563;font-size:11px}

@@ -24,7 +24,8 @@
 // that it is an open "email anyone an invoice from Aswin's business" endpoint.
 
 import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex } from "./lib.js";
-import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment } from "./invoice-html.js";
+import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
+         signAttachment } from "./invoice-html.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
 import { bizFields, defaultBusiness } from "./business.js";
 
@@ -171,10 +172,12 @@ export async function ingestOrder(request, env) {
   // initial badge rather than rendering a broken <img>.
   const logo = logoAttachment(rendered.biz_logo);
   const qr = qrAttachment(rendered);
+  const sign = signAttachment(rendered);
 
   const attachments = [];
   if (logo) attachments.push(logo.attachment);
   if (qr) attachments.push(qr.attachment);
+  if (sign) attachments.push(sign.attachment);
 
   // A PDF copy, generated here rather than in a browser — there is no browser on
   // this path. Wrapped, because a layout bug in the generator must not cost the
@@ -198,7 +201,8 @@ export async function ingestOrder(request, env) {
     subject: `Invoice ${inv.number} — order ${receipt}`,
     // No payUrl: a shop order is already paid, so the fourth argument stays null
     // and the QR goes in the fifth.
-    html: renderInvoiceEmail(rendered, items, logo ? logo.src : "", null, qr ? qr.src : ""),
+    html: renderInvoiceEmail(rendered, items, logo ? logo.src : "", null, qr ? qr.src : "",
+                             sign ? sign.src : ""),
     text: `Invoice ${inv.number} for order ${receipt}. Total ${inv.currency} ${total.toFixed(2)}. A PDF copy is attached.`,
     attachments: attachments.length ? attachments : undefined,
   });

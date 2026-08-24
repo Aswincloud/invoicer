@@ -33,6 +33,11 @@
 import { paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
          itemUnits, fmtUnits } from "./invoice-html.js";
 import { qrMatrix, QR_QUIET } from "./qr.js";
+import { parseSignature } from "./signature.js";
+import { storedDeflate } from "./bitmap.js";
+
+// The navy of the pen it was written with, rather than flat black.
+const SIGN_INK = "0.05 0.11 0.29";
 
 const PT = 1;                     // PDF unit is the point
 const PAGE_W = 595.28;            // A4
@@ -159,6 +164,19 @@ class Page {
 
   rect(x, y, w, h, color) {
     this.ops.push(`${color} rg ${x.toFixed(2)} ${y.toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re f 0 0 0 rg`);
+  }
+
+  /* Place an image XObject. The `cm` matrix IS the placement: a PDF image is
+     always drawn into the unit square, so the scale terms are the width and
+     height in points and the translation is the bottom-left corner.
+
+     Wrapped in q/Q because that matrix and the fill colour must not leak into
+     whatever is drawn next. For an /ImageMask the fill colour is what the ink
+     comes out as — the image carries no colour of its own. */
+  image(name, x, y, w, h, color = "0 0 0") {
+    this.ops.push(
+      `q ${color} rg ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm ` +
+      `/${name} Do Q`);
   }
 
   toStream() { return this.ops.join("\n"); }
@@ -391,6 +409,18 @@ export function renderInvoicePdf(inv, items, totals) {
   // Bottom right, above the footer rule, on the LAST page only — a signature
   // block repeated on every page would read as several separate approvals.
   const sigY = Math.max(y - 26, MARGIN + 66);
+
+  // The signature itself, sitting ON the rule rather than above it — which is
+  // how a signed document looks, and what stops it reading as a second logo.
+  // Bottom-aligned a couple of points under the line so descenders cross it.
+  const images = [];
+  const sig = parseSignature(inv.biz_sign);
+  if (sig) {
+    const sw = 132, sh = sw * (sig.h / sig.w);
+    images.push({ name: "Sig", sig });
+    p.image("Sig", PAGE_W - MARGIN - sw, sigY - 3, sw, sh, SIGN_INK);
+  }
+
   p.line(PAGE_W - MARGIN - 170, sigY, PAGE_W - MARGIN, sigY, { width: 0.5 });
   p.text(PAGE_W - MARGIN, sigY - 12, "For " + (inv.biz_name || "Your Business"),
          { size: 8, color: "0.36 0.39 0.45", align: "right" });
@@ -411,7 +441,7 @@ export function renderInvoicePdf(inv, items, totals) {
     }
   });
 
-  return assemble(pages);
+  return assemble(pages, images);
 }
 
 // ── PDF file assembly ────────────────────────────────────────────────────────
@@ -421,7 +451,7 @@ export function renderInvoicePdf(inv, items, totals) {
 // them directly — which is why the file is built as bytes and measured as bytes,
 // not as a string. A single multi-byte character anywhere would shift every
 // offset after it and produce a file that opens as blank or corrupt.
-function assemble(pages) {
+function assemble(pages, images = []) {
   /* Latin-1, one byte per character — NOT TextEncoder.
 
      The base-14 fonts use WinAnsiEncoding, which is Latin-1 for everything
@@ -458,9 +488,19 @@ function assemble(pages) {
   //   3        Font Helvetica
   //   4        Font Helvetica-Bold
   //   5..      Page objects, then their content streams
+  //   then     one XObject per image
   const firstPageObj = 5;
   const pageIds = pages.map((_, i) => firstPageObj + i * 2);
   const contentIds = pages.map((_, i) => firstPageObj + i * 2 + 1);
+  const firstImageObj = firstPageObj + pages.length * 2;
+  const imageIds = images.map((_, i) => firstImageObj + i);
+
+  // Declared on every page rather than only the one that draws it. Naming a
+  // resource a page never uses is legal and free; omitting one it does use is
+  // a broken page, and the signature moves to whichever page ends up last.
+  const xobjects = images.length
+    ? `/XObject << ${images.map((im, i) => `/${im.name} ${imageIds[i]} 0 R`).join(" ")} >> `
+    : "";
 
   push("%PDF-1.4\n");
   // A binary comment marks the file as containing binary data — some tools
@@ -480,7 +520,7 @@ function assemble(pages) {
   pages.forEach((pg, i) => {
     obj(pageIds[i],
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PAGE_W} ${PAGE_H}] ` +
-      `/Resources << /Font << /${FONT_REG} 3 0 R /${FONT_BOLD} 4 0 R >> >> ` +
+      `/Resources << /Font << /${FONT_REG} 3 0 R /${FONT_BOLD} 4 0 R >> ${xobjects}>> ` +
       `/Contents ${contentIds[i]} 0 R >>`);
 
     const stream = pg.toStream();
@@ -490,6 +530,31 @@ function assemble(pages) {
     objects[contentIds[i]] = length;
     push(`${contentIds[i]} 0 obj\n<< /Length ${bytes.length} >>\nstream\n`);
     push(bytes);
+    push("\nendstream\nendobj\n");
+  });
+
+  /* Image XObjects.
+
+     /ImageMask, not a greyscale image: the data is one bit per pixel and an
+     image mask has no colour space of its own — it stencils the current fill
+     colour, which is what lets the signature print in ink-navy rather than
+     flat black, and keeps a 720px signature around 25KB.
+
+     /Decode [1 0] flips the default sense so a SET bit paints. That matches how
+     the mask is packed (bit set = ink) in signature.js, and getting it backwards
+     produces a solid rectangle with the signature knocked out of it — which is
+     why the tests rasterise the page rather than trusting the object.
+
+     The bit rows are already byte-aligned, which is what PDF image data
+     requires, so the bytes go in untouched. */
+  images.forEach((im, i) => {
+    const body = storedDeflate(im.sig.bits);
+    objects[imageIds[i]] = length;
+    push(`${imageIds[i]} 0 obj\n` +
+         `<< /Type /XObject /Subtype /Image /Width ${im.sig.w} /Height ${im.sig.h} ` +
+         `/ImageMask true /Decode [1 0] /Filter /FlateDecode /Length ${body.length} >>\n` +
+         `stream\n`);
+    push(Uint8Array.from(body));
     push("\nendstream\nendobj\n");
   });
 

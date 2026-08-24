@@ -1,0 +1,26 @@
+-- The authorised signatory's actual signature.
+--
+-- Every invoice already prints a rule with "For <business>" and "Authorised
+-- Signatory" beneath it, and that rule has always been left blank to be signed
+-- by hand. This stores the signature so it prints filled in — on the A4
+-- invoice, on the emailed copy and on the counter receipt.
+--
+-- Per business, beside biz_logo, for the same reason everything else moved onto
+-- this table in 0010: two trading names are two legal entities and they do not
+-- share a signatory. One may have a signature and the other none.
+--
+-- NOT an image file. The value is a 1-bit mask, "<w>:<h>:<base64>", rows padded
+-- to byte boundaries, a set bit meaning ink. A signature is pen on paper, so
+-- one bit per pixel is the honest representation, and it is the only one that
+-- makes the thermal receipt and the PDF agree exactly rather than approximately.
+--
+-- It is produced in the BROWSER at upload. PNG is deflate-compressed, so a
+-- server that accepted a PNG would need a full inflater just to discover where
+-- the ink is; the browser already has a canvas and does the same downscaling
+-- for biz_logo. Everything downstream is then trivial: the PDF embeds the bits
+-- as an /ImageMask, and the emailed copy re-encodes them with the PNG writer
+-- that already exists in src/qr.js.
+--
+-- No backfill: nobody has one yet, and an empty column renders exactly the
+-- blank rule that is printed today.
+ALTER TABLE businesses ADD COLUMN biz_sign TEXT DEFAULT '';
