@@ -731,7 +731,8 @@ function wireLogoTrio(pickId, fileId, clrId){
 function wireLogo(){
   wireLogoTrio("logoPick", "logoFile", "logoClear");        // main business form
   wireLogoTrio("setLogoPick", "setLogoFile", "setLogoClear"); // settings modal
-  wireSignTrio("signPick", "signFile", "signClear");
+  wireSignTrio("signPick", "signFile", "signClear");          // main business form
+  wireSignTrio("setSignPick", "setSignFile", "setSignClear"); // settings modal
 }
 
 /* ── the authorised signatory's signature ─────────────────────────
@@ -867,11 +868,16 @@ function signDataUrl(){
   return _signCache.url;
 }
 
+// Both the main business form and the settings modal, since either may be on
+// screen — same shape as syncLogoUI.
 function syncSignUI(){
-  const img=$("signPreview"); if(!img) return;
   const url = signDataUrl();
-  if(url){ img.src=url; img.hidden=false; $("signPlaceholder").hidden=true; $("signClear").hidden=false; }
-  else { img.hidden=true; $("signPlaceholder").hidden=false; $("signClear").hidden=true; }
+  [["signPreview","signPlaceholder","signClear"],
+   ["setSignPreview","setSignPlaceholder","setSignClear"]].forEach(([pv,ph,cl])=>{
+    const img=$(pv); if(!img) return;
+    if(url){ img.src=url; img.hidden=false; $(ph).hidden=true; $(cl).hidden=false; }
+    else { img.hidden=true; $(ph).hidden=false; $(cl).hidden=true; }
+  });
 }
 
 function wireSignTrio(pickId, fileId, clrId){
@@ -1808,7 +1814,8 @@ const SET_FIELDS = {  // modal field id -> defaults key
   setTaxRate:"taxRate", setDiscount:"discount", setDueDays:"dueDays", setNotes:"notes",
 };
 const SET_BIZ = { setBizName:"bizName", setBizEmail:"bizEmail", setBizAddr:"bizAddr",
-  setBizPhone:"bizPhone", setBizGst:"bizGst", setBizPay:"bizPay" };
+  setBizPhone:"bizPhone", setBizGst:"bizGst", setBizPay:"bizPay",
+  setQrUrl:"qrUrl", setQrCaption:"qrCaption" };
 
 // Apply saved defaults to a fresh invoice. Only fills fields the user left at
 // their generic default, so it never clobbers something already typed.
@@ -1833,10 +1840,15 @@ function applyDefaults(d){
 function openSettings(){
   if(!ME) return;
   $("setMsg").textContent=""; $("setMsg").className="msg";
-  const b=ME.biz||{}, d=ME.defaults||{};
+  // The business currently filling the form. saveSettings writes to that one,
+  // so reading the account default here would show one business's details and
+  // save them over another's.
+  const active = activeBiz();
+  const b = (active && active.biz) || ME.biz || {};
+  const d = (active && active.defaults) || ME.defaults || {};
   for(const [id,k] of Object.entries(SET_BIZ)) $(id).value = b[k]||"";
   for(const [id,k] of Object.entries(SET_FIELDS)) $(id).value = (d[k]!=null?d[k]:"");
-  syncLogoUI();   // show the current logo in the modal's thumbnail
+  syncLogoUI(); syncSignUI();   // current logo + signature in the modal
   $("setModal").hidden=false;
 }
 function closeSettings(){ $("setModal").hidden=true; }
@@ -1844,13 +1856,26 @@ function closeSettings(){ $("setModal").hidden=true; }
 async function saveSettings(){
   const msg=$("setMsg"); msg.className="msg"; msg.textContent="Saving…";
   const biz={}; for(const [id,k] of Object.entries(SET_BIZ)) biz[k]=$(id).value;
-  biz.bizLogo = BIZ_LOGO;   // include the logo so saving Settings doesn't blank it
+  biz.bizLogo = BIZ_LOGO;
+  biz.bizSign = BIZ_SIGN;
   const defaults={}; for(const [id,k] of Object.entries(SET_FIELDS)) defaults[k]=$(id).value;
   try{
-    await api("/profile",{method:"PUT",body:JSON.stringify({...biz, defaults})});
+    // businessId, or this edits whichever business is DEFAULT rather than the
+    // one currently filling the form. Fields this modal does not know about —
+    // the shop link, the QR caption, the signature — are simply absent, and
+    // the server now leaves absent fields alone instead of blanking them.
+    await api("/profile",{method:"PUT",
+      body:JSON.stringify({...biz, businessId: ACTIVE_BIZ, defaults})});
     ME.biz={...ME.biz,...biz}; ME.defaults=defaults;
     // reflect business fields into the live form + localStorage immediately
-    BIZ_FIELDS.forEach(f=>{ if(biz[f]!=null) $(f).value=biz[f]; }); saveBiz(); render();
+    BIZ_FIELDS.forEach(f=>{ if(biz[f]!=null) $(f).value=biz[f]; });
+    if(biz.qrUrl!=null) $("bizQrUrl").value = biz.qrUrl;
+    if(biz.qrCaption!=null) $("bizQrCaption").value = biz.qrCaption;
+    saveBiz();
+    // The QR is encoded server-side, so a shop link changed here only becomes
+    // printable once it has been saved and read back.
+    await refreshBusinesses();
+    render();
     msg.className="msg ok"; msg.textContent="Saved ✓";
     setTimeout(closeSettings, 700);
   }catch(e){ msg.className="msg err"; msg.textContent="Save failed: "+e.message; }

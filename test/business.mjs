@@ -15,7 +15,8 @@
 // business_id, and the checks below drive the real resolution path with the
 // account's default pointed at the OTHER business throughout.
 
-import { attachBusiness, bizFields, defaultBusiness, publicBusiness } from "../src/business.js";
+import { attachBusiness, bizFields, defaultBusiness, publicBusiness,
+         businessPatch } from "../src/business.js";
 import { renderInvoiceEmail, computeTotals, qrAttachment } from "../src/invoice-html.js";
 import { renderInvoicePdf } from "../src/invoice-pdf.js";
 
@@ -136,6 +137,26 @@ try { blankHtml = renderInvoiceEmail(blankInv, ITEMS); } catch (e) { console.log
 check("still renders an email rather than throwing", Boolean(blankHtml) && blankHtml.length > 500);
 check("the line items are still on it", blankHtml && blankHtml.includes("Benchy"));
 check("no 'undefined' leaked into the output", blankHtml && !blankHtml.includes("undefined"));
+
+console.log("\n— a partial save leaves absent fields alone —");
+// The Settings modal sends its own subset of fields. When a missing key meant
+// "", every save through it silently blanked whatever it did not know about:
+// first the logo, then the shop link, then the signature. Absent must mean
+// untouched, or this keeps costing a field per feature.
+const settingsSave = businessPatch({
+  bizName: "Aswin3DPrints", bizEmail: "shop@aswincloud.com", bizLogo: "",
+  defaults: { currency: "₹", prefix: "INV-3DP" },
+});
+check("updates what it was given", settingsSave.cols.includes("biz_name")
+  && settingsSave.cols.includes("def_prefix"));
+check("does NOT touch the signature", !settingsSave.cols.includes("biz_sign"),
+  settingsSave.cols.join(","));
+check("does NOT touch the shop link", !settingsSave.cols.includes("qr_url"));
+check("an empty string IS a value", businessPatch({ bizSign: "" }).cols.includes("biz_sign"),
+  "clearing has to be possible, so absent and empty are different things");
+check("nothing to write yields nothing", businessPatch({}).cols.length === 0);
+check("oversized uploads are clamped",
+  businessPatch({ bizSign: "x".repeat(300000) }).vals[0].length === 200000);
 
 console.log("\n— what the browser is told —");
 const pub = publicBusiness(PRINTS);

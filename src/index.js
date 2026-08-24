@@ -11,7 +11,7 @@ import { printReceipt } from "./print.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
 import {
   attachBusiness, businessById, defaultBusiness, publicBusiness,
-  businessValues, BIZ_WRITE_COLUMNS,
+  businessValues, businessPatch, BIZ_WRITE_COLUMNS,
 } from "./business.js";
 import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
@@ -266,9 +266,14 @@ async function saveProfile(env, user, b) {
     : await defaultBusiness(env, user.id);
   if (!target) return bad("no such business", 404);
 
-  const sets = BIZ_WRITE_COLUMNS.split(",").map((c) => `${c.trim()}=?`).join(",");
-  await env.DB.prepare(`UPDATE businesses SET ${sets} WHERE id=? AND user_id=?`)
-    .bind(...businessValues(b), target.id, user.id).run();
+  // Only what the payload carries. The Settings modal sends a subset, and
+  // blanking the rest is how the signature and the shop link used to vanish.
+  const { cols, vals } = businessPatch(b);
+  if (cols.length) {
+    await env.DB.prepare(
+      `UPDATE businesses SET ${cols.map((c) => `${c}=?`).join(",")} WHERE id=? AND user_id=?`
+    ).bind(...vals, target.id, user.id).run();
+  }
 
   return json({ ok: true, id: target.id });
 }
@@ -299,11 +304,12 @@ async function updateBusiness(env, user, id, b) {
   const target = await businessById(env, user.id, id);
   if (!target) return bad("no such business", 404);
 
-  const sets = BIZ_WRITE_COLUMNS.split(",").map((c) => `${c.trim()}=?`).join(",");
-  const batch = [
-    env.DB.prepare(`UPDATE businesses SET ${sets} WHERE id=? AND user_id=?`)
-      .bind(...businessValues(b), id, user.id),
-  ];
+  const { cols, vals } = businessPatch(b);
+  const batch = cols.length ? [
+    env.DB.prepare(
+      `UPDATE businesses SET ${cols.map((c) => `${c}=?`).join(",")} WHERE id=? AND user_id=?`
+    ).bind(...vals, id, user.id),
+  ] : [];
   if (b.makeDefault) {
     batch.unshift(env.DB.prepare("UPDATE businesses SET is_default=0 WHERE user_id=?").bind(user.id));
     batch.push(env.DB.prepare("UPDATE businesses SET is_default=1 WHERE id=? AND user_id=?")

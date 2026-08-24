@@ -212,6 +212,19 @@
       <label>Phone<input id="setBizPhone"></label>
       <label>GSTIN / Tax ID<input id="setBizGst"></label>
       <label class="col2">Payment details<textarea id="setBizPay" rows="2"></textarea></label>
+      <label class="col2">Order / shop link <span class="hint">(printed as a QR — leave blank for none)</span>
+        <input id="setQrUrl" type="url" placeholder="https://3d-prints.aswincloud.com"></label>
+      <label class="col2">QR caption<input id="setQrCaption" placeholder="Scan for more products &amp; order online"></label>
+      <div class="col2 logo-field">
+        <span class="logo-lbl">Signature <span class="hint">(printed above "Authorised Signatory")</span></span>
+        <div class="logo-row">
+          <img id="setSignPreview" class="logo-thumb sign-thumb" alt="" hidden>
+          <div id="setSignPlaceholder" class="logo-thumb logo-empty sign-thumb">—</div>
+          <input id="setSignFile" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+          <button type="button" id="setSignPick" class="btn ghost sm">Upload signature</button>
+          <button type="button" id="setSignClear" class="btn ghost sm" hidden>Remove</button>
+        </div>
+      </div>
     </div>
 
     <div class="set-section">Invoice defaults</div>
