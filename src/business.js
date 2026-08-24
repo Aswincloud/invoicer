@@ -22,7 +22,7 @@ import { qrMatrix } from "./qr.js";
 // invoice-pdf.js needed no changes to pick a business up.
 export const BIZ_COLUMNS = [
   "biz_name", "biz_email", "biz_addr", "biz_phone", "biz_gst", "biz_pay", "biz_logo",
-  "qr_url", "qr_caption",
+  "qr_url", "qr_caption", "biz_sign",
 ];
 
 // For queries that already join, e.g. the public share page.
@@ -93,6 +93,7 @@ export function publicBusiness(b) {
       bizPhone: b.biz_phone || "", bizGst: b.biz_gst || "", bizPay: b.biz_pay || "",
       bizLogo: b.biz_logo || "",
       qrUrl: b.qr_url || "", qrCaption: b.qr_caption || "",
+      bizSign: b.biz_sign || "",
     },
     defaults: {
       currency: b.def_currency || "", taxMode: b.def_tax_mode || "",
@@ -113,6 +114,9 @@ export function businessValues(b) {
     String(b.bizPhone || ""), String(b.bizGst || ""), String(b.bizPay || ""),
     String(b.bizLogo || "").slice(0, 200000),
     String(b.qrUrl || "").trim().slice(0, 2000), String(b.qrCaption || "").slice(0, 120),
+    // Same ceiling as the logo. A 720px mask is ~34KB of base64; anything near
+    // this cap is not a signature.
+    String(b.bizSign || "").slice(0, 200000),
     String(d.currency || ""), String(d.taxMode || ""), String(d.taxRate || ""),
     String(d.discount || ""), String(d.notes || ""), String(d.dueDays || ""),
     String(d.prefix || ""),
@@ -121,5 +125,5 @@ export function businessValues(b) {
 
 export const BIZ_WRITE_COLUMNS =
   `biz_name,biz_email,biz_addr,biz_phone,biz_gst,biz_pay,biz_logo,
-   qr_url,qr_caption,
+   qr_url,qr_caption,biz_sign,
    def_currency,def_tax_mode,def_tax_rate,def_discount,def_notes,def_due_days,def_prefix`;
