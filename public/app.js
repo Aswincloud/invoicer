@@ -1844,10 +1844,15 @@ function closeSettings(){ $("setModal").hidden=true; }
 async function saveSettings(){
   const msg=$("setMsg"); msg.className="msg"; msg.textContent="Saving…";
   const biz={}; for(const [id,k] of Object.entries(SET_BIZ)) biz[k]=$(id).value;
-  biz.bizLogo = BIZ_LOGO;   // include the logo so saving Settings doesn't blank it
+  biz.bizLogo = BIZ_LOGO;
   const defaults={}; for(const [id,k] of Object.entries(SET_FIELDS)) defaults[k]=$(id).value;
   try{
-    await api("/profile",{method:"PUT",body:JSON.stringify({...biz, defaults})});
+    // businessId, or this edits whichever business is DEFAULT rather than the
+    // one currently filling the form. Fields this modal does not know about —
+    // the shop link, the QR caption, the signature — are simply absent, and
+    // the server now leaves absent fields alone instead of blanking them.
+    await api("/profile",{method:"PUT",
+      body:JSON.stringify({...biz, businessId: ACTIVE_BIZ, defaults})});
     ME.biz={...ME.biz,...biz}; ME.defaults=defaults;
     // reflect business fields into the live form + localStorage immediately
     BIZ_FIELDS.forEach(f=>{ if(biz[f]!=null) $(f).value=biz[f]; }); saveBiz(); render();

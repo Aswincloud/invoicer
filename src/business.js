@@ -106,24 +106,69 @@ export function publicBusiness(b) {
   };
 }
 
-/* Write a business. Used by create and update alike; `b` is the client payload. */
+/* ── writing ─────────────────────────────────────────────────────────────────
+
+   A write updates only the keys the payload actually carries.
+
+   This is not a nicety. The Settings modal sends its own subset of fields, and
+   when a missing key meant "" every save through it silently blanked whatever
+   it did not know about. There is a comment in saveSettings reading "include
+   the logo so saving Settings doesn't blank it" — that is this bug, patched
+   once per field, and it claimed the shop link and the signature the moment
+   they were added. A partial update that nulls the columns it was not told
+   about is a trap that keeps collecting victims, so absent means untouched. */
+
+const BIZ_FIELD_MAP = {
+  bizName: "biz_name", bizEmail: "biz_email", bizAddr: "biz_addr",
+  bizPhone: "biz_phone", bizGst: "biz_gst", bizPay: "biz_pay",
+  bizLogo: "biz_logo", qrUrl: "qr_url", qrCaption: "qr_caption",
+  bizSign: "biz_sign",
+};
+
+const DEFAULTS_MAP = {
+  currency: "def_currency", taxMode: "def_tax_mode", taxRate: "def_tax_rate",
+  discount: "def_discount", notes: "def_notes", dueDays: "def_due_days",
+  prefix: "def_prefix",
+};
+
+// Ceilings on the two that carry image data, so one oversized upload cannot
+// bloat every row that joins against this table.
+const LIMITS = { bizLogo: 200000, bizSign: 200000, qrUrl: 2000, qrCaption: 120 };
+
+const clamp = (key, value) => {
+  const s = String(value ?? "");
+  const max = LIMITS[key];
+  return max ? s.slice(0, max) : s;
+};
+
+/* The columns and values a payload actually sets. */
+export function businessPatch(b) {
+  const cols = [], vals = [];
+  for (const [key, col] of Object.entries(BIZ_FIELD_MAP)) {
+    if (b[key] === undefined) continue;
+    cols.push(col);
+    vals.push(key === "qrUrl" ? clamp(key, String(b[key]).trim()) : clamp(key, b[key]));
+  }
+  const d = b.defaults;
+  if (d) {
+    for (const [key, col] of Object.entries(DEFAULTS_MAP)) {
+      if (d[key] === undefined) continue;
+      cols.push(col);
+      vals.push(String(d[key] ?? ""));
+    }
+  }
+  return { cols, vals };
+}
+
+/* Every column, for an INSERT — where "absent means untouched" has nothing to
+   leave untouched and the row needs a value in each. */
+export const BIZ_WRITE_COLUMNS =
+  [...Object.values(BIZ_FIELD_MAP), ...Object.values(DEFAULTS_MAP)].join(",");
+
 export function businessValues(b) {
   const d = b.defaults || {};
   return [
-    String(b.bizName || ""), String(b.bizEmail || ""), String(b.bizAddr || ""),
-    String(b.bizPhone || ""), String(b.bizGst || ""), String(b.bizPay || ""),
-    String(b.bizLogo || "").slice(0, 200000),
-    String(b.qrUrl || "").trim().slice(0, 2000), String(b.qrCaption || "").slice(0, 120),
-    // Same ceiling as the logo. A 720px mask is ~34KB of base64; anything near
-    // this cap is not a signature.
-    String(b.bizSign || "").slice(0, 200000),
-    String(d.currency || ""), String(d.taxMode || ""), String(d.taxRate || ""),
-    String(d.discount || ""), String(d.notes || ""), String(d.dueDays || ""),
-    String(d.prefix || ""),
+    ...Object.keys(BIZ_FIELD_MAP).map((k) => clamp(k, b[k])),
+    ...Object.keys(DEFAULTS_MAP).map((k) => String(d[k] ?? "")),
   ];
 }
-
-export const BIZ_WRITE_COLUMNS =
-  `biz_name,biz_email,biz_addr,biz_phone,biz_gst,biz_pay,biz_logo,
-   qr_url,qr_caption,biz_sign,
-   def_currency,def_tax_mode,def_tax_rate,def_discount,def_notes,def_due_days,def_prefix`;

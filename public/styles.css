@@ -222,9 +222,15 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
 /* A signature is wide and short; the square logo thumbnail would letterbox it
    into something unreadable at a glance. */
 .sign-thumb{width:104px;object-fit:contain}
-/* On the sheet: sits ON the rule, so descenders cross it the way a real
-   signature does. Fixed colours — this is the document, not the workspace. */
-.psign-img{display:block;margin:0 auto -8px;max-width:190px;max-height:52px;object-fit:contain}
+/* On the sheet: sits ON the rule above "Authorised Signatory", so descenders
+   cross it the way a real signature does.
+
+   margin-left:auto with margin-right:0 — NOT `margin:0 auto`, which centres it
+   across the full width of .psign and floats the signature into the middle of
+   the page, nowhere near the line it belongs to. The 190px matches .sigline so
+   the two are the same width and share an edge. */
+.psign-img{display:block;margin:0 0 -9px auto;width:190px;max-height:54px;
+  object-fit:contain;object-position:bottom right}
 
 .pqr{margin-top:26px;display:flex;align-items:center;gap:13px}
 .pqr svg{border:1px solid var(--paper-rule);border-radius:6px;display:block;flex:none}
