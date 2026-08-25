@@ -3,7 +3,7 @@
 
 import { qrMatrix, qrPngBase64 } from "./qr.js";
 import { signPngBase64 } from "./signature.js";
-import { upiPayUri } from "./upi.js";
+import { payQrText, payeeFromPayload } from "./upi.js";
 
 // Exported so the public pay page escapes with the same function this template
 // does, rather than carrying a second copy that can drift from it.
@@ -326,7 +326,7 @@ export const isPayable = (inv) =>
    no QR rather than one pointing somewhere unintended. */
 export function payQrAttachment(inv) {
   if (!isPayable(inv)) return null;
-  const uri = upiPayUri(inv && inv.upi_vpa, inv && inv.biz_name);
+  const uri = payQrText(inv || {});
   if (!uri) return null;
 
   const content = qrPngBase64(qrMatrix(uri), 6);
@@ -416,7 +416,8 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qr
      routes are genuinely useful and the client picks. Rendered only when a
      paySrc was passed, which is also what keeps it off the public pay page —
      that page has the Razorpay flow and does not ask for one. */
-  const payQr = paySrc && inv.upi_vpa && isPayable(inv)
+  const payee = payeeFromPayload(payQrText(inv));
+  const payQr = paySrc && isPayable(inv)
     ? `<table cellpadding="0" cellspacing="0" style="margin-top:24px">
         <tr>
          <td valign="middle" style="padding-right:14px">
@@ -425,7 +426,7 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qr
          <td valign="middle">
            <div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700">Pay by UPI</div>
            <div style="font-size:11.5px;color:${INK};margin-top:3px">Scan with any UPI app to pay ${esc(inv.biz_name || "us")}</div>
-           <div style="font-size:11px;color:${SOFT};font-family:${MONO}">${esc(inv.upi_vpa)}</div>
+           ${payee ? `<div style="font-size:11px;color:${SOFT};font-family:${MONO}">${esc(payee)}</div>` : ""}
          </td></tr>
        </table>`
     : "";

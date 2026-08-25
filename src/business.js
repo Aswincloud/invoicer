@@ -17,13 +17,13 @@
 // should stay empty.
 
 import { qrMatrix } from "./qr.js";
-import { upiPayUri } from "./upi.js";
+import { payQrText } from "./upi.js";
 
 // Named to match the columns the renderers already read, so invoice-html.js and
 // invoice-pdf.js needed no changes to pick a business up.
 export const BIZ_COLUMNS = [
   "biz_name", "biz_email", "biz_addr", "biz_phone", "biz_gst", "biz_pay", "biz_logo",
-  "qr_url", "qr_caption", "biz_sign", "upi_vpa",
+  "qr_url", "qr_caption", "biz_sign", "upi_vpa", "pay_qr",
 ];
 
 // For queries that already join, e.g. the public share page.
@@ -98,6 +98,7 @@ export function publicBusiness(b) {
       qrUrl: b.qr_url || "", qrCaption: b.qr_caption || "",
       bizSign: b.biz_sign || "",
       upiVpa: b.upi_vpa || "",
+      payQr: b.pay_qr || "",
     },
     defaults: {
       currency: b.def_currency || "", taxMode: b.def_tax_mode || "",
@@ -107,10 +108,11 @@ export function publicBusiness(b) {
     },
     // rows of "0110…", or null when this business has no shop link
     qrRows: rows(matrix),
-    // The static "scan to pay" QR. Null unless a VALID VPA is set — upiPayUri
-    // returns "" for anything it is not sure about, so a typo produces no QR
-    // rather than one pointing somewhere unintended.
-    payQrRows: rows(qrMatrix(upiPayUri(b.upi_vpa, b.biz_name))),
+    // The static "scan to pay" QR: an existing provider's payload re-encoded
+    // verbatim, or one built from a typed address. Null unless one of those is
+    // valid — both paths refuse what they are unsure of, so a mistake produces
+    // no QR rather than one pointing somewhere unintended.
+    payQrRows: rows(qrMatrix(payQrText(b))),
   };
 }
 
@@ -130,7 +132,7 @@ const BIZ_FIELD_MAP = {
   bizName: "biz_name", bizEmail: "biz_email", bizAddr: "biz_addr",
   bizPhone: "biz_phone", bizGst: "biz_gst", bizPay: "biz_pay",
   bizLogo: "biz_logo", qrUrl: "qr_url", qrCaption: "qr_caption",
-  bizSign: "biz_sign", upiVpa: "upi_vpa",
+  bizSign: "biz_sign", upiVpa: "upi_vpa", payQr: "pay_qr",
 };
 
 const DEFAULTS_MAP = {
@@ -141,7 +143,7 @@ const DEFAULTS_MAP = {
 
 // Ceilings on the two that carry image data, so one oversized upload cannot
 // bloat every row that joins against this table.
-const LIMITS = { bizLogo: 200000, bizSign: 200000, qrUrl: 2000, qrCaption: 120, upiVpa: 120 };
+const LIMITS = { bizLogo: 200000, bizSign: 200000, qrUrl: 2000, qrCaption: 120, upiVpa: 120, payQr: 1200 };
 
 const clamp = (key, value) => {
   const s = String(value ?? "");
@@ -155,7 +157,7 @@ export function businessPatch(b) {
   for (const [key, col] of Object.entries(BIZ_FIELD_MAP)) {
     if (b[key] === undefined) continue;
     cols.push(col);
-    const trimmed = key === "qrUrl" || key === "upiVpa";
+    const trimmed = ["qrUrl", "upiVpa", "payQr"].includes(key);
     vals.push(trimmed ? clamp(key, String(b[key]).trim()) : clamp(key, b[key]));
   }
   const d = b.defaults;

@@ -8,7 +8,7 @@
 // compared as a string.
 
 import jsQR from "jsqr";
-import { isVpa, upiPayUri } from "../src/upi.js";
+import { isVpa, upiPayUri, isPayQrPayload, payQrText, payeeFromPayload } from "../src/upi.js";
 import { qrMatrix, QR_QUIET } from "../src/qr.js";
 import { payQrAttachment, isPayable } from "../src/invoice-html.js";
 
@@ -82,6 +82,38 @@ check("decodes back to the EXACT uri", decode(URI) === URI, decode(URI));
 const amp = upiPayUri("ab@ybl", "Smith & Sons");
 check("and with an encoded name", decode(amp) === amp);
 
+console.log("\n— an existing provider QR is reprinted, not reconstructed —");
+// A real Razorpay static QR. It carries `tr` (their reference for this specific
+// QR), `mc` and `mode` alongside the address. Rebuilding the URI from `pa` alone
+// would drop those and produce a code the provider never issued, so the payload
+// is stored and re-encoded byte for byte.
+const RZP = "upi://pay?cu=INR&mc=5262&mode=19&pa=aswincloud860450.rzp@rxairtel"
+          + "&tn=Payment%20To%20Aswincloud&tr=TNjWlQSmcSddNNqrv2";
+
+check("a real Razorpay payload is accepted", isPayQrPayload(RZP));
+check("it is used EXACTLY as issued", payQrText({ pay_qr: RZP }) === RZP);
+check("keeps the provider's reference", payQrText({ pay_qr: RZP }).includes("tr=TNjWlQSmcSddNNqrv2"),
+  "dropping tr would be a QR Razorpay never issued");
+check("a pasted payload beats a typed address",
+  payQrText({ pay_qr: RZP, upi_vpa: "6380157944@yescred", biz_name: "X" }) === RZP);
+check("with no payload it builds from the address",
+  payQrText({ pay_qr: "", upi_vpa: "6380157944@yescred", biz_name: "A" })
+    === "upi://pay?pa=6380157944@yescred&pn=A&cu=INR");
+check("the payee is readable for printing beside the code",
+  payeeFromPayload(RZP) === "aswincloud860450.rzp@rxairtel", payeeFromPayload(RZP));
+check("an EMV/Bharat payload is accepted too", isPayQrPayload("000201010211" + "x".repeat(40)));
+
+for (const [bad, why] of Object.entries({
+  "hello there": "not a payment payload",
+  "upi://pay?foo=1": "a upi uri with no payee",
+  "https://example.com": "a web link is not a payment",
+})) {
+  check(`refuses ${JSON.stringify(bad)}`, !isPayQrPayload(bad), why);
+}
+check("refuses an embedded newline", !isPayQrPayload("upi://pay?pa=a@b\nsecond"));
+check("refuses an absurdly long payload", !isPayQrPayload("upi://pay?pa=a@b&x=" + "y".repeat(1300)));
+check("the real payload round-trips through a QR", decode(RZP) === RZP);
+
 console.log("\n— only while the bill is actually payable —");
 const INV = { status: "UNPAID", biz_name: "Aswin3DPrints", upi_vpa: "6380157944@yescred" };
 check("unpaid is payable", isPayable(INV));
@@ -91,6 +123,10 @@ check("VOID is not — a cancelled bill must not invite a first payment",
 check("case does not matter", !isPayable({ ...INV, status: "paid" }));
 
 check("unpaid + valid vpa produces an attachment", Boolean(payQrAttachment(INV)));
+check("a pasted provider payload produces one too",
+  Boolean(payQrAttachment({ status: "UNPAID", pay_qr: RZP })));
+check("even with no upi_vpa set at all",
+  Boolean(payQrAttachment({ status: "UNPAID", upi_vpa: "", pay_qr: RZP })));
 check("PAID produces none", payQrAttachment({ ...INV, status: "PAID" }) === null);
 check("VOID produces none", payQrAttachment({ ...INV, status: "VOID" }) === null);
 check("no vpa produces none", payQrAttachment({ ...INV, upi_vpa: "" }) === null);

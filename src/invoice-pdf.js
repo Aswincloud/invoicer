@@ -34,7 +34,7 @@ import { paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
          itemUnits, fmtUnits } from "./invoice-html.js";
 import { qrMatrix, QR_QUIET } from "./qr.js";
 import { parseSignature } from "./signature.js";
-import { upiPayUri } from "./upi.js";
+import { payQrText } from "./upi.js";
 import { storedDeflate } from "./bitmap.js";
 
 // The navy of the pen it was written with, rather than flat black.
@@ -402,7 +402,7 @@ export function renderInvoicePdf(inv, items, totals) {
   // invite a second payment, and VOID must not invite a first one — the same
   // rule payability() applies in pay.js.
   const settled = ["PAID", "VOID"].includes(String(inv.status || "").toUpperCase());
-  const payQr = settled ? null : qrMatrix(upiPayUri(inv.upi_vpa, inv.biz_name));
+  const payQr = settled ? null : qrMatrix(payQrText(inv));
   const orderQr = qrMatrix(inv.qr_url);
 
   if (payQr || orderQr) {
