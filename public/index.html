@@ -69,6 +69,9 @@
         <label>Phone<input id="bizPhone" placeholder="+91 90000 00000"></label>
         <label>GSTIN / Tax ID<input id="bizGst" placeholder="34ABCDE1234F1Z9"></label>
         <label class="col2">Payment details<textarea id="bizPay" rows="2" placeholder="A/C 1234… · IFSC … · UPI aswincloud@hdfcbank"></textarea></label>
+        <label class="col2">UPI ID for payments <span class="hint">(a "scan to pay" QR on unpaid bills)</span>
+          <input id="bizUpiVpa" placeholder="yourname@bank" autocapitalize="off" spellcheck="false"></label>
+        <div class="col2 vpa-hint" id="vpaHint" hidden></div>
         <label class="col2">Order / shop link <span class="hint">(printed as a QR — leave blank for none)</span>
           <input id="bizQrUrl" type="url" placeholder="https://3d-prints.aswincloud.com"></label>
         <label class="col2">QR caption<input id="bizQrCaption" placeholder="Scan for more products &amp; order online"></label>
@@ -212,6 +215,8 @@
       <label>Phone<input id="setBizPhone"></label>
       <label>GSTIN / Tax ID<input id="setBizGst"></label>
       <label class="col2">Payment details<textarea id="setBizPay" rows="2"></textarea></label>
+      <label class="col2">UPI ID for payments <span class="hint">(a "scan to pay" QR on unpaid bills)</span>
+        <input id="setUpiVpa" placeholder="yourname@bank" autocapitalize="off" spellcheck="false"></label>
       <label class="col2">Order / shop link <span class="hint">(printed as a QR — leave blank for none)</span>
         <input id="setQrUrl" type="url" placeholder="https://3d-prints.aswincloud.com"></label>
       <label class="col2">QR caption<input id="setQrCaption" placeholder="Scan for more products &amp; order online"></label>

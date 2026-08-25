@@ -38,6 +38,22 @@ const activeBiz = () => BIZ_LIST.find((b) => b.id === ACTIVE_BIZ) || BIZ_LIST[0]
 /* The QR modules for the receipt, or null when this business has no shop link.
    Read from the form's URL field so the preview reacts as it is typed, but the
    MODULES only exist for a saved URL — encoding happens on the server. */
+/* The static "scan to pay" QR, or null.
+
+   Encoded server-side from the business's UPI address, so — exactly like the
+   order QR — a VPA typed but not yet saved prints nothing rather than a stale
+   code. And only while the invoice is actually payable: PAID must not invite a
+   second payment and VOID must not invite a first, the same rule paymentBlock
+   and payability() apply. */
+function payQrRows(){
+  const st = fld("status").toUpperCase();
+  if(st === "PAID" || st === "VOID") return null;
+  const b = activeBiz();
+  if(!b || !b.payQrRows) return null;
+  if(fld("bizUpiVpa") !== (b.biz.upiVpa || "")) return null;
+  return b.payQrRows;
+}
+
 function activeQrRows(){
   const b = activeBiz();
   if(!b || !b.qrRows) return null;
@@ -241,7 +257,7 @@ function placeOfSupplyFromGst(gstin){
 // plain text fields copied verbatim between the form, localStorage and the
 // account, and these two need the extra step of being re-encoded server-side
 // before they can be printed.
-const BIZ_QR_FIELDS = ["bizQrUrl","bizQrCaption"];
+const BIZ_QR_FIELDS = ["bizQrUrl","bizQrCaption","bizUpiVpa"];
 
 const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clAddr","clGst",
   "invNo","currency","issueDate","dueDate","discount","taxMode","taxRate",
@@ -909,6 +925,7 @@ async function persistProfile(){
   biz.qrUrl=fld("bizQrUrl");
   biz.qrCaption=fld("bizQrCaption");
   biz.bizSign=BIZ_SIGN;
+  biz.upiVpa=fld("bizUpiVpa");
   ME.biz = {...(ME.biz||{}), ...biz};                  // keep local mirror fresh
 
   // Addressed to a business, not to the account. Without the id this would edit
@@ -946,6 +963,7 @@ function saveBiz(){
   data.qrUrl = fld("bizQrUrl");
   data.qrCaption = fld("bizQrCaption");
   data.bizSign = BIZ_SIGN;
+  data.upiVpa = fld("bizUpiVpa");
   try{ localStorage.setItem(BIZ_KEY, JSON.stringify(data)); }catch(e){}
 }
 function loadBiz(){
@@ -956,6 +974,7 @@ function loadBiz(){
     if(typeof d.qrUrl==="string") $("bizQrUrl").value = d.qrUrl;
     if(typeof d.qrCaption==="string") $("bizQrCaption").value = d.qrCaption;
     if(typeof d.bizSign==="string") BIZ_SIGN = d.bizSign;
+    if(typeof d.upiVpa==="string") $("bizUpiVpa").value = d.upiVpa;
   }catch(e){}
 }
 
@@ -966,6 +985,38 @@ function loadBiz(){
    one business by definition and nothing to switch between. So no migration is
    needed here — an existing stored blob keeps loading into the form exactly as
    it did, and signing in replaces it with the account's list. */
+
+/* Offer the UPI address already visible in Payment details — as a suggestion.
+
+   Production has biz_pay = "UPI ID - 6380157944@yescred\nGPay - 6380157944".
+   The address is sitting right there, and making somebody retype it invites a
+   typo in the one field where a typo sends a customer's money to a stranger.
+
+   But it is offered, never adopted. Parsing prose at PRINT time would be the
+   dangerous version: the same regex would match an email address typed there
+   later, and nobody re-reads a QR. Clicking the suggestion writes it into an
+   explicit field, once, where it can be seen and corrected.
+
+   The validation mirrors isVpa() in src/upi.js. The server re-checks, so this
+   only decides whether to bother asking. */
+const VPA_RE = /\b([\w.\-]{2,64}@[a-zA-Z][\w\-]{1,32})\b/;
+
+function syncVpaHint(){
+  const box = $("vpaHint"); if(!box) return;
+  const current = fld("bizUpiVpa");
+  const m = VPA_RE.exec(fld("bizPay"));
+  const found = m && m[1];
+
+  if(current || !found){ box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = `Found <code>${esc(found)}</code> in your payment details. `+
+                  `<button type="button" id="vpaUse">Use it</button>`;
+  $("vpaUse").onclick = () => {
+    $("bizUpiVpa").value = found;
+    saveBiz(); syncVpaHint(); render();
+    if(ME) persistProfile();
+  };
+}
 
 function renderBizPicker(){
   const wrap = $("bizSwitch"), sel = $("bizPicker");
@@ -997,11 +1048,13 @@ function applyBiz(id){
   BIZ_LOGO = b.biz.bizLogo || "";
   BIZ_SIGN = b.biz.bizSign || "";
   $("bizQrUrl").value = b.biz.qrUrl || "";
+  $("bizUpiVpa").value = b.biz.upiVpa || "";
   $("bizQrCaption").value = b.biz.qrCaption || "";
   BIZ_QR_CAPTION = b.biz.qrCaption || "";
   syncLogoUI();
   syncSignUI();
   saveBiz();
+  syncVpaHint();
 
   // applyDefaults already refuses to renumber while an invoice is open.
   applyDefaults(b.defaults || {});
@@ -1048,6 +1101,7 @@ function init(){
   loadBiz();
   syncLogoUI();
   syncSignUI();
+  syncVpaHint();
   if(!$("issueDate").value) $("issueDate").value = todayISO(0);
   // Due date is optional — left blank by default. A user's Settings "due in
   // days" default (applyDefaults) will fill it if they've set one.
@@ -1084,7 +1138,8 @@ function init(){
   // signed in — so a logged-in user's profile lives in the cloud DB, not just
   // this device.
   [...BIZ_FIELDS, ...BIZ_QR_FIELDS].forEach(f =>
-    $(f).addEventListener("input", () => { saveBiz(); persistProfileDebounced(); render(); }));
+    $(f).addEventListener("input", () => {
+      saveBiz(); persistProfileDebounced(); syncVpaHint(); render(); }));
   $("btnAddItem").onclick = () => { addItem(); update(); };
   $("btnPrint").onclick = () => window.print();
   $("btnPos").onclick = downloadPosReceipt;
@@ -1463,6 +1518,18 @@ function posOps(){
     ops.push({t:"gap", h:1.5});
     ops.push({t:"sign", url:signUrl, w:SIGN_MM});
     ops.push({t:"center", s:"Authorised Signatory", size:PS.footer});
+  }
+
+  // "Scan to pay" first, because on an unpaid receipt it is the actionable one
+  // and the order QR below it is an advert. Two codes on one strip make the
+  // captions load-bearing: unlabelled, it is a coin flip which one gets scanned.
+  const payQr = payQrRows();
+  if(payQr){
+    ops.push({t:"gap", h:2});
+    ops.push({t:"qr", rows:payQr});
+    ops.push({t:"center", s:"Scan to pay by UPI", size:PS.footer});
+    const vpa = fld("bizUpiVpa");
+    if(vpa) ops.push({t:"center", s:vpa, size:PS.footer});
   }
 
   // "Scan for other products and order online" — last, because it is an advert
@@ -1851,7 +1918,7 @@ const SET_FIELDS = {  // modal field id -> defaults key
 };
 const SET_BIZ = { setBizName:"bizName", setBizEmail:"bizEmail", setBizAddr:"bizAddr",
   setBizPhone:"bizPhone", setBizGst:"bizGst", setBizPay:"bizPay",
-  setQrUrl:"qrUrl", setQrCaption:"qrCaption" };
+  setQrUrl:"qrUrl", setQrCaption:"qrCaption", setUpiVpa:"upiVpa" };
 
 // Apply saved defaults to a fresh invoice. Only fills fields the user left at
 // their generic default, so it never clobbers something already typed.
@@ -1907,6 +1974,7 @@ async function saveSettings(){
     BIZ_FIELDS.forEach(f=>{ if(biz[f]!=null) $(f).value=biz[f]; });
     if(biz.qrUrl!=null) $("bizQrUrl").value = biz.qrUrl;
     if(biz.qrCaption!=null) $("bizQrCaption").value = biz.qrCaption;
+    if(biz.upiVpa!=null) $("bizUpiVpa").value = biz.upiVpa;
     saveBiz();
     // The QR is encoded server-side, so a shop link changed here only becomes
     // printable once it has been saved and read back.

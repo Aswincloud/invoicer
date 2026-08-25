@@ -1,0 +1,19 @@
+-- The UPI address a static "scan to pay" QR points at.
+--
+-- An unpaid receipt prints the pay-to details as text, so a customer has to type
+-- a VPA by hand off thermal paper. A QR removes that.
+--
+-- SEPARATE from biz_pay, deliberately, and this is the whole point of the column.
+-- biz_pay is free prose that gets printed verbatim — in production it reads
+--
+--     UPI ID - 6380157944@yescred
+--     GPay - 6380157944
+--
+-- Pulling a VPA out of that with a regex at print time would also match the GPay
+-- line, or an email address someone types there later, and the consequence is
+-- not a cosmetic bug: it is a QR that sends a customer's money to a stranger.
+-- That is the highest-stakes failure this application has, so the address a QR
+-- encodes is stated explicitly, once, and validated before it is used.
+--
+-- Empty means no QR is drawn anywhere, which is exactly what happens today.
+ALTER TABLE businesses ADD COLUMN upi_vpa TEXT DEFAULT '';
