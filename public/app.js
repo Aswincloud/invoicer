@@ -58,17 +58,27 @@ function payQrRows(){
   return b.payQrRows;
 }
 
-/* The payee address inside whatever the pay QR encodes, for printing beside it.
+/* The address to PRINT beside the pay QR — which is not always the address the
+   QR encodes, and deliberately so.
 
-   Mirrors payeeFromPayload() in src/upi.js. */
+   A provider's QR carries a machine-generated payee:
+   "aswincloud860450.rzp@rxairtel", 29 opaque characters. On paper the only thing
+   a person can do with that is type it, and a mistyped VPA does not bounce — it
+   pays whoever does own that address. So it is not printed. Nothing is lost:
+   the payload's own `tn` means the payer's app shows who they are paying, which
+   is a better confirmation than a line of text on a receipt anyway.
+
+   An address the user typed themselves is different — "6380157944@yescred" is
+   short, theirs, and a genuine fallback for a customer whose camera will not
+   focus. That one prints.
+
+   Email keeps showing either, because there you can copy it. This asymmetry is
+   the point: paper cannot be copied. */
 function payeeFromPayQr(){
   const b = activeBiz();
-  const raw = fld("bizPayQr") || (b && b.biz.payQr) || "";
-  const text = raw || `pa=${fld("bizUpiVpa")}`;
-  const m = /[?&]pa=([^&\s]+)|^pa=([^&\s]+)/.exec(text);
-  if(!m) return "";
-  const v = m[1] || m[2] || "";
-  try { return decodeURIComponent(v); } catch(_) { return v; }
+  // A pasted provider payload — printing its payee helps nobody.
+  if(fld("bizPayQr") || (b && b.biz.payQr)) return "";
+  return fld("bizUpiVpa");
 }
 
 function activeQrRows(){
