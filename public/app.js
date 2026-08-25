@@ -1241,22 +1241,32 @@ const POS_CONTENT = POS_R - POS_L;           // 45mm of content
    print-receipt.sh thresholds at 176 with no dithering. A module that is not a
    whole number of dots therefore straddles a dot column and is decided by
    rounding, which shows up as ragged module edges and a code a phone gives up
-   on. 4 dots = 0.5mm keeps every module edge on a dot boundary.
+   on. 6 dots = 0.75mm keeps every module edge on a dot boundary.
 
-   At 4 dots a 29-module (version 3) code is 14.5mm, 18.5mm once the mandatory
-   4-module quiet zone is counted — comfortably inside the 45mm content width,
-   with room to spare for the larger versions a longer URL produces. */
+   At 6 dots a 29-module (version 3) code is 21.75mm, 27.75mm once the mandatory
+   4-module quiet zone is counted — still inside the 45mm content width, with
+   room for the version 4 or 5 a longer URL produces. Bigger modules are also
+   more forgiving of a worn head and a phone held at an angle, which is the
+   actual reason to spend the width.
+
+   Was 4 dots. Anything that pushes a longer URL past 45mm needs a shorter link
+   rather than a smaller module — below 4 dots the code stops scanning. */
 const DOTS_PER_MM = 8;
-const QR_DOTS = 4;
+const QR_DOTS = 6;
 const QR_QUIET_MODULES = 4;
 
-/* Signature width on the receipt: 36mm = 288 dots of the 360 printable.
+/* Signature width on the receipt: 26mm = 208 dots of the 360 printable.
 
-   Chosen by rasterising the real signature at 203.2dpi and thresholding at 176
-   — the literal pipeline — at 30, 36, 40 and 45mm. All four stayed legible; 36
-   leaves a margin either side and costs about 12mm of roll. The aspect ratio is
-   read from the mask so a taller or wider signature is not distorted. */
-const SIGN_MM = 36;
+   Sizes were checked by rasterising the real signature at 203.2dpi and
+   thresholding at 176 — the literal pipeline. 30/36/40/45mm were all legible,
+   36 was the first choice, and 26 was picked once it was on paper next to a
+   larger QR: a signature is an attestation, not a headline, and at 26mm it
+   still reads while leaving the QR the width it needs.
+
+   Below about 22mm the thin joining strokes start dropping out at this
+   threshold, so this is close to the floor. The aspect ratio is read from the
+   mask so a taller or wider signature is not distorted. */
+const SIGN_MM = 26;
 let SIGN_RATIO = 0.42;
 
 /* Sizes are per role rather than one global multiplier.
@@ -1272,6 +1282,31 @@ let SIGN_RATIO = 0.42;
    allowed to wrap onto a second line instead of holding the rest down.
    Every value below is the measured ceiling for that role against the 48mm
    band, so ordinary receipts fill the width without wrapping. */
+/* One knob for the whole receipt.
+
+   Every value below was measured as the ceiling for its role against the 48mm
+   band, so scaling them is not free: the roles with headroom (bizName caps at
+   14, meta at 13.5) simply get bigger, while the ones already at their limit —
+   bizMeta wraps past 8 — start taking a second line. That costs paper, which is
+   the trade being made deliberately here rather than discovered later.
+
+   Measured on a full receipt — business address, client address, GSTIN, notes
+   — rasterised at 203.2dpi:
+
+     1.00   180.6mm      1.15   203.4mm      1.30   235.5mm
+     1.10   194.2mm      1.20   208.8mm
+
+   So 1.15 buys legibility for about 23mm of roll per receipt, roughly 13%.
+   That is the trade; it is not free, and pushing to 1.30 costs 55mm.
+
+   `footer` is exempt, and measurably so. "Thank you for your business!" is
+   44.45mm wide at 7.5pt against 45mm of content — 0.55mm of headroom. At 8pt it
+   is 47.41mm and wraps to two lines, which costs a line of paper to say the same
+   thing worse. The footer is the least important text on the receipt and the
+   only role with no room at all, so it keeps its measured size. */
+const PS_SCALE = 1.15;
+const ps = (n) => Math.round(n * PS_SCALE * 100) / 100;
+
 const PS = {
   bizName:    13,    // "ASWIN CLOUD LABS" fits to 14pt
   bizMeta:     8,    // address / phone / email / GSTIN — wraps past 8
@@ -1288,6 +1323,7 @@ const PS = {
   prose:       8,    // pay-to, notes
   footer:      7.5,
 };
+for(const k in PS) if(k !== "footer") PS[k] = ps(PS[k]);
 
 // jsPDF's core fonts are WinAnsi-encoded and have no ₹ — it silently prints as
 // "¹". "Rs." is the conventional spelling on Indian thermal receipts anyway.
