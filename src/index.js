@@ -4,7 +4,7 @@ import {
   sendEmail, isEmail,
 } from "./lib.js";
 import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
-         signAttachment } from "./invoice-html.js";
+         signAttachment, payQrAttachment } from "./invoice-html.js";
 import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
 import { ingestOrder } from "./ingest.js";
 import { printReceipt } from "./print.js";
@@ -601,13 +601,16 @@ async function emailInvoice(env, user, id, b) {
   // The order QR travels the same way the logo does, and for the same reason.
   const qr = qrAttachment(r.inv);
   const sign = signAttachment(r.inv);
+  const payQr = payQrAttachment(r.inv);
   const html = renderInvoiceEmail(r.inv, r.items, logo ? logo.src : "", payUrl,
-                                  qr ? qr.src : "", sign ? sign.src : "");
+                                  qr ? qr.src : "", sign ? sign.src : "",
+                                  payQr ? payQr.src : "");
 
   const attachments = [];
   if (logo) attachments.push(logo.attachment);
   if (qr) attachments.push(qr.attachment);
   if (sign) attachments.push(sign.attachment);
+  if (payQr) attachments.push(payQr.attachment);
 
   // The PDF. The browser sends one when it has the invoice rendered (a bitmap of
   // the on-screen sheet, which matches what the user is looking at). Accept it

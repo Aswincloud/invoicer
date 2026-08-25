@@ -3,6 +3,7 @@
 
 import { qrMatrix, qrPngBase64 } from "./qr.js";
 import { signPngBase64 } from "./signature.js";
+import { payQrText, payeeFromPayload } from "./upi.js";
 
 // Exported so the public pay page escapes with the same function this template
 // does, rather than carrying a second copy that can drift from it.
@@ -310,6 +311,39 @@ export function qrAttachment(inv) {
   };
 }
 
+/* Is this invoice still asking to be paid?
+
+   PAID must not invite a second payment; VOID must not invite a first one. Same
+   rule payability() applies in pay.js, stated here because three surfaces need
+   it and each guessing separately is how they drift. */
+export const isPayable = (inv) =>
+  !["PAID", "VOID"].includes(String(inv && inv.status || "").toUpperCase());
+
+/* The static "scan to pay" QR, as a CID attachment.
+
+   Returns null unless the invoice is payable AND the business has a valid VPA —
+   upiPayUri yields "" for anything it is unsure of, so a mistyped address sends
+   no QR rather than one pointing somewhere unintended. */
+export function payQrAttachment(inv) {
+  if (!isPayable(inv)) return null;
+  const uri = payQrText(inv || {});
+  if (!uri) return null;
+
+  const content = qrPngBase64(qrMatrix(uri), 6);
+  if (!content) return null;
+
+  const cid = "payqr@invoicer";
+  return {
+    src: `cid:${cid}`,
+    attachment: {
+      filename: "pay-upi-qr.png",
+      content,
+      content_id: cid,
+      content_type: "image/png",
+    },
+  };
+}
+
 /* The signature, as a CID attachment.
 
    Same CID mechanism as the logo and the QR — mail clients strip data: URIs.
@@ -341,7 +375,7 @@ export function signAttachment(inv) {
 // existing caller (ingest.js, emailInvoice, and the public pay page — which has
 // its own button and must NOT get a second one) is unaffected by its addition.
 export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qrSrc = null,
-                                   signSrc = null) {
+                                   signSrc = null, paySrc = null) {
   const cur = inv.currency || "₹";
   const t = computeTotals(inv, items);
   const initial = (inv.biz_name || "I").charAt(0).toUpperCase();
@@ -376,6 +410,27 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qr
 
      Rendered only when the business carries a shop link, so the businesses that
      have no shop send exactly the email they sent before. */
+  /* "Scan to pay by UPI", beside the Razorpay button rather than instead of it.
+
+     The gateway charges a fee where a direct UPI transfer does not, so both
+     routes are genuinely useful and the client picks. Rendered only when a
+     paySrc was passed, which is also what keeps it off the public pay page —
+     that page has the Razorpay flow and does not ask for one. */
+  const payee = payeeFromPayload(payQrText(inv));
+  const payQr = paySrc && isPayable(inv)
+    ? `<table cellpadding="0" cellspacing="0" style="margin-top:24px">
+        <tr>
+         <td valign="middle" style="padding-right:14px">
+           <img src="${esc(paySrc)}" width="104" height="104" alt="Scan to pay by UPI"
+                style="display:block;border:1px solid ${RULE};border-radius:6px"></td>
+         <td valign="middle">
+           <div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700">Pay by UPI</div>
+           <div style="font-size:11.5px;color:${INK};margin-top:3px">Scan with any UPI app to pay ${esc(inv.biz_name || "us")}</div>
+           ${payee ? `<div style="font-size:11px;color:${SOFT};font-family:${MONO}">${esc(payee)}</div>` : ""}
+         </td></tr>
+       </table>`
+    : "";
+
   const qrImg = qrSrc || "";
   const orderQr = inv.qr_url
     ? `<table cellpadding="0" cellspacing="0" style="margin-top:28px">
@@ -453,6 +508,7 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qr
      <span style="color:${INK}">${esc(words)}</span></div>` : ""}
   ${payButton}
   ${inv.notes ? `<div style="margin-top:28px;font-size:11px;color:${SOFT};white-space:pre-line"><div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700;margin-bottom:4px">Notes / Terms</div>${esc(inv.notes)}</div>` : ""}
+  ${payQr}
   ${orderQr}
   <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:34px">
    <tr><td align="right">

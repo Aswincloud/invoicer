@@ -1,0 +1,22 @@
+-- The exact contents of an existing payment QR, stored verbatim.
+--
+-- 0012 added upi_vpa, on the assumption that a UPI address is all a pay QR
+-- needs. A real Razorpay static QR shows that is wrong. This is one, decoded:
+--
+--   upi://pay?cu=INR&mc=5262&mode=19&pa=aswincloud860450.rzp@rxairtel
+--            &tn=Payment%20To%20Aswincloud&tr=TNjWlQSmcSddNNqrv2
+--
+-- The address is in there and upi_vpa would have accepted it. But rebuilding the
+-- URI from just that address drops `tr` — Razorpay's reference for this
+-- particular QR — along with `mc` and `mode`. The result is a QR that is NOT the
+-- one the provider issued, and whether they attribute a payment to it the same
+-- way is not something this codebase can verify. Guessing about that is guessing
+-- with somebody's money.
+--
+-- So an existing QR is preserved exactly as it was issued, and regenerated from
+-- those bytes rather than reconstructed from a part of them. It also means any
+-- other provider's QR — Paytm, BharatPe, a bank's own — works with no new code.
+--
+-- upi_vpa stays for the case it was built for: no existing QR, just an address
+-- typed in, from which a plain URI is generated. pay_qr wins when both are set.
+ALTER TABLE businesses ADD COLUMN pay_qr TEXT DEFAULT '';

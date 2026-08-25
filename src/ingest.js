@@ -25,7 +25,7 @@
 
 import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex } from "./lib.js";
 import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
-         signAttachment } from "./invoice-html.js";
+         signAttachment, payQrAttachment } from "./invoice-html.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
 import { bizFields, defaultBusiness } from "./business.js";
 
@@ -173,11 +173,13 @@ export async function ingestOrder(request, env) {
   const logo = logoAttachment(rendered.biz_logo);
   const qr = qrAttachment(rendered);
   const sign = signAttachment(rendered);
+  const payQr = payQrAttachment(rendered);
 
   const attachments = [];
   if (logo) attachments.push(logo.attachment);
   if (qr) attachments.push(qr.attachment);
   if (sign) attachments.push(sign.attachment);
+  if (payQr) attachments.push(payQr.attachment);
 
   // A PDF copy, generated here rather than in a browser — there is no browser on
   // this path. Wrapped, because a layout bug in the generator must not cost the
@@ -202,7 +204,7 @@ export async function ingestOrder(request, env) {
     // No payUrl: a shop order is already paid, so the fourth argument stays null
     // and the QR goes in the fifth.
     html: renderInvoiceEmail(rendered, items, logo ? logo.src : "", null, qr ? qr.src : "",
-                             sign ? sign.src : ""),
+                             sign ? sign.src : "", payQr ? payQr.src : ""),
     text: `Invoice ${inv.number} for order ${receipt}. Total ${inv.currency} ${total.toFixed(2)}. A PDF copy is attached.`,
     attachments: attachments.length ? attachments : undefined,
   });

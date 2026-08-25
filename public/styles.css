@@ -123,6 +123,16 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--ring);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--ring) 20%,transparent)}
 textarea{resize:vertical}
 
+/* The "use this address?" suggestion under the UPI field. A suggestion, styled
+   as one — it is never applied without being clicked. */
+.vpa-hint{font-size:11.5px;color:var(--muted);display:flex;align-items:center;
+  gap:8px;flex-wrap:wrap;margin-top:-4px}
+.vpa-hint code{font-family:var(--font-mono);color:var(--ink)}
+.vpa-hint button{font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;
+  background:transparent;color:var(--primary);border:1px solid
+  color-mix(in srgb,var(--primary) 45%,var(--line));border-radius:7px;padding:3px 9px}
+.vpa-hint button:hover{background:color-mix(in srgb,var(--primary) 12%,transparent)}
+
 /* Business switcher — which trading name is issuing this invoice. */
 .biz-switch{display:flex;align-items:flex-end;gap:9px;flex-wrap:wrap}
 .biz-switch-sel{flex:1 1 160px;min-width:0}

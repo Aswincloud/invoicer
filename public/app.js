@@ -38,6 +38,49 @@ const activeBiz = () => BIZ_LIST.find((b) => b.id === ACTIVE_BIZ) || BIZ_LIST[0]
 /* The QR modules for the receipt, or null when this business has no shop link.
    Read from the form's URL field so the preview reacts as it is typed, but the
    MODULES only exist for a saved URL — encoding happens on the server. */
+/* The static "scan to pay" QR, or null.
+
+   Encoded server-side from the business's UPI address, so — exactly like the
+   order QR — a VPA typed but not yet saved prints nothing rather than a stale
+   code. And only while the invoice is actually payable: PAID must not invite a
+   second payment and VOID must not invite a first, the same rule paymentBlock
+   and payability() apply. */
+function payQrRows(){
+  const st = fld("status").toUpperCase();
+  if(st === "PAID" || st === "VOID") return null;
+  const b = activeBiz();
+  if(!b || !b.payQrRows) return null;
+  // Either input, edited but not yet saved, means the shipped matrix is stale —
+  // and a stale pay QR points at the PREVIOUS payee, which is the one mistake
+  // here that costs money.
+  if(fld("bizUpiVpa") !== (b.biz.upiVpa || "")) return null;
+  if(fld("bizPayQr") !== (b.biz.payQr || "")) return null;
+  return b.payQrRows;
+}
+
+/* The address to PRINT beside the pay QR — which is not always the address the
+   QR encodes, and deliberately so.
+
+   A provider's QR carries a machine-generated payee:
+   "aswincloud860450.rzp@rxairtel", 29 opaque characters. On paper the only thing
+   a person can do with that is type it, and a mistyped VPA does not bounce — it
+   pays whoever does own that address. So it is not printed. Nothing is lost:
+   the payload's own `tn` means the payer's app shows who they are paying, which
+   is a better confirmation than a line of text on a receipt anyway.
+
+   An address the user typed themselves is different — "6380157944@yescred" is
+   short, theirs, and a genuine fallback for a customer whose camera will not
+   focus. That one prints.
+
+   Email keeps showing either, because there you can copy it. This asymmetry is
+   the point: paper cannot be copied. */
+function payeeFromPayQr(){
+  const b = activeBiz();
+  // A pasted provider payload — printing its payee helps nobody.
+  if(fld("bizPayQr") || (b && b.biz.payQr)) return "";
+  return fld("bizUpiVpa");
+}
+
 function activeQrRows(){
   const b = activeBiz();
   if(!b || !b.qrRows) return null;
@@ -241,7 +284,7 @@ function placeOfSupplyFromGst(gstin){
 // plain text fields copied verbatim between the form, localStorage and the
 // account, and these two need the extra step of being re-encoded server-side
 // before they can be printed.
-const BIZ_QR_FIELDS = ["bizQrUrl","bizQrCaption"];
+const BIZ_QR_FIELDS = ["bizQrUrl","bizQrCaption","bizUpiVpa","bizPayQr"];
 
 const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clAddr","clGst",
   "invNo","currency","issueDate","dueDate","discount","taxMode","taxRate",
@@ -909,6 +952,8 @@ async function persistProfile(){
   biz.qrUrl=fld("bizQrUrl");
   biz.qrCaption=fld("bizQrCaption");
   biz.bizSign=BIZ_SIGN;
+  biz.upiVpa=fld("bizUpiVpa");
+  biz.payQr=fld("bizPayQr");
   ME.biz = {...(ME.biz||{}), ...biz};                  // keep local mirror fresh
 
   // Addressed to a business, not to the account. Without the id this would edit
@@ -946,6 +991,8 @@ function saveBiz(){
   data.qrUrl = fld("bizQrUrl");
   data.qrCaption = fld("bizQrCaption");
   data.bizSign = BIZ_SIGN;
+  data.upiVpa = fld("bizUpiVpa");
+  data.payQr = fld("bizPayQr");
   try{ localStorage.setItem(BIZ_KEY, JSON.stringify(data)); }catch(e){}
 }
 function loadBiz(){
@@ -956,6 +1003,8 @@ function loadBiz(){
     if(typeof d.qrUrl==="string") $("bizQrUrl").value = d.qrUrl;
     if(typeof d.qrCaption==="string") $("bizQrCaption").value = d.qrCaption;
     if(typeof d.bizSign==="string") BIZ_SIGN = d.bizSign;
+    if(typeof d.upiVpa==="string") $("bizUpiVpa").value = d.upiVpa;
+    if(typeof d.payQr==="string") $("bizPayQr").value = d.payQr;
   }catch(e){}
 }
 
@@ -966,6 +1015,38 @@ function loadBiz(){
    one business by definition and nothing to switch between. So no migration is
    needed here — an existing stored blob keeps loading into the form exactly as
    it did, and signing in replaces it with the account's list. */
+
+/* Offer the UPI address already visible in Payment details — as a suggestion.
+
+   Production has biz_pay = "UPI ID - 6380157944@yescred\nGPay - 6380157944".
+   The address is sitting right there, and making somebody retype it invites a
+   typo in the one field where a typo sends a customer's money to a stranger.
+
+   But it is offered, never adopted. Parsing prose at PRINT time would be the
+   dangerous version: the same regex would match an email address typed there
+   later, and nobody re-reads a QR. Clicking the suggestion writes it into an
+   explicit field, once, where it can be seen and corrected.
+
+   The validation mirrors isVpa() in src/upi.js. The server re-checks, so this
+   only decides whether to bother asking. */
+const VPA_RE = /\b([\w.\-]{2,64}@[a-zA-Z][\w\-]{1,32})\b/;
+
+function syncVpaHint(){
+  const box = $("vpaHint"); if(!box) return;
+  const current = fld("bizUpiVpa");
+  const m = VPA_RE.exec(fld("bizPay"));
+  const found = m && m[1];
+
+  if(current || !found){ box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = `Found <code>${esc(found)}</code> in your payment details. `+
+                  `<button type="button" id="vpaUse">Use it</button>`;
+  $("vpaUse").onclick = () => {
+    $("bizUpiVpa").value = found;
+    saveBiz(); syncVpaHint(); render();
+    if(ME) persistProfile();
+  };
+}
 
 function renderBizPicker(){
   const wrap = $("bizSwitch"), sel = $("bizPicker");
@@ -997,11 +1078,14 @@ function applyBiz(id){
   BIZ_LOGO = b.biz.bizLogo || "";
   BIZ_SIGN = b.biz.bizSign || "";
   $("bizQrUrl").value = b.biz.qrUrl || "";
+  $("bizUpiVpa").value = b.biz.upiVpa || "";
+  $("bizPayQr").value = b.biz.payQr || "";
   $("bizQrCaption").value = b.biz.qrCaption || "";
   BIZ_QR_CAPTION = b.biz.qrCaption || "";
   syncLogoUI();
   syncSignUI();
   saveBiz();
+  syncVpaHint();
 
   // applyDefaults already refuses to renumber while an invoice is open.
   applyDefaults(b.defaults || {});
@@ -1048,6 +1132,7 @@ function init(){
   loadBiz();
   syncLogoUI();
   syncSignUI();
+  syncVpaHint();
   if(!$("issueDate").value) $("issueDate").value = todayISO(0);
   // Due date is optional — left blank by default. A user's Settings "due in
   // days" default (applyDefaults) will fill it if they've set one.
@@ -1084,7 +1169,8 @@ function init(){
   // signed in — so a logged-in user's profile lives in the cloud DB, not just
   // this device.
   [...BIZ_FIELDS, ...BIZ_QR_FIELDS].forEach(f =>
-    $(f).addEventListener("input", () => { saveBiz(); persistProfileDebounced(); render(); }));
+    $(f).addEventListener("input", () => {
+      saveBiz(); persistProfileDebounced(); syncVpaHint(); render(); }));
   $("btnAddItem").onclick = () => { addItem(); update(); };
   $("btnPrint").onclick = () => window.print();
   $("btnPos").onclick = downloadPosReceipt;
@@ -1465,6 +1551,25 @@ function posOps(){
     ops.push({t:"center", s:"Authorised Signatory", size:PS.footer});
   }
 
+  // "Scan to pay" first, because on an unpaid receipt it is the actionable one
+  // and the order QR below it is an advert. Two codes on one strip make the
+  // captions load-bearing: unlabelled, it is a coin flip which one gets scanned.
+  const payQr = payQrRows();
+  if(payQr){
+    ops.push({t:"gap", h:2});
+    ops.push({t:"qr", rows:payQr});
+    ops.push({t:"center", s:"Scan to pay by UPI", size:PS.footer});
+    // The payee the QR ACTUALLY encodes, read back out of the payload — not the
+    // UPI ID box, which a pasted provider QR overrides. Printing one while the
+    // code points at the other would be the worst kind of wrong.
+    const payee = payeeFromPayQr();
+    // fit:true, because a provider VPA is long: "aswincloud860450.rzp@rxairtel"
+    // is 29 characters, which is 46mm at 7.5pt Courier against 45mm of content,
+    // and wrapping it put a lone "l" on its own line under the QR. Shrinking to
+    // one line reads as an address; broken across two reads as a mistake.
+    if(payee) ops.push({t:"center", s:payee, size:PS.footer, fit:true});
+  }
+
   // "Scan for other products and order online" — last, because it is an advert
   // and everything above it is the record of the sale. Only for a business that
   // has a shop link; the modules come from the server (see src/qr.js), so a
@@ -1569,7 +1674,29 @@ function posDraw(doc, ops){
       // module of 3.5 dots lands half on and half off a dot column and comes out
       // ragged. QR_DOTS is a whole number for that reason — see the note there.
       const n = op.rows.length;
-      const mod = QR_DOTS / DOTS_PER_MM;               // mm per module
+
+      /* Step the module size down until the code fits the printable strip.
+      
+         QR_DOTS suits the codes this app generates — 29 modules for a shop URL,
+         33 for a plain UPI URI. But a pasted provider QR can be much denser: the
+         real Razorpay static QR is 45 modules, which is 39.75mm at 6 dots
+         against 45mm of content, and an EMV payload can reach 57+ modules, which
+         at 6 dots would be 48.75mm and print off the edge of the head.
+      
+         Clipped finder patterns do not scan, so a code that does not fit is
+         drawn smaller rather than drawn wrong. 4 dots is the floor established
+         when this was first sized; below it the modules alias at this threshold
+         and no phone reads them, so an oversized code is skipped entirely — no
+         QR is honest, half a QR is not. */
+      let dots = QR_DOTS;
+      const width = (d) => (n + QR_QUIET_MODULES * 2) * d / DOTS_PER_MM;
+      while(dots > 4 && width(dots) > POS_CONTENT) dots--;
+      if(width(dots) > POS_CONTENT){
+        console.warn(`pay/order QR is ${n} modules — too dense for a 57mm roll, skipped`);
+        continue;
+      }
+
+      const mod = dots / DOTS_PER_MM;                  // mm per module
       const span = (n + QR_QUIET_MODULES * 2) * mod;
       const x0 = (L + R) / 2 - span / 2;               // centred in the ink window
       y += 1.2;
@@ -1851,7 +1978,7 @@ const SET_FIELDS = {  // modal field id -> defaults key
 };
 const SET_BIZ = { setBizName:"bizName", setBizEmail:"bizEmail", setBizAddr:"bizAddr",
   setBizPhone:"bizPhone", setBizGst:"bizGst", setBizPay:"bizPay",
-  setQrUrl:"qrUrl", setQrCaption:"qrCaption" };
+  setQrUrl:"qrUrl", setQrCaption:"qrCaption", setUpiVpa:"upiVpa", setPayQr:"payQr" };
 
 // Apply saved defaults to a fresh invoice. Only fills fields the user left at
 // their generic default, so it never clobbers something already typed.
@@ -1907,6 +2034,8 @@ async function saveSettings(){
     BIZ_FIELDS.forEach(f=>{ if(biz[f]!=null) $(f).value=biz[f]; });
     if(biz.qrUrl!=null) $("bizQrUrl").value = biz.qrUrl;
     if(biz.qrCaption!=null) $("bizQrCaption").value = biz.qrCaption;
+    if(biz.upiVpa!=null) $("bizUpiVpa").value = biz.upiVpa;
+    if(biz.payQr!=null) $("bizPayQr").value = biz.payQr;
     saveBiz();
     // The QR is encoded server-side, so a shop link changed here only becomes
     // printable once it has been saved and read back.
