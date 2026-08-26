@@ -31,7 +31,7 @@
 // document, not about PDF drawing, and a second copy of it here is how the PDF
 // and the email would end up disagreeing on a paid invoice.
 import { paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
-         itemUnits, fmtUnits } from "./invoice-html.js";
+         itemUnits, fmtUnits, giftBlock } from "./invoice-html.js";
 import { qrMatrix, QR_QUIET } from "./qr.js";
 import { parseSignature } from "./signature.js";
 import { payQrText } from "./upi.js";
@@ -187,7 +187,7 @@ class Page {
 //
 // Takes the same (inv, items, totals) the HTML renderer does, so the two cannot
 // disagree about what is on the invoice.
-export function renderInvoicePdf(inv, items, totals) {
+export function renderInvoicePdf(inv, items, totals, { showGift = false } = {}) {
   const money = (n) => "Rs. " + Number(n || 0).toLocaleString("en-IN", {
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   });
@@ -371,6 +371,28 @@ export function renderInvoicePdf(inv, items, totals) {
       }
       if (line) { p.text(MARGIN, y, line, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 11; }
     }
+  }
+
+  // ── the gift card ──
+  //
+  // A present, above the QRs and below the totals. Drawn only when the caller
+  // asked for it: renderInvoicePdf is used for the customer's own copy, and the
+  // code is redeemable by whoever reads it.
+  const gift = showGift ? giftBlock(inv) : null;
+  if (gift) {
+    y -= 6;
+    p.text(MARGIN, y, "A LITTLE SOMETHING FOR YOU",
+           { size: 7.5, bold: true, color: "0.36 0.39 0.45" });
+    y -= 12;
+    // The range, never the figure — see GIFT_MIN in invoice-html.js.
+    const head = `${gift.label}  ·  a random amount from ${gift.min} to ${gift.max}`;
+    p.text(MARGIN, y, fit(head, CONTENT_W - 200, 9), { size: 9 });
+    y -= 13;
+    p.text(MARGIN, y, gift.code, { size: 11, bold: true });
+    y -= 11;
+    p.text(MARGIN, y, "Redeem at amazon.in - Gift cards. Yours to keep; not part of this bill.",
+           { size: 7.5, color: "0.36 0.39 0.45" });
+    y -= 8;
   }
 
   // ── QR codes, bottom left ──

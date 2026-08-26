@@ -326,13 +326,13 @@ section("the logo survives the trip to an inbox");
                 biz_logo: png };
   const items = [{ description: "Thing", qty: 1, rate: 100 }];
 
-  const email = renderInvoiceEmail(inv, items, l.src);
+  const email = renderInvoiceEmail(inv, items, { logoSrc: l.src });
   ok("no data: image in the email HTML", !/src="data:/.test(email));
   ok("the cid reference is there", email.includes(`src="cid:${l.attachment.content_id}"`));
   ok("the business name still renders", email.includes("AswinPrints"));
 
   // With no logo at all, the initial badge renders and there is no <img> to break.
-  const noLogo = renderInvoiceEmail({ ...inv, biz_logo: "" }, items, "");
+  const noLogo = renderInvoiceEmail({ ...inv, biz_logo: "" }, items, { logoSrc: "" });
   ok("no logo → no <img> tag at all", !/<img/.test(noLogo));
   ok("no logo → initial badge instead", noLogo.includes(">A<"));
 

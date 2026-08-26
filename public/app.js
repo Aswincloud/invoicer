@@ -74,6 +74,31 @@ function payQrRows(){
 
    Email keeps showing either, because there you can copy it. This asymmetry is
    the point: paper cannot be copied. */
+const GIFT_LABEL = "Amazon Pay Gift Card";
+// Mirrors GIFT_MIN / GIFT_MAX in src/invoice-html.js. The exact value is stored
+// but never printed — the card is a surprise.
+const GIFT_MIN = 1, GIFT_MAX = 500;
+
+/* The gift card on this invoice, or null. Mirrors giftBlock() in
+   src/invoice-html.js — the receipt and the preview render from FORM state, so
+   the rule lives twice, the same way payBlock mirrors paymentBlock.
+
+   A present, not a payment: nothing here touches computeTotals. The checkbox
+   gates it so a code left in the box does not print once it is unticked. */
+function giftOnInvoice(){
+  if(!$("giftOn").checked) return null;
+  const code = fld("giftCode");
+  if(!code) return null;
+  return { code, amount: +$("giftAmount").value || 0, label: GIFT_LABEL };
+}
+
+// Grey the fields out when the box is unticked, so it is obvious the code in
+// them is not going anywhere.
+function syncGift(){
+  const on = $("giftOn").checked;
+  ["giftCode","giftAmount"].forEach(f => { $(f).disabled = !on; });
+}
+
 function payeeFromPayQr(){
   const b = activeBiz();
   // A pasted provider payload — printing its payee helps nobody.
@@ -643,9 +668,26 @@ function render(){
 
 ${words?`<div class="pwords"><div class="lbl">Amount in words</div><p>${esc(words)}</p></div>`:""}
 ${v("notes")?`<div class="pfoot"><div class="lbl">Notes / Terms</div><p>${esc(v("notes"))}</p></div>`:""}
+${giftBlockHtml()}
 ${qrSvgBlock()}
 <div class="psign">${signImgTag()}<div class="sigline"></div>For ${esc(v("bizName")||"Your Business")}<br>Authorised Signatory</div>
 <div class="pnote">${esc([v("bizName"),v("bizPhone"),v("bizEmail")].filter(Boolean).join(" · "))}</div>`;
+}
+
+/* The gift card on the on-screen sheet.
+
+   Present here for the same reason the signature is: emailInvoice sends the PDF
+   the BROWSER rendered when it has one, and that PDF is a bitmap of this sheet,
+   so anything missing here is missing from most emailed invoices. */
+function giftBlockHtml(){
+  const g = giftOnInvoice();
+  if(!g) return "";
+  return `<div class="pgift">
+    <div class="lbl">A little something for you</div>
+    <p class="pgift-h">${esc(g.label)} · a random amount from ${esc(String(GIFT_MIN))} to ${esc(String(GIFT_MAX))}</p>
+    <p class="pgift-code">${esc(g.code)}</p>
+    <p class="pgift-note">Redeem at amazon.in → Gift cards. Yours to keep — it is not part of this bill.</p>
+  </div>`;
 }
 
 /* The signature on the on-screen sheet.
@@ -1175,13 +1217,18 @@ function init(){
   $("btnPrint").onclick = () => window.print();
   $("btnPos").onclick = downloadPosReceipt;
   $("btnPosPrint").onclick = printPosReceipt;
+  $("giftOn").onchange = () => { syncGift(); render(); };
+  ["giftCode","giftAmount"].forEach(f =>
+    $(f).addEventListener("input", render));
+  syncGift();
   $("bizPicker").onchange = (e) => applyBiz(e.target.value);
   $("bizNew").onclick      = createBizProfile;
   $("bizDelete").onclick   = deleteBizProfile;
   $("btnReset").onclick = () => {
     if(!confirm("Start a new blank invoice? (Your saved business details are kept.)")) return;
     ["clName","clEmail","clAddr","clGst","notes","shipping","shippingMode",
-     "targetTotal"].forEach(f=>$(f).value="");
+     "targetTotal","giftCode","giftAmount"].forEach(f=>$(f).value="");
+    $("giftOn").checked = false; syncGift();
     syncShippingMode();
     $("solveMsg").textContent = "";
     $("autoSolve").checked = true;   // back to the default
@@ -1227,6 +1274,11 @@ function collect(){
     // issuing business is fixed at creation.
     businessId: ACTIVE_BIZ,
     clName:v("clName"),clEmail:v("clEmail"),clAddr:v("clAddr"),clGst:v("clGst"),
+    // A present, never a charge: these do not enter computeTotals on either
+    // side of the wire. The checkbox is what decides whether it is sent at all,
+    // so unticking it clears the card rather than hiding it.
+    giftCode: $("giftOn").checked ? v("giftCode") : "",
+    giftAmount: $("giftOn").checked ? (+$("giftAmount").value || 0) : 0,
     items:readItems().filter(i=>i.desc||i.amt).map(i=>({description:i.desc,qty:i.qty,rate:i.rate}))};
 }
 
@@ -1407,6 +1459,11 @@ const PS = {
   grandLabel: 10,    // "TOTAL (Rs.)" on its own line
   grand:      18,    // the headline figure, alone on its line; shrinks if huge
   prose:       8,    // pay-to, notes
+  // The gift-card code is read off the paper and typed into Amazon, so it is the
+  // largest thing in its block. 11.3 scales to 13pt, and 45mm holds a 16-char
+  // code at 13.3pt — so this is the ceiling for a typical code, with fit:true
+  // catching a longer one.
+  giftCode:   11.3,
   footer:      7.5,
 };
 for(const k in PS) if(k !== "footer") PS[k] = ps(PS[k]);
@@ -1580,6 +1637,38 @@ function posOps(){
     ops.push({t:"qr", rows:qr});
     const cap = (BIZ_QR_CAPTION || "").trim() || "Scan for more products & order online";
     ops.push({t:"center", s:cap, size:PS.footer});
+  }
+
+  // The gift card, last of all: it is what the customer takes away, and it
+  // belongs after the record of the sale rather than inside it.
+  const gift = giftOnInvoice();
+  if(gift){
+    ops.push({t:"gap", h:1.5});
+    ops.push({t:"rule"});
+    /* Every line here is short enough to fit 45mm at its own size, because the
+       first draft wrapped twice and looked like a mistake rather than a present:
+       "A LITTLE SOMETHING FOR / YOU" and "Redeem at amazon.in - Gift / cards".
+       At 9.2pt Courier, 45mm holds about 24 characters. */
+    /* Sized line by line against the 45mm strip, largest where it matters.
+       At 11.5pt Courier 45mm holds 15 characters, so "Amazon Pay Gift Card" —
+       20 — sits a step down at PS.totals; everything else was measured to fit
+       outright rather than left to wrap. */
+    const cur = $("currency").value;
+    ops.push({t:"center", s:"A GIFT FOR YOU", size:PS.docType, bold:true});
+    ops.push({t:"center", s:gift.label, size:PS.totals, fit:true});
+    // A range, not the figure: the card is a surprise, and the exact value is
+    // kept on the invoice for the records rather than printed here.
+    ops.push({t:"center", s:"A random amount", size:PS.itemDesc});
+    // Whole rupees: ".00" twice on a range is noise, and it cost enough width
+    // to make fit:true shrink the line below the size it was chosen at.
+    const sym = posCur(cur);
+    const amt = (n) => (sym ? sym + " " : "") + n;
+    ops.push({t:"center", s:`${amt(GIFT_MIN)} to ${amt(GIFT_MAX)}`,
+              size:PS.itemDesc, fit:true});
+    // The biggest thing in the block: it gets typed into Amazon off this paper.
+    ops.push({t:"center", s:gift.code, size:PS.giftCode, bold:true, fit:true});
+    ops.push({t:"center", s:"Redeem at amazon.in", size:PS.clientMeta});
+    ops.push({t:"center", s:"Not part of this bill", size:PS.clientMeta});
   }
 
   ops.push({t:"gap", h:1.5});
@@ -2196,6 +2285,10 @@ async function openInvoiceInEditor(id){
     $("clEmail").value  = inv.client_email || "";
     $("clAddr").value   = inv.client_addr || "";
     $("clGst").value    = inv.client_gst || "";
+    $("giftCode").value = inv.gift_code || "";
+    $("giftAmount").value = inv.gift_amount ? String(inv.gift_amount) : "";
+    $("giftOn").checked = !!(inv.gift_code || "").trim();
+    syncGift();
     // line items
     $("items").innerHTML = "";
     (items.length ? items : [{description:"",qty:1,rate:""}]).forEach(it =>

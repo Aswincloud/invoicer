@@ -102,7 +102,7 @@ check("name", printsInv.biz_name === "Aswin3DPrints", printsInv.biz_name);
 check("GSTIN", printsInv.biz_gst === "33ZZZZZ9999Z9Z9", printsInv.biz_gst);
 check("shop link came through", printsInv.qr_url === "https://3d-prints.aswincloud.com");
 
-const printsHtml = renderInvoiceEmail(printsInv, ITEMS, "", null, "cid:orderqr@invoicer");
+const printsHtml = renderInvoiceEmail(printsInv, ITEMS, { qrSrc: "cid:orderqr@invoicer" });
 check("email shows the order block", printsHtml.includes("Order online"));
 check("email shows the caption", printsHtml.includes("Scan for more prints"));
 check("email links the shop", printsHtml.includes("https://3d-prints.aswincloud.com"));
