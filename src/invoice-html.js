@@ -315,6 +315,19 @@ export function qrAttachment(inv) {
 // so switching to a different card later is one edit.
 export const GIFT_LABEL = "Amazon Pay Gift Card";
 
+/* What the customer is TOLD the card is worth: a range, not the figure.
+
+   The exact value is still stored on the invoice — it is what the gift cost, and
+   that is worth having a record of — but it is not printed. The card is a
+   surprise, and naming the amount on the receipt takes that away.
+
+   One pair of constants so the range is one edit, and so the printed line cannot
+   drift from whatever the cards are actually loaded with. Keep them true of what
+   is really issued: a receipt promising "Rs. 1 to Rs. 500" beside a card that is
+   always Rs. 10 would be a claim, not a surprise. */
+export const GIFT_MIN = 1;
+export const GIFT_MAX = 500;
+
 /* The gift card handed over with this bill, or null.
 
    A present, not a payment: nothing here is read by computeTotals and the amount
@@ -326,8 +339,9 @@ export const GIFT_LABEL = "Amazon Pay Gift Card";
 export function giftBlock(inv) {
   const code = String((inv && inv.gift_code) || "").trim();
   if (!code) return null;
+  // `amount` is carried for the caller's records only. No renderer prints it.
   const amount = Number((inv && inv.gift_amount) || 0);
-  return { code, amount, label: GIFT_LABEL };
+  return { code, amount, label: GIFT_LABEL, min: GIFT_MIN, max: GIFT_MAX };
 }
 
 /* Is this invoice still asking to be paid?
@@ -473,8 +487,7 @@ export function renderInvoiceEmail(inv, items, opts = {}) {
              style="margin-top:26px;border:1px dashed ${RULE};border-radius:8px">
         <tr><td style="padding:13px 15px">
           <div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700">A little something for you</div>
-          <div style="font-size:12px;color:${INK};margin-top:4px">${esc(g.label)}${
-              g.amount ? " &middot; " + esc(money(cur, g.amount)) : ""}</div>
+          <div style="font-size:12px;color:${INK};margin-top:4px">${esc(g.label)} &middot; a random amount from ${esc((cur ? cur + " " : "") + g.min)} to ${esc((cur ? cur + " " : "") + g.max)}</div>
           <div style="font-family:${MONO};font-size:15px;color:${INK};letter-spacing:1px;margin-top:6px">${esc(g.code)}</div>
           <div style="font-size:10.5px;color:${SOFT};margin-top:5px">Redeem at amazon.in &rarr; Gift cards. Yours to keep &mdash; it is not part of this bill.</div>
         </td></tr>

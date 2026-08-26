@@ -384,8 +384,9 @@ export function renderInvoicePdf(inv, items, totals, { showGift = false } = {}) 
     p.text(MARGIN, y, "A LITTLE SOMETHING FOR YOU",
            { size: 7.5, bold: true, color: "0.36 0.39 0.45" });
     y -= 12;
-    const head = gift.label + (gift.amount ? "  ·  " + plain(inv.currency, gift.amount) : "");
-    p.text(MARGIN, y, head, { size: 9 });
+    // The range, never the figure — see GIFT_MIN in invoice-html.js.
+    const head = `${gift.label}  ·  a random amount from ${gift.min} to ${gift.max}`;
+    p.text(MARGIN, y, fit(head, CONTENT_W - 200, 9), { size: 9 });
     y -= 13;
     p.text(MARGIN, y, gift.code, { size: 11, bold: true });
     y -= 11;

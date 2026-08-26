@@ -10,7 +10,8 @@
 // And it must not appear on the PUBLIC pay page. That URL is the credential; a
 // redeemable code on it belongs to whoever finds the link.
 
-import { giftBlock, renderInvoiceEmail, computeTotals, GIFT_LABEL } from "../src/invoice-html.js";
+import { giftBlock, renderInvoiceEmail, computeTotals, GIFT_LABEL,
+         GIFT_MIN, GIFT_MAX } from "../src/invoice-html.js";
 import { renderInvoicePdf } from "../src/invoice-pdf.js";
 
 let failed = 0;
@@ -30,7 +31,8 @@ check("nothing for an amount alone", giftBlock({ ...BASE, gift_amount: 100 }) ==
   "a value with no code prints something unredeemable");
 const g = giftBlock({ ...BASE, gift_code: CODE, gift_amount: 100 });
 check("a code is enough", Boolean(g) && g.code === CODE);
-check("carries the amount", g.amount === 100);
+check("carries the amount for the record", g.amount === 100);
+check("and the range that gets printed instead", g.min === GIFT_MIN && g.max === GIFT_MAX);
 check("names the brand once, from a constant", g.label === GIFT_LABEL, g.label);
 check("whitespace-only code is nothing", giftBlock({ gift_code: "   " }) === null);
 
@@ -52,6 +54,12 @@ check("prints the code", shown.includes(CODE));
 check("prints the brand", shown.includes(GIFT_LABEL));
 check("says it is not part of the bill", /not part of this bill/i.test(shown));
 
+// The whole point of the range: the customer must not learn the figure from the
+// receipt. A gift of 100 beside "Rs. 100" is not a surprise.
+check("does NOT print the exact value", !/100\.00/.test(shown),
+  "the card is a surprise; the figure stays on the invoice record");
+check("prints the range instead", /random amount/i.test(shown) && shown.includes("500"));
+
 // This is the mechanism that keeps it off /i/<token>: sharePage passes no
 // showGift, so the default must be OFF rather than on.
 const hidden = renderInvoiceEmail(inv, ITEMS);
@@ -65,6 +73,8 @@ const t = computeTotals(inv, ITEMS);
 const withGift = new TextDecoder("latin1").decode(renderInvoicePdf(inv, ITEMS, t, { showGift: true }));
 const without = new TextDecoder("latin1").decode(renderInvoicePdf(inv, ITEMS, t));
 check("prints the code when asked", withGift.includes(`(${CODE})`));
+check("the A4 does not print the exact value either",
+  !/\(100\.00\)/.test(withGift) && /random amount/i.test(withGift));
 check("omits it by default", !without.includes(CODE));
 check("both PDFs are still well-formed",
   withGift.startsWith("%PDF-") && withGift.includes("%%EOF")
