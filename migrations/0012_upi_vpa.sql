@@ -6,8 +6,8 @@
 -- SEPARATE from biz_pay, deliberately, and this is the whole point of the column.
 -- biz_pay is free prose that gets printed verbatim — in production it reads
 --
---     UPI ID - 6380157944@yescred
---     GPay - 6380157944
+--     UPI ID - 9000000000@examplebank
+--     GPay - 9000000000
 --
 -- Pulling a VPA out of that with a regex at print time would also match the GPay
 -- line, or an email address someone types there later, and the consequence is

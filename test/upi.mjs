@@ -19,7 +19,7 @@ const check = (label, cond, detail = "") => {
 };
 
 console.log("— addresses that are real —");
-for (const v of ["6380157944@yescred", "aswin.z@okhdfcbank", "a-b_c@paytm",
+for (const v of ["9000000000@examplebank", "aswin.z@okhdfcbank", "a-b_c@paytm",
                  "ab@ybl", "9876543210@axl"]) {
   check(`accepts ${v}`, isVpa(v) === true);
 }
@@ -28,10 +28,10 @@ console.log("\n— addresses that are not, including the plausible ones —");
 // Every one of these is something a person could genuinely end up putting in
 // that box. Each would produce a QR pointing at nobody, or at the wrong body.
 const bad = {
-  "GPay - 6380157944": "the neighbouring line in the same textarea",
+  "GPay - 9000000000": "the neighbouring line in the same textarea",
   "someone@example.com": "an email address — a dotted PSP is the tell",
   "billing@aswincloud.com": "the business's own email, right there in the form",
-  "6380157944": "a phone number with no handle",
+  "9000000000": "a phone number with no handle",
   "@ybl": "no handle",
   "a@": "no PSP",
   "a@@b": "two separators",
@@ -45,9 +45,9 @@ for (const [v, why] of Object.entries(bad)) {
 check("rejects null/undefined", !isVpa(null) && !isVpa(undefined));
 
 console.log("\n— the URI —");
-const URI = upiPayUri("6380157944@yescred", "Aswin3DPrints");
+const URI = upiPayUri("9000000000@examplebank", "Aswin3DPrints");
 check("shape is upi://pay", URI.startsWith("upi://pay?"), URI);
-check("carries the address", URI.includes("pa=6380157944@yescred"));
+check("carries the address", URI.includes("pa=9000000000@examplebank"));
 check("carries the payee", URI.includes("pn=Aswin3DPrints"));
 check("declares INR", URI.includes("cu=INR"));
 check("carries NO amount — this is a static QR by choice", !/[?&]am=/.test(URI));
@@ -87,20 +87,20 @@ console.log("\n— an existing provider QR is reprinted, not reconstructed —")
 // QR), `mc` and `mode` alongside the address. Rebuilding the URI from `pa` alone
 // would drop those and produce a code the provider never issued, so the payload
 // is stored and re-encoded byte for byte.
-const RZP = "upi://pay?cu=INR&mc=5262&mode=19&pa=aswincloud860450.rzp@rxairtel"
-          + "&tn=Payment%20To%20Aswincloud&tr=TNjWlQSmcSddNNqrv2";
+const RZP = "upi://pay?cu=INR&mc=5262&mode=19&pa=merchant123456.rzp@exbank"
+          + "&tn=Payment%20To%20Example&tr=TR0000EXAMPLE0000";
 
 check("a real Razorpay payload is accepted", isPayQrPayload(RZP));
 check("it is used EXACTLY as issued", payQrText({ pay_qr: RZP }) === RZP);
-check("keeps the provider's reference", payQrText({ pay_qr: RZP }).includes("tr=TNjWlQSmcSddNNqrv2"),
+check("keeps the provider's reference", payQrText({ pay_qr: RZP }).includes("tr=TR0000EXAMPLE0000"),
   "dropping tr would be a QR Razorpay never issued");
 check("a pasted payload beats a typed address",
-  payQrText({ pay_qr: RZP, upi_vpa: "6380157944@yescred", biz_name: "X" }) === RZP);
+  payQrText({ pay_qr: RZP, upi_vpa: "9000000000@examplebank", biz_name: "X" }) === RZP);
 check("with no payload it builds from the address",
-  payQrText({ pay_qr: "", upi_vpa: "6380157944@yescred", biz_name: "A" })
-    === "upi://pay?pa=6380157944@yescred&pn=A&cu=INR");
+  payQrText({ pay_qr: "", upi_vpa: "9000000000@examplebank", biz_name: "A" })
+    === "upi://pay?pa=9000000000@examplebank&pn=A&cu=INR");
 check("the payee is readable for printing beside the code",
-  payeeFromPayload(RZP) === "aswincloud860450.rzp@rxairtel", payeeFromPayload(RZP));
+  payeeFromPayload(RZP) === "merchant123456.rzp@exbank", payeeFromPayload(RZP));
 check("an EMV/Bharat payload is accepted too", isPayQrPayload("000201010211" + "x".repeat(40)));
 
 for (const [bad, why] of Object.entries({
@@ -115,7 +115,7 @@ check("refuses an absurdly long payload", !isPayQrPayload("upi://pay?pa=a@b&x=" 
 check("the real payload round-trips through a QR", decode(RZP) === RZP);
 
 console.log("\n— only while the bill is actually payable —");
-const INV = { status: "UNPAID", biz_name: "Aswin3DPrints", upi_vpa: "6380157944@yescred" };
+const INV = { status: "UNPAID", biz_name: "Aswin3DPrints", upi_vpa: "9000000000@examplebank" };
 check("unpaid is payable", isPayable(INV));
 check("PAID is not", !isPayable({ ...INV, status: "PAID" }));
 check("VOID is not — a cancelled bill must not invite a first payment",
@@ -131,7 +131,7 @@ check("PAID produces none", payQrAttachment({ ...INV, status: "PAID" }) === null
 check("VOID produces none", payQrAttachment({ ...INV, status: "VOID" }) === null);
 check("no vpa produces none", payQrAttachment({ ...INV, upi_vpa: "" }) === null);
 check("an INVALID vpa produces none — fails closed",
-  payQrAttachment({ ...INV, upi_vpa: "GPay - 6380157944" }) === null);
+  payQrAttachment({ ...INV, upi_vpa: "GPay - 9000000000" }) === null);
 
 const att = payQrAttachment(INV);
 check("it is a PNG with its own content id",

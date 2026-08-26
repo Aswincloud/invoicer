@@ -62,13 +62,13 @@ function payQrRows(){
    QR encodes, and deliberately so.
 
    A provider's QR carries a machine-generated payee:
-   "aswincloud860450.rzp@rxairtel", 29 opaque characters. On paper the only thing
+   "merchant123456.rzp@exbank", 29 opaque characters. On paper the only thing
    a person can do with that is type it, and a mistyped VPA does not bounce — it
    pays whoever does own that address. So it is not printed. Nothing is lost:
    the payload's own `tn` means the payer's app shows who they are paying, which
    is a better confirmation than a line of text on a receipt anyway.
 
-   An address the user typed themselves is different — "6380157944@yescred" is
+   An address the user typed themselves is different — "9000000000@examplebank" is
    short, theirs, and a genuine fallback for a customer whose camera will not
    focus. That one prints.
 
@@ -1060,7 +1060,7 @@ function loadBiz(){
 
 /* Offer the UPI address already visible in Payment details — as a suggestion.
 
-   Production has biz_pay = "UPI ID - 6380157944@yescred\nGPay - 6380157944".
+   Production has biz_pay = "UPI ID - 9000000000@examplebank\nGPay - 9000000000".
    The address is sitting right there, and making somebody retype it invites a
    typo in the one field where a typo sends a customer's money to a stranger.
 
@@ -1620,7 +1620,7 @@ function posOps(){
     // UPI ID box, which a pasted provider QR overrides. Printing one while the
     // code points at the other would be the worst kind of wrong.
     const payee = payeeFromPayQr();
-    // fit:true, because a provider VPA is long: "aswincloud860450.rzp@rxairtel"
+    // fit:true, because a provider VPA is long: "merchant123456.rzp@exbank"
     // is 29 characters, which is 46mm at 7.5pt Courier against 45mm of content,
     // and wrapping it put a lone "l" on its own line under the QR. Shrinking to
     // one line reads as an address; broken across two reads as a mistake.

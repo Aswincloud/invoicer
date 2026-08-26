@@ -9,12 +9,12 @@
 
 /* Is this a Virtual Payment Address?
    
-   Shape is `handle@psp` — "6380157944@yescred", "aswin.z@okhdfcbank". Checked
+   Shape is `handle@psp` — "9000000000@examplebank", "aswin.z@okhdfcbank". Checked
    rather than trusted because the value is typed by hand and, once it is in a
    QR, nobody reads it again.
 
    Rejects, specifically:
-     * anything with whitespace — "GPay - 6380157944" and friends
+     * anything with whitespace — "GPay - 9000000000" and friends
      * more than one "@"
      * a PSP containing a dot — that is an email domain, not a UPI handle, and
        "someone@example.com" is the single most likely wrong thing to paste here
@@ -49,8 +49,8 @@ export function upiPayUri(vpa, payeeName) {
 
    A Razorpay static QR decodes to more than an address:
 
-     upi://pay?cu=INR&mc=5262&mode=19&pa=aswincloud860450.rzp@rxairtel
-              &tn=Payment%20To%20Aswincloud&tr=TNjWlQSmcSddNNqrv2
+     upi://pay?cu=INR&mc=5262&mode=19&pa=merchant123456.rzp@exbank
+              &tn=Payment%20To%20Example&tr=TR0000EXAMPLE0000
 
    `tr` is the provider's reference for that specific QR, and `mc`/`mode`
    describe the merchant and the QR's type. Rebuilding the URI from `pa` alone

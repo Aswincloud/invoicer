@@ -3,8 +3,8 @@
 -- 0012 added upi_vpa, on the assumption that a UPI address is all a pay QR
 -- needs. A real Razorpay static QR shows that is wrong. This is one, decoded:
 --
---   upi://pay?cu=INR&mc=5262&mode=19&pa=aswincloud860450.rzp@rxairtel
---            &tn=Payment%20To%20Aswincloud&tr=TNjWlQSmcSddNNqrv2
+--   upi://pay?cu=INR&mc=5262&mode=19&pa=merchant123456.rzp@exbank
+--            &tn=Payment%20To%20Example&tr=TR0000EXAMPLE0000
 --
 -- The address is in there and upi_vpa would have accepted it. But rebuilding the
 -- URI from just that address drops `tr` — Razorpay's reference for this
