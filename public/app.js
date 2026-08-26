@@ -1607,16 +1607,34 @@ function posDraw(doc, ops){
   let y = 4;
   const lh = (size) => size * 0.42;   // pt -> mm leading, tuned for Courier
 
+  // The size of the last text drawn, so a rule can clear its descenders.
+  let lastSize = PS.meta;
+
   for(const op of ops){
     if(op.t === "gap"){ y += op.h; continue; }
     if(op.t === "rule"){
-      y += 1.2;
+      /* Clear the previous line's DESCENDERS, not just its baseline.
+
+         y sits on the baseline of the text above, and 1.2mm of fixed gap was
+         measured against 8pt type. At 9.2pt a descender reaches ~0.7mm below
+         the baseline, leaving 0.5mm — four dots — and on paper that closed:
+         "Pondicherry" printed with the bottom of its y clipped by the rule
+         under BILL TO. Four dots is inside the slack of a paper feed.
+
+         Scaling with the text above keeps the clearance honest at any PS_SCALE,
+         which a fixed number stops doing the moment the type changes size. The
+         floor keeps the old spacing for rules that follow nothing. */
+      // Capped: the rule under the grand total follows 20.7pt digits, which have
+      // no descenders at all, and an uncapped formula spent 3.9mm clearing
+      // nothing. 2mm covers the deepest descender any size here produces.
+      y += Math.min(2.0, Math.max(1.2, lastSize * 0.42 * 0.45));
       doc.setLineWidth(op.heavy ? 0.4 : 0.15);
       doc.line(L, y, R, y);
       y += 1.8;
       continue;
     }
     let size = op.size || PS.meta;
+    lastSize = size;
     doc.setFont("courier", op.bold ? "bold" : "normal");
     doc.setFontSize(size);
 
