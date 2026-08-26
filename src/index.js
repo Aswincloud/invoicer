@@ -379,6 +379,10 @@ function invoiceFields(b) {
     status: b.status || "UNPAID", notes: b.notes || "",
     client_name: b.clName || "", client_email: b.clEmail || "",
     client_addr: b.clAddr || "", client_gst: b.clGst || "",
+    // A thank-you, not a charge. Deliberately NOT read by computeTotals, so it
+    // cannot move the amount due or the taxable value in either direction.
+    gift_code: String(b.giftCode || "").trim().slice(0, 60),
+    gift_amount: +b.giftAmount || 0,
   };
 }
 
@@ -432,13 +436,14 @@ async function createInvoice(env, user, b) {
 
   await env.DB.prepare(
     `INSERT INTO invoices (id,user_id,business_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
-       discount_pct,shipping,shipping_mode,round_off,status,notes,client_name,client_email,client_addr,client_gst,total,created_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       discount_pct,shipping,shipping_mode,round_off,status,notes,client_name,client_email,client_addr,client_gst,total,gift_code,gift_amount,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(id, user.id, biz ? biz.id : null,
          inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
          inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode, inv.round_off,
          inv.status, inv.notes,
-         inv.client_name, inv.client_email, inv.client_addr, inv.client_gst, total, t, t).run();
+         inv.client_name, inv.client_email, inv.client_addr, inv.client_gst, total,
+         inv.gift_code, inv.gift_amount, t, t).run();
 
   await writeLineItems(env, id, items);
 
@@ -494,12 +499,12 @@ async function updateInvoice(env, user, id, b) {
     `UPDATE invoices SET number=?, issue_date=?, due_date=?, currency=?, tax_mode=?,
        tax_rate=?, discount_pct=?, shipping=?, shipping_mode=?, round_off=?,
        status=?, notes=?, client_name=?, client_email=?, client_addr=?, client_gst=?,
-       total=?, updated_at=?
+       total=?, gift_code=?, gift_amount=?, updated_at=?
      WHERE id=? AND user_id=?`
   ).bind(inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
          inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode, inv.round_off,
          inv.status, inv.notes, inv.client_name, inv.client_email, inv.client_addr,
-         inv.client_gst, total, now(), id, user.id).run();
+         inv.client_gst, total, inv.gift_code, inv.gift_amount, now(), id, user.id).run();
 
   await writeLineItems(env, id, items);
 
@@ -602,9 +607,14 @@ async function emailInvoice(env, user, id, b) {
   const qr = qrAttachment(r.inv);
   const sign = signAttachment(r.inv);
   const payQr = payQrAttachment(r.inv);
-  const html = renderInvoiceEmail(r.inv, r.items, logo ? logo.src : "", payUrl,
-                                  qr ? qr.src : "", sign ? sign.src : "",
-                                  payQr ? payQr.src : "");
+  const html = renderInvoiceEmail(r.inv, r.items, {
+    logoSrc: logo ? logo.src : "",
+    payUrl,
+    qrSrc: qr ? qr.src : "",
+    signSrc: sign ? sign.src : "",
+    paySrc: payQr ? payQr.src : "",
+    showGift: true,          // the client's own copy
+  });
 
   const attachments = [];
   if (logo) attachments.push(logo.attachment);
@@ -624,7 +634,7 @@ async function emailInvoice(env, user, id, b) {
     // attachment, so an invoice emailed from anywhere the client-side renderer
     // had not run arrived without one.
     try {
-      const bytes = renderInvoicePdf(r.inv, r.items, computeTotals(r.inv, r.items));
+      const bytes = renderInvoicePdf(r.inv, r.items, computeTotals(r.inv, r.items), { showGift: true });
       attachments.push({ filename: `${safeNum}.pdf`, content: toBase64(bytes), content_type: "application/pdf" });
     } catch (e) {
       console.error("invoice pdf failed", r.inv.number, e?.message || e);

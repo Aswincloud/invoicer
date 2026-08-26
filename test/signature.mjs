@@ -52,13 +52,13 @@ const INV = { number: "INV-1", currency: "₹", tax_mode: "none", status: "UNPAI
               biz_name: "Aswin3DPrints", biz_sign: MASK };
 const ITEMS = [{ description: "Benchy", qty: 1, rate: 250 }];
 
-const withSig = renderInvoiceEmail(INV, ITEMS, "", null, "", "cid:signature@invoicer");
+const withSig = renderInvoiceEmail(INV, ITEMS, { signSrc: "cid:signature@invoicer" });
 check("renders the image when a src is passed", withSig.includes("cid:signature@invoicer"));
 check("keeps the printed line too", withSig.includes("Authorised Signatory"));
 
 // This is the mechanism that keeps it off the public pay page: sharePage calls
 // the same template and passes no signature.
-const noSig = renderInvoiceEmail(INV, ITEMS, "");
+const noSig = renderInvoiceEmail(INV, ITEMS, {});
 check("renders NOTHING when no src is passed", !noSig.includes("signature@invoicer"),
   "this is what keeps it off /i/<token>");
 check("the signatory line still prints there", noSig.includes("Authorised Signatory"));

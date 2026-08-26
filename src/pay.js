@@ -107,7 +107,9 @@ export async function sharePage(env, token) {
   // The invoice body is renderInvoiceEmail's fragment verbatim. One template
   // across email, PDF and this page means a change to the invoice layout cannot
   // land in two of the three.
-  const body = renderInvoiceEmail(inv, items, inv.biz_logo || null);
+  // No showGift, deliberately: this page is a public URL, and a gift-card code
+  // on it could be redeemed by anyone who has the link.
+  const body = renderInvoiceEmail(inv, items, { logoSrc: inv.biz_logo || null });
 
   const bizName = (inv.biz_name || "Invoicer").trim();
   const amountLabel = `${inv.currency || PAYABLE_CURRENCY} ${Number(t.total).toLocaleString(

@@ -74,6 +74,28 @@ function payQrRows(){
 
    Email keeps showing either, because there you can copy it. This asymmetry is
    the point: paper cannot be copied. */
+const GIFT_LABEL = "Amazon Pay Gift Card";
+
+/* The gift card on this invoice, or null. Mirrors giftBlock() in
+   src/invoice-html.js — the receipt and the preview render from FORM state, so
+   the rule lives twice, the same way payBlock mirrors paymentBlock.
+
+   A present, not a payment: nothing here touches computeTotals. The checkbox
+   gates it so a code left in the box does not print once it is unticked. */
+function giftOnInvoice(){
+  if(!$("giftOn").checked) return null;
+  const code = fld("giftCode");
+  if(!code) return null;
+  return { code, amount: +$("giftAmount").value || 0, label: GIFT_LABEL };
+}
+
+// Grey the fields out when the box is unticked, so it is obvious the code in
+// them is not going anywhere.
+function syncGift(){
+  const on = $("giftOn").checked;
+  ["giftCode","giftAmount"].forEach(f => { $(f).disabled = !on; });
+}
+
 function payeeFromPayQr(){
   const b = activeBiz();
   // A pasted provider payload — printing its payee helps nobody.
@@ -643,9 +665,27 @@ function render(){
 
 ${words?`<div class="pwords"><div class="lbl">Amount in words</div><p>${esc(words)}</p></div>`:""}
 ${v("notes")?`<div class="pfoot"><div class="lbl">Notes / Terms</div><p>${esc(v("notes"))}</p></div>`:""}
+${giftBlockHtml()}
 ${qrSvgBlock()}
 <div class="psign">${signImgTag()}<div class="sigline"></div>For ${esc(v("bizName")||"Your Business")}<br>Authorised Signatory</div>
 <div class="pnote">${esc([v("bizName"),v("bizPhone"),v("bizEmail")].filter(Boolean).join(" · "))}</div>`;
+}
+
+/* The gift card on the on-screen sheet.
+
+   Present here for the same reason the signature is: emailInvoice sends the PDF
+   the BROWSER rendered when it has one, and that PDF is a bitmap of this sheet,
+   so anything missing here is missing from most emailed invoices. */
+function giftBlockHtml(){
+  const g = giftOnInvoice();
+  if(!g) return "";
+  const amt = g.amount ? " · " + fmt(g.amount) : "";
+  return `<div class="pgift">
+    <div class="lbl">A little something for you</div>
+    <p class="pgift-h">${esc(g.label)}${esc(amt)}</p>
+    <p class="pgift-code">${esc(g.code)}</p>
+    <p class="pgift-note">Redeem at amazon.in → Gift cards. Yours to keep — it is not part of this bill.</p>
+  </div>`;
 }
 
 /* The signature on the on-screen sheet.
@@ -1175,13 +1215,18 @@ function init(){
   $("btnPrint").onclick = () => window.print();
   $("btnPos").onclick = downloadPosReceipt;
   $("btnPosPrint").onclick = printPosReceipt;
+  $("giftOn").onchange = () => { syncGift(); render(); };
+  ["giftCode","giftAmount"].forEach(f =>
+    $(f).addEventListener("input", render));
+  syncGift();
   $("bizPicker").onchange = (e) => applyBiz(e.target.value);
   $("bizNew").onclick      = createBizProfile;
   $("bizDelete").onclick   = deleteBizProfile;
   $("btnReset").onclick = () => {
     if(!confirm("Start a new blank invoice? (Your saved business details are kept.)")) return;
     ["clName","clEmail","clAddr","clGst","notes","shipping","shippingMode",
-     "targetTotal"].forEach(f=>$(f).value="");
+     "targetTotal","giftCode","giftAmount"].forEach(f=>$(f).value="");
+    $("giftOn").checked = false; syncGift();
     syncShippingMode();
     $("solveMsg").textContent = "";
     $("autoSolve").checked = true;   // back to the default
@@ -1227,6 +1272,11 @@ function collect(){
     // issuing business is fixed at creation.
     businessId: ACTIVE_BIZ,
     clName:v("clName"),clEmail:v("clEmail"),clAddr:v("clAddr"),clGst:v("clGst"),
+    // A present, never a charge: these do not enter computeTotals on either
+    // side of the wire. The checkbox is what decides whether it is sent at all,
+    // so unticking it clears the card rather than hiding it.
+    giftCode: $("giftOn").checked ? v("giftCode") : "",
+    giftAmount: $("giftOn").checked ? (+$("giftAmount").value || 0) : 0,
     items:readItems().filter(i=>i.desc||i.amt).map(i=>({description:i.desc,qty:i.qty,rate:i.rate}))};
 }
 
@@ -1580,6 +1630,29 @@ function posOps(){
     ops.push({t:"qr", rows:qr});
     const cap = (BIZ_QR_CAPTION || "").trim() || "Scan for more products & order online";
     ops.push({t:"center", s:cap, size:PS.footer});
+  }
+
+  // The gift card, last of all: it is what the customer takes away, and it
+  // belongs after the record of the sale rather than inside it.
+  const gift = giftOnInvoice();
+  if(gift){
+    ops.push({t:"gap", h:1.5});
+    ops.push({t:"rule"});
+    /* Every line here is short enough to fit 45mm at its own size, because the
+       first draft wrapped twice and looked like a mistake rather than a present:
+       "A LITTLE SOMETHING FOR / YOU" and "Redeem at amazon.in - Gift / cards".
+       At 9.2pt Courier, 45mm holds about 24 characters. */
+    ops.push({t:"center", s:"A GIFT FOR YOU", size:PS.label, bold:true});
+    ops.push({t:"center", s:gift.label, size:PS.clientMeta, fit:true});
+    // WITH the currency symbol: a bare "100.00" beside a bill is ambiguous
+    // about what it even is.
+    if(gift.amount)
+      ops.push({t:"center", s:posMoney(gift.amount, $("currency").value, true), size:PS.clientMeta});
+    // The code is the point of the block, so it gets a size to match. It is
+    // going to be typed into Amazon off this paper.
+    ops.push({t:"center", s:gift.code, size:PS.client, bold:true, fit:true});
+    ops.push({t:"center", s:"Redeem at amazon.in", size:PS.footer});
+    ops.push({t:"center", s:"Not part of this bill", size:PS.footer});
   }
 
   ops.push({t:"gap", h:1.5});
@@ -2196,6 +2269,10 @@ async function openInvoiceInEditor(id){
     $("clEmail").value  = inv.client_email || "";
     $("clAddr").value   = inv.client_addr || "";
     $("clGst").value    = inv.client_gst || "";
+    $("giftCode").value = inv.gift_code || "";
+    $("giftAmount").value = inv.gift_amount ? String(inv.gift_amount) : "";
+    $("giftOn").checked = !!(inv.gift_code || "").trim();
+    syncGift();
     // line items
     $("items").innerHTML = "";
     (items.length ? items : [{description:"",qty:1,rate:""}]).forEach(it =>

@@ -186,7 +186,7 @@ export async function ingestOrder(request, env) {
   // customer their invoice: the email body IS the invoice, and arriving without
   // the attachment is a far better failure than not arriving at all.
   try {
-    const pdf = renderInvoicePdf(rendered, items, computeTotals(rendered, items));
+    const pdf = renderInvoicePdf(rendered, items, computeTotals(rendered, items), { showGift: true });
     const safeNum = String(inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
     attachments.push({
       filename: `${safeNum}.pdf`,
@@ -203,8 +203,13 @@ export async function ingestOrder(request, env) {
     subject: `Invoice ${inv.number} — order ${receipt}`,
     // No payUrl: a shop order is already paid, so the fourth argument stays null
     // and the QR goes in the fifth.
-    html: renderInvoiceEmail(rendered, items, logo ? logo.src : "", null, qr ? qr.src : "",
-                             sign ? sign.src : "", payQr ? payQr.src : ""),
+    html: renderInvoiceEmail(rendered, items, {
+      logoSrc: logo ? logo.src : "",
+      qrSrc: qr ? qr.src : "",
+      signSrc: sign ? sign.src : "",
+      paySrc: payQr ? payQr.src : "",
+      showGift: true,
+    }),
     text: `Invoice ${inv.number} for order ${receipt}. Total ${inv.currency} ${total.toFixed(2)}. A PDF copy is attached.`,
     attachments: attachments.length ? attachments : undefined,
   });

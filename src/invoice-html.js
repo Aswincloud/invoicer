@@ -311,6 +311,25 @@ export function qrAttachment(inv) {
   };
 }
 
+// The brand is named in one constant rather than sprinkled through templates,
+// so switching to a different card later is one edit.
+export const GIFT_LABEL = "Amazon Pay Gift Card";
+
+/* The gift card handed over with this bill, or null.
+
+   A present, not a payment: nothing here is read by computeTotals and the amount
+   below is only what gets PRINTED beside the code. It never reduces what is owed
+   and never enters the tax base.
+
+   Requires a code. An amount on its own would print "Rs. 100 gift card" with
+   nothing to redeem, which is worse than printing nothing. */
+export function giftBlock(inv) {
+  const code = String((inv && inv.gift_code) || "").trim();
+  if (!code) return null;
+  const amount = Number((inv && inv.gift_amount) || 0);
+  return { code, amount, label: GIFT_LABEL };
+}
+
 /* Is this invoice still asking to be paid?
 
    PAID must not invite a second payment; VOID must not invite a first one. Same
@@ -374,8 +393,20 @@ export function signAttachment(inv) {
 // `payUrl` adds a Pay button to the emailed copy. Optional and last, so every
 // existing caller (ingest.js, emailInvoice, and the public pay page — which has
 // its own button and must NOT get a second one) is unaffected by its addition.
-export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qrSrc = null,
-                                   signSrc = null, paySrc = null) {
+/* Options, not five optional positionals.
+
+   This grew to (logoSrc, payUrl, qrSrc, signSrc, paySrc) one feature at a time,
+   and by the fifth the call sites were unreadable and a mis-order was a matter
+   of luck. The gift code is what forced the change: passing it in the wrong slot
+   would print a redeemable code on the PUBLIC pay page, which is the one mistake
+   here that cannot be taken back. Named keys cannot be mis-ordered.
+
+   `showGift` is opt-in for exactly that reason. sharePage does not pass it. */
+export function renderInvoiceEmail(inv, items, opts = {}) {
+  const {
+    logoSrc = null, payUrl = null, qrSrc = null,
+    signSrc = null, paySrc = null, showGift = false,
+  } = opts;
   const cur = inv.currency || "₹";
   const t = computeTotals(inv, items);
   const initial = (inv.biz_name || "I").charAt(0).toUpperCase();
@@ -428,6 +459,25 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qr
            <div style="font-size:11.5px;color:${INK};margin-top:3px">Scan with any UPI app to pay ${esc(inv.biz_name || "us")}</div>
            ${payee ? `<div style="font-size:11px;color:${SOFT};font-family:${MONO}">${esc(payee)}</div>` : ""}
          </td></tr>
+       </table>`
+    : "";
+
+  /* The gift card, on the copy the customer keeps.
+
+     showGift gates it, and sharePage does not pass it: that page is a public URL
+     and a redeemable code on it belongs to whoever finds the link. The code is
+     set in monospace because it is going to be typed into Amazon by hand. */
+  const g = showGift ? giftBlock(inv) : null;
+  const gift = g
+    ? `<table width="100%" cellpadding="0" cellspacing="0"
+             style="margin-top:26px;border:1px dashed ${RULE};border-radius:8px">
+        <tr><td style="padding:13px 15px">
+          <div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700">A little something for you</div>
+          <div style="font-size:12px;color:${INK};margin-top:4px">${esc(g.label)}${
+              g.amount ? " &middot; " + esc(money(cur, g.amount)) : ""}</div>
+          <div style="font-family:${MONO};font-size:15px;color:${INK};letter-spacing:1px;margin-top:6px">${esc(g.code)}</div>
+          <div style="font-size:10.5px;color:${SOFT};margin-top:5px">Redeem at amazon.in &rarr; Gift cards. Yours to keep &mdash; it is not part of this bill.</div>
+        </td></tr>
        </table>`
     : "";
 
@@ -508,6 +558,7 @@ export function renderInvoiceEmail(inv, items, logoSrc = null, payUrl = null, qr
      <span style="color:${INK}">${esc(words)}</span></div>` : ""}
   ${payButton}
   ${inv.notes ? `<div style="margin-top:28px;font-size:11px;color:${SOFT};white-space:pre-line"><div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${SOFT};font-weight:700;margin-bottom:4px">Notes / Terms</div>${esc(inv.notes)}</div>` : ""}
+  ${gift}
   ${payQr}
   ${orderQr}
   <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:34px">
