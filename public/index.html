@@ -39,7 +39,7 @@
 <main class="layout">
   <!-- ────── FORM ────── -->
   <section class="form no-print" aria-label="Invoice editor">
-    <details open class="grp">
+    <details class="grp" id="secBiz">
       <summary>Your business <span id="bizHint" class="hint">(saved on this device)</span></summary>
       <div class="grid2">
         <!-- Which trading name is issuing this invoice. Signed-in only: the list
@@ -90,7 +90,7 @@
       </div>
     </details>
 
-    <details open class="grp">
+    <details open class="grp" id="secBill">
       <summary>Bill to</summary>
       <div class="grid2">
         <label>Client name<input id="clName" placeholder="Nova Retail Pvt. Ltd."></label>
@@ -100,7 +100,7 @@
       </div>
     </details>
 
-    <details class="grp">
+    <details class="grp" id="secGift">
       <summary>Gift card <span class="hint">(a thank-you, not part of the bill)</span></summary>
       <div class="grid2">
         <label class="col2 chk-row">
@@ -114,7 +114,7 @@
       </div>
     </details>
 
-    <details open class="grp">
+    <details open class="grp" id="secInv">
       <summary>Invoice details</summary>
       <div class="grid2">
         <label>Invoice #<input id="invNo" placeholder="INV-2026-0042"></label>
@@ -127,13 +127,13 @@
       </div>
     </details>
 
-    <details open class="grp">
+    <details open class="grp" id="secItems">
       <summary>Line items</summary>
       <div id="items"></div>
       <button id="btnAddItem" class="btn ghost sm">+ Add line item</button>
     </details>
 
-    <details open class="grp">
+    <details open class="grp" id="secTot">
       <summary>Totals &amp; tax</summary>
       <div class="grid2">
         <label>Discount %<input id="discount" type="number" min="0" max="100" step="0.01" value="0"></label>

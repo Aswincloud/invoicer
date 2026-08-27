@@ -159,7 +159,28 @@ textarea{resize:vertical}
 #btnAddItem{margin-top:12px;width:100%;justify-content:center;border-style:dashed}
 
 /* ── Invoice sheet (always light, for print fidelity) ───────────── */
-.preview-wrap{position:sticky;top:86px}
+/* The sheet scrolls on its own.
+
+   Sticky alone was not enough: with no height cap a tall invoice is simply
+   taller than the viewport, so the whole page scrolls as one and reaching the
+   bottom of the sheet means scrolling past the entire form first. Capping it to
+   the viewport and giving it its own overflow means the two panes move
+   independently — edit a line item at the bottom of the form while watching the
+   totals at the bottom of the sheet.
+
+   86px clears the sticky topbar; the extra 24 is the layout's own padding. */
+.preview-wrap{position:sticky;top:86px;
+  max-height:calc(100vh - 86px - 24px);overflow-y:auto;
+  /* No horizontal scrollbar: the sheet is fluid, and one appearing means
+     something inside it has overflowed, which should be fixed there. */
+  overflow-x:hidden;
+  scrollbar-width:thin}
+
+/* The form pane gets the same treatment, so neither drags the other. */
+.form{max-height:calc(100vh - 86px - 24px);overflow-y:auto;overflow-x:hidden;
+  scrollbar-width:thin;
+  /* Room so the last field is not flush against the scroll edge. */
+  padding-right:4px}
 .paper{background:var(--paper);color:var(--paper-ink);border:1px solid var(--line);
   border-radius:var(--radius);box-shadow:var(--shadow);padding:46px 48px;
   min-height:640px;font-size:12px;line-height:1.55}
@@ -393,8 +414,11 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
   .totbox .grand td.r{font-size:17px}
 
   /* Sticky preview fights a phone's scroll — the form is long and the sheet
-     belongs below it, not pinned. */
-  .preview-wrap{position:static}
+     belongs below it, not pinned. Independent panes are worse still on a
+     phone: two nested scroll areas in one column means neither is reachable
+     without fighting the other. One column, one scrollbar, the page's own. */
+  .preview-wrap{position:static;max-height:none;overflow:visible}
+  .form{max-height:none;overflow:visible;padding-right:0}
 }
 
 /* ── Print ──────────────────────────────────────────────────────── */
@@ -403,7 +427,10 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
   .no-print{display:none!important}
   html,body{background:#fff}
   .layout{display:block;max-width:none;padding:0}
-  .preview-wrap{position:static}
+  /* max-height and overflow MUST be cleared here, or the sheet prints clipped
+     to one viewport's worth — the scroll container would become the page. */
+  .preview-wrap{position:static;max-height:none;overflow:visible}
+  .form{max-height:none;overflow:visible}
   .paper{border:none;box-shadow:none;border-radius:0;padding:0}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}

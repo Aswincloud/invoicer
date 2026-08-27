@@ -1128,6 +1128,7 @@ function applyBiz(id){
   syncSignUI();
   saveBiz();
   syncVpaHint();
+  syncBizHint();
 
   // applyDefaults already refuses to renumber while an invoice is open.
   applyDefaults(b.defaults || {});
@@ -1168,13 +1169,58 @@ async function refreshBusinesses(){
   renderBizPicker();
 }
 
+/* ── which sections are open ──────────────────────────────────────
+
+   "Your business" now ships COLLAPSED. It is set-once-per-business data — name,
+   GSTIN, logo, signature, two payment QRs — and it had grown to fill the pane,
+   pushing the fields that change on every invoice below the fold. The per-
+   invoice sections (Bill to, Invoice details, Line items, Totals) stay open.
+
+   The choice is then remembered, because a default is only right until someone
+   disagrees with it, and re-opening the same section on every load is the kind
+   of small friction that never gets reported. */
+const SECTIONS_KEY = "invoicer.sections.v1";
+
+function wireSections(){
+  let saved = {};
+  try{ saved = JSON.parse(localStorage.getItem(SECTIONS_KEY) || "{}"); }catch(_){}
+
+  document.querySelectorAll(".form details.grp[id]").forEach(d => {
+    if(typeof saved[d.id] === "boolean") d.open = saved[d.id];
+    d.addEventListener("toggle", () => {
+      let all = {};
+      try{ all = JSON.parse(localStorage.getItem(SECTIONS_KEY) || "{}"); }catch(_){}
+      all[d.id] = d.open;
+      try{ localStorage.setItem(SECTIONS_KEY, JSON.stringify(all)); }catch(_){}
+    });
+  });
+}
+
+/* What the collapsed "Your business" header says.
+
+   With the section shut, the trading name on the invoice is otherwise invisible
+   — and since an account can hold several, "which letterhead is this going out
+   under" is exactly the question the header should answer at a glance. Falls
+   back to where the details are stored when there is no name to show. */
+function syncBizHint(){
+  const el = $("bizHint"); if(!el) return;
+  const name = fld("bizName");
+  if(name){
+    el.textContent = ME ? name : `${name} — saved on this device`;
+    return;
+  }
+  el.textContent = ME ? "(synced to your account)" : "(saved on this device)";
+}
+
 // ── init ─────────────────────────────────────────────────────────
 function todayISO(d=0){ const t=new Date(); t.setDate(t.getDate()+d); return t.toISOString().slice(0,10); }
 function init(){
   loadBiz();
+  wireSections();
   syncLogoUI();
   syncSignUI();
   syncVpaHint();
+  syncBizHint();
   if(!$("issueDate").value) $("issueDate").value = todayISO(0);
   // Due date is optional — left blank by default. A user's Settings "due in
   // days" default (applyDefaults) will fill it if they've set one.
@@ -1212,7 +1258,7 @@ function init(){
   // this device.
   [...BIZ_FIELDS, ...BIZ_QR_FIELDS].forEach(f =>
     $(f).addEventListener("input", () => {
-      saveBiz(); persistProfileDebounced(); syncVpaHint(); render(); }));
+      saveBiz(); persistProfileDebounced(); syncVpaHint(); syncBizHint(); render(); }));
   $("btnAddItem").onclick = () => { addItem(); update(); };
   $("btnPrint").onclick = () => window.print();
   $("btnPos").onclick = downloadPosReceipt;
@@ -1958,7 +2004,7 @@ async function refreshMe(){
   $("btnPosPrint").hidden = !on;
   $("btnSettings").hidden = !on;
   $("btnInvoices").hidden = !on;
-  $("bizHint").textContent = on ? "(synced to your account)" : "(saved on this device)";
+  syncBizHint();
   // The account's businesses replace whatever the device had cached. Signed out,
   // BIZ_LIST is empty and the form keeps working off localStorage exactly as it
   // did before any of this existed.
