@@ -659,7 +659,8 @@ function render(){
   ${units?`<tr><td>Items</td><td class="r">${esc(fmtUnits(units))}</td></tr>`:""}
   <tr><td>Subtotal</td><td class="r">${fmt(t.subtotal)}</td></tr>
   ${t.disc?`<tr><td>Discount (${num($("discount").value)}%)</td><td class="r">– ${fmt(t.disc)}</td></tr>`:""}
-  ${t.shipping?`<tr><td>Shipping${shipMode()?` (${esc(shipMode())})`:""}</td><td class="r">${fmt(t.shipping)}</td></tr>`:""}
+  ${t.shipping?`<tr><td>Shipping${shipMode()?` (${esc(shipMode())})`:""}</td><td class="r">${fmt(t.shipping)}</td></tr>`
+    :shipMode()?`<tr><td>Delivery</td><td class="r">${esc(shipMode())}</td></tr>`:""}
   ${(t.disc||t.shipping)&&t.taxRows.length?`<tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
   ${taxHtml}
   ${showRound(t)?`<tr><td>Round off</td><td class="r">${t.round<0?"– ":"+ "}${fmt(Math.abs(t.round))}</td></tr>`:""}
@@ -1739,6 +1740,14 @@ function posOps(){
   ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:PS.totals, fit:true});
   if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:PS.totals, fit:true});
   if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:PS.totals, fit:true});
+  // How it went out, when it cost nothing to send.
+  //
+  // The mode used to be only a parenthetical on the shipping CHARGE, so typing
+  // "Rapido" and leaving the charge at zero printed nothing at all — the row it
+  // was attached to never rendered. Delivery is a fact about the order whether
+  // or not it was billed for, and on a counter receipt it is often the only
+  // record of how the customer is getting their goods.
+  else if(shipMode()) ops.push({t:"kv", k:"Delivery", val:shipMode(), size:PS.totals, fit:true});
   // Only when a tax actually follows it: "Taxable" names the base a tax was
   // computed on, so on a no-tax invoice it is a number with no meaning. The
   // email and the PDF already had this condition; the receipt did not.
