@@ -167,5 +167,24 @@ check("rows are the wire format", pub.qrRows.every((r) => /^[01]+$/.test(r)));
 check("a business with no shop ships no rows", publicBusiness(CLOUD).qrRows === null);
 check("the logo is not lost", typeof pub.biz.bizLogo === "string");
 
+console.log("\n— the receipt's own logo —");
+// biz_logo is colour artwork for A4 and email. The thermal head has one bit per
+// dot, and Aswin's mark is cyan on black: thresholded as "ink is what is dark"
+// it burns the background and prints a solid square. So the receipt gets a
+// separate field holding a separate, already-1-bit image, and the two must not
+// be confused for one another anywhere.
+const RLOGO = "176:101:" + "A".repeat(40);
+const withLogo = publicBusiness({ ...PRINTS, biz_receipt_logo: RLOGO });
+check("ships to the browser", withLogo.biz.receiptLogo === RLOGO);
+check("absent means empty, not undefined", pub.biz.receiptLogo === "");
+check("is not the colour logo", withLogo.biz.receiptLogo !== withLogo.biz.bizLogo);
+check("a partial save leaves it alone",
+  !businessPatch({ bizName: "Aswin3DPrints" }).cols.includes("biz_receipt_logo"));
+check("can be cleared", businessPatch({ receiptLogo: "" }).cols.includes("biz_receipt_logo"));
+check("writes to its own column",
+  businessPatch({ receiptLogo: RLOGO }).cols[0] === "biz_receipt_logo");
+check("survives the round trip",
+  businessPatch({ receiptLogo: RLOGO }).vals[0] === RLOGO);
+
 console.log(failed ? `\n${failed} FAILED` : "\nall pass");
 process.exit(failed ? 1 : 0);

@@ -23,7 +23,7 @@ import { payQrText } from "./upi.js";
 // invoice-pdf.js needed no changes to pick a business up.
 export const BIZ_COLUMNS = [
   "biz_name", "biz_email", "biz_addr", "biz_phone", "biz_gst", "biz_pay", "biz_logo",
-  "qr_url", "qr_caption", "biz_sign", "upi_vpa", "pay_qr",
+  "qr_url", "qr_caption", "biz_sign", "upi_vpa", "pay_qr", "biz_receipt_logo",
 ];
 
 // For queries that already join, e.g. the public share page.
@@ -99,6 +99,7 @@ export function publicBusiness(b) {
       bizSign: b.biz_sign || "",
       upiVpa: b.upi_vpa || "",
       payQr: b.pay_qr || "",
+      receiptLogo: b.biz_receipt_logo || "",
     },
     defaults: {
       currency: b.def_currency || "", taxMode: b.def_tax_mode || "",
@@ -133,6 +134,7 @@ const BIZ_FIELD_MAP = {
   bizPhone: "biz_phone", bizGst: "biz_gst", bizPay: "biz_pay",
   bizLogo: "biz_logo", qrUrl: "qr_url", qrCaption: "qr_caption",
   bizSign: "biz_sign", upiVpa: "upi_vpa", payQr: "pay_qr",
+  receiptLogo: "biz_receipt_logo",
 };
 
 const DEFAULTS_MAP = {
@@ -143,7 +145,7 @@ const DEFAULTS_MAP = {
 
 // Ceilings on the two that carry image data, so one oversized upload cannot
 // bloat every row that joins against this table.
-const LIMITS = { bizLogo: 200000, bizSign: 200000, qrUrl: 2000, qrCaption: 120, upiVpa: 120, payQr: 1200 };
+const LIMITS = { bizLogo: 200000, bizSign: 200000, qrUrl: 2000, qrCaption: 120, upiVpa: 120, payQr: 1200, receiptLogo: 200000 };
 
 const clamp = (key, value) => {
   const s = String(value ?? "");
