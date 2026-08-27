@@ -659,7 +659,8 @@ function render(){
   ${units?`<tr><td>Items</td><td class="r">${esc(fmtUnits(units))}</td></tr>`:""}
   <tr><td>Subtotal</td><td class="r">${fmt(t.subtotal)}</td></tr>
   ${t.disc?`<tr><td>Discount (${num($("discount").value)}%)</td><td class="r">– ${fmt(t.disc)}</td></tr>`:""}
-  ${t.shipping?`<tr><td>Shipping${shipMode()?` (${esc(shipMode())})`:""}</td><td class="r">${fmt(t.shipping)}</td></tr>`:""}
+  ${t.shipping?`<tr><td>Shipping${shipMode()?` (${esc(shipMode())})`:""}</td><td class="r">${fmt(t.shipping)}</td></tr>`
+    :shipMode()?`<tr><td>Delivery</td><td class="r">${esc(shipMode())}</td></tr>`:""}
   ${(t.disc||t.shipping)&&t.taxRows.length?`<tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
   ${taxHtml}
   ${showRound(t)?`<tr><td>Round off</td><td class="r">${t.round<0?"– ":"+ "}${fmt(Math.abs(t.round))}</td></tr>`:""}
@@ -818,6 +819,8 @@ function wireLogo(){
   wireLogoTrio("setLogoPick", "setLogoFile", "setLogoClear"); // settings modal
   wireSignTrio("signPick", "signFile", "signClear");          // main business form
   wireSignTrio("setSignPick", "setSignFile", "setSignClear"); // settings modal
+  wireReceiptLogoTrio("rlogoPick", "rlogoFile", "rlogoClear");
+  wireReceiptLogoTrio("setRlogoPick", "setRlogoFile", "setRlogoClear");
 }
 
 /* ── the authorised signatory's signature ─────────────────────────
@@ -827,6 +830,138 @@ function wireLogo(){
    otherwise need a PNG decoder (an inflater) purely to find the ink, and one
    bit per pixel is what makes the PDF and the thermal receipt render the same
    marks rather than each thresholding a greyscale image its own way. */
+
+/* The receipt's own logo, as a 1-bit mask.
+
+   Same format and same parser as the signature. What differs is which pixels
+   count as ink, and that is the whole reason this exists separately from
+   biz_logo: Aswin's mark is cyan on BLACK, so the ordinary rule — ink is what is
+   dark — burned the entire background and printed a solid square at 100% ink.
+
+   So the polarity is decided per image rather than assumed. A mostly-dark image
+   is light-on-dark artwork and its BRIGHT pixels are the mark; a mostly-light
+   one is ordinary and its dark pixels are. Then it is trimmed to the ink, so
+   "22mm wide" means 22mm of logo rather than 22mm of surrounding canvas. */
+let RECEIPT_LOGO = "";
+
+const LOGO_MM = 22;            // chosen on paper against 5 sizes
+const LOGO_MAXMM = 20;         // height ceiling, so a tall mark cannot eat the roll
+const LOGO_MAXPX = 512;
+
+function fileToReceiptLogo(file){
+  return new Promise((resolve, reject) => {
+    if(!file) return reject(new Error("no file"));
+    if(!/^image\//.test(file.type)) return reject(new Error("Please choose an image file."));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("That image couldn't be loaded."));
+      img.onload = () => {
+        const s0 = Math.min(1, LOGO_MAXPX/Math.max(img.width, img.height));
+        const w0 = Math.max(1, Math.round(img.width*s0));
+        const h0 = Math.max(1, Math.round(img.height*s0));
+        const c0 = document.createElement("canvas"); c0.width=w0; c0.height=h0;
+        const x0 = c0.getContext("2d");
+        x0.fillStyle = "#fff"; x0.fillRect(0,0,w0,h0);
+        x0.drawImage(img, 0, 0, w0, h0);
+        const d = x0.getImageData(0,0,w0,h0).data;
+
+        const lum = (i) => 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+        let sum = 0;
+        for(let i=0;i<d.length;i+=4) sum += lum(i);
+        const mean = sum/(w0*h0);
+        // Mostly dark canvas -> the artwork is the light part.
+        const isInk = mean < 110 ? (i) => lum(i) > 60 : (i) => lum(i) < SIGN_THRESHOLD;
+
+        let minX=w0,minY=h0,maxX=-1,maxY=-1;
+        for(let y=0;y<h0;y++) for(let x=0;x<w0;x++){
+          if(!isInk((y*w0+x)*4)) continue;
+          if(x<minX)minX=x; if(x>maxX)maxX=x;
+          if(y<minY)minY=y; if(y>maxY)maxY=y;
+        }
+        if(maxX<0) return reject(new Error("That image has nothing to print — no mark could be found in it."));
+
+        const cw = maxX-minX+1, ch = maxY-minY+1;
+        /* Scale the trimmed mark to LOGO_MM, upscaling if the artwork is small
+           — a mark cropped out of a 320px logo is only ~146px and would
+           otherwise print at 18mm. Capped at 2x, past which it is only blur,
+           and capped in height so a tall mark cannot eat the roll. */
+        let scale = Math.min(2, (LOGO_MM*8)/cw);
+        if(ch*scale > LOGO_MAXMM*8) scale = (LOGO_MAXMM*8)/ch;
+        const w = Math.max(1, Math.round(cw*scale)), h = Math.max(1, Math.round(ch*scale));
+        const c = document.createElement("canvas"); c.width=w; c.height=h;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle="#fff"; ctx.fillRect(0,0,w,h);
+        ctx.drawImage(c0, minX, minY, cw, ch, 0, 0, w, h);
+        const p2 = ctx.getImageData(0,0,w,h).data;
+        const lum2 = (i) => 0.299*p2[i] + 0.587*p2[i+1] + 0.114*p2[i+2];
+        const ink2 = mean < 110 ? (i) => lum2(i) > 60 : (i) => lum2(i) < SIGN_THRESHOLD;
+
+        const stride=(w+7)>>3, bits=new Uint8Array(stride*h);
+        for(let y=0;y<h;y++) for(let x=0;x<w;x++)
+          if(ink2((y*w+x)*4)) bits[y*stride+(x>>3)] |= 1<<(7-(x&7));
+        let bin=""; for(let i=0;i<bits.length;i++) bin+=String.fromCharCode(bits[i]);
+        resolve(`${w}:${h}:${btoa(bin)}`);
+      };
+      img.src = String(reader.result||"");
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+let _logoCache = { key:"", url:"", ratio:1 };
+function receiptLogoUrl(){
+  const mask = RECEIPT_LOGO;
+  if(!mask) return "";
+  if(_logoCache.key === mask) return _logoCache.url;
+  const m = /^(\d{1,5}):(\d{1,5}):([A-Za-z0-9+/=]+)$/.exec(mask);
+  if(!m) return "";
+  const w=Number(m[1]), h=Number(m[2]);
+  let bin; try{ bin=atob(m[3]); }catch(_){ return ""; }
+  const stride=(w+7)>>3;
+  if(bin.length !== stride*h) return "";
+  const c=document.createElement("canvas"); c.width=w; c.height=h;
+  const ctx=c.getContext("2d"), img=ctx.createImageData(w,h);
+  for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+    const on=(bin.charCodeAt(y*stride+(x>>3))>>(7-(x&7)))&1;
+    const i=(y*w+x)*4;
+    img.data[i]=img.data[i+1]=img.data[i+2]=on?0:255;
+    img.data[i+3]=on?255:0;
+  }
+  ctx.putImageData(img,0,0);
+  _logoCache={key:mask,url:c.toDataURL("image/png"),ratio:h/w};
+  return _logoCache.url;
+}
+
+function syncReceiptLogoUI(){
+  const url = receiptLogoUrl();
+  [["rlogoPreview","rlogoPlaceholder","rlogoClear"],
+   ["setRlogoPreview","setRlogoPlaceholder","setRlogoClear"]].forEach(([pv,ph,cl])=>{
+    const img=$(pv); if(!img) return;
+    if(url){ img.src=url; img.hidden=false; $(ph).hidden=true; $(cl).hidden=false; }
+    else { img.hidden=true; $(ph).hidden=false; $(cl).hidden=true; }
+  });
+}
+
+function wireReceiptLogoTrio(pickId, fileId, clrId){
+  const pick=$(pickId), file=$(fileId), clr=$(clrId);
+  if(!pick) return;
+  pick.onclick = () => file.click();
+  file.onchange = async () => {
+    const f = file.files && file.files[0]; file.value = "";
+    if(!f) return;
+    try{
+      RECEIPT_LOGO = await fileToReceiptLogo(f);
+      saveBiz(); syncReceiptLogoUI(); render();
+      if(ME) persistProfile();
+    }catch(e){ alert(e.message || "Could not use that image."); }
+  };
+  clr.onclick = () => {
+    RECEIPT_LOGO = ""; saveBiz(); syncReceiptLogoUI(); render();
+    if(ME) persistProfile();
+  };
+}
 
 const SIGN_MAX = 720;      // px on the longest edge — ~34KB packed, ~300dpi on A4
 const SIGN_THRESHOLD = 176; // the printer's own cut-off, so WYSIWYG on paper
@@ -994,6 +1129,7 @@ async function persistProfile(){
   biz.qrUrl=fld("bizQrUrl");
   biz.qrCaption=fld("bizQrCaption");
   biz.bizSign=BIZ_SIGN;
+  biz.receiptLogo=RECEIPT_LOGO;
   biz.upiVpa=fld("bizUpiVpa");
   biz.payQr=fld("bizPayQr");
   ME.biz = {...(ME.biz||{}), ...biz};                  // keep local mirror fresh
@@ -1033,6 +1169,7 @@ function saveBiz(){
   data.qrUrl = fld("bizQrUrl");
   data.qrCaption = fld("bizQrCaption");
   data.bizSign = BIZ_SIGN;
+  data.receiptLogo = RECEIPT_LOGO;
   data.upiVpa = fld("bizUpiVpa");
   data.payQr = fld("bizPayQr");
   try{ localStorage.setItem(BIZ_KEY, JSON.stringify(data)); }catch(e){}
@@ -1045,6 +1182,7 @@ function loadBiz(){
     if(typeof d.qrUrl==="string") $("bizQrUrl").value = d.qrUrl;
     if(typeof d.qrCaption==="string") $("bizQrCaption").value = d.qrCaption;
     if(typeof d.bizSign==="string") BIZ_SIGN = d.bizSign;
+    if(typeof d.receiptLogo==="string") RECEIPT_LOGO = d.receiptLogo;
     if(typeof d.upiVpa==="string") $("bizUpiVpa").value = d.upiVpa;
     if(typeof d.payQr==="string") $("bizPayQr").value = d.payQr;
   }catch(e){}
@@ -1119,6 +1257,7 @@ function applyBiz(id){
   BIZ_FIELDS.forEach(f => { $(f).value = b.biz[f] || ""; });
   BIZ_LOGO = b.biz.bizLogo || "";
   BIZ_SIGN = b.biz.bizSign || "";
+  RECEIPT_LOGO = b.biz.receiptLogo || "";
   $("bizQrUrl").value = b.biz.qrUrl || "";
   $("bizUpiVpa").value = b.biz.upiVpa || "";
   $("bizPayQr").value = b.biz.payQr || "";
@@ -1126,6 +1265,7 @@ function applyBiz(id){
   BIZ_QR_CAPTION = b.biz.qrCaption || "";
   syncLogoUI();
   syncSignUI();
+  syncReceiptLogoUI();
   saveBiz();
   syncVpaHint();
   syncBizHint();
@@ -1219,6 +1359,7 @@ function init(){
   wireSections();
   syncLogoUI();
   syncSignUI();
+  syncReceiptLogoUI();
   syncVpaHint();
   syncBizHint();
   if(!$("issueDate").value) $("issueDate").value = todayISO(0);
@@ -1543,6 +1684,10 @@ function posOps(){
   const ops = [];
   const money = (n) => posMoney(n, cur, false);
 
+  // The mark, above the name. Both, not either: at 22mm of 1-bit dots a logo
+  // is recognition, and the name in caps is the thing that is actually legible.
+  const rlogo = receiptLogoUrl();
+  if(rlogo) ops.push({t:"sign", url:rlogo, w:LOGO_MM, ratio:_logoCache.ratio});
   ops.push({t:"center", s:(v("bizName") || "Your Business").toUpperCase(), bold:true, size:PS.bizName});
   lines(v("bizAddr")).forEach(l => ops.push({t:"center", s:l, size:PS.bizMeta}));
   // Phone and email each get their own line. Joined with " · " they overflow
@@ -1595,6 +1740,14 @@ function posOps(){
   ops.push({t:"kv", k:"Subtotal", val:money(t.subtotal), size:PS.totals, fit:true});
   if(t.disc)     ops.push({t:"kv", k:`Discount (${trimNum(num($("discount").value))}%)`, val:"-"+money(t.disc), size:PS.totals, fit:true});
   if(t.shipping) ops.push({t:"kv", k:"Shipping"+(shipMode()?` (${shipMode()})`:""), val:money(t.shipping), size:PS.totals, fit:true});
+  // How it went out, when it cost nothing to send.
+  //
+  // The mode used to be only a parenthetical on the shipping CHARGE, so typing
+  // "Rapido" and leaving the charge at zero printed nothing at all — the row it
+  // was attached to never rendered. Delivery is a fact about the order whether
+  // or not it was billed for, and on a counter receipt it is often the only
+  // record of how the customer is getting their goods.
+  else if(shipMode()) ops.push({t:"kv", k:"Delivery", val:shipMode(), size:PS.totals, fit:true});
   // Only when a tax actually follows it: "Taxable" names the base a tax was
   // computed on, so on a no-tax invoice it is a number with no meaning. The
   // email and the PDF already had this condition; the receipt did not.
@@ -1810,7 +1963,7 @@ function posDraw(doc, ops){
       // what was chosen. Width is a whole number of dots for the same reason
       // QR_DOTS is.
       const w = op.w;
-      const h = w * (SIGN_RATIO || 0.42);
+      const h = w * (op.ratio || SIGN_RATIO || 0.42);
       y += 1.2;
       doc.addImage(op.url, "PNG", (L + R) / 2 - w / 2, y, w, h, undefined, "FAST");
       y += h;

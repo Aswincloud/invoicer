@@ -300,7 +300,11 @@ export function renderInvoicePdf(inv, items, totals, { showGift = false } = {}) 
   const labelX = PAGE_W - MARGIN - 150;
   const totRow = (label, val, opts = {}) => {
     p.text(labelX, y, label, { size: 9, color: opts.strong ? "0.11 0.12 0.14" : "0.36 0.39 0.45", bold: !!opts.strong });
-    p.text(COL_AMT, y, (opts.neg ? "- " : opts.pos ? "+ " : "") + money(val), { size: 9, align: "right" });
+    // opts.text: the right column is not always a figure. "Delivery / Rapido"
+    // uses this row, and money() on a courier's name renders "Rs. NaN".
+    p.text(COL_AMT, y, opts.text ? String(val)
+             : (opts.neg ? "- " : opts.pos ? "+ " : "") + money(val),
+           { size: 9, align: "right" });
     y -= 14;
   };
 
@@ -316,6 +320,9 @@ export function renderInvoicePdf(inv, items, totals, { showGift = false } = {}) 
   if (totals.disc) totRow(`Discount (${inv.discount_pct || 0}%)`, totals.disc, { neg: true });
   if (totals.shipping) {
     totRow(inv.shipping_mode ? `Shipping (${inv.shipping_mode})` : "Shipping", totals.shipping);
+  } else if (inv.shipping_mode) {
+    // Free delivery is still delivery — say how it went.
+    totRow("Delivery", inv.shipping_mode, { text: true });
   }
   // Same rule as the HTML: "Taxable value" is the base a tax was computed on, so
   // it is meaningless — and misleading — when no tax applies.

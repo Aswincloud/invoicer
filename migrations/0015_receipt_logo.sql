@@ -1,0 +1,15 @@
+-- A separate logo for the thermal receipt.
+--
+-- biz_logo is a colour image and is right for the A4 invoice and the email. On a
+-- 57mm head it is useless: one bit per dot, no dithering. Aswin's mark is cyan
+-- on black, so the usual thermal rule — ink is what is DARK — turned the whole
+-- background into burn and printed a solid square, 100% ink at every size.
+--
+-- So the receipt gets its own artwork, stored the way biz_sign is: a 1-bit mask,
+-- "<w>:<h>:<base64>", packed in the browser. Same format, same parser, and the
+-- same reason for being a mask rather than an image — the Worker never has to
+-- decode a PNG to find the ink.
+--
+-- Empty means the receipt prints what it prints today: the business name in
+-- large caps, which on a 57mm strip is stronger branding than a smudged mark.
+ALTER TABLE businesses ADD COLUMN biz_receipt_logo TEXT DEFAULT '';

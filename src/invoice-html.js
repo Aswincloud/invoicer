@@ -558,7 +558,15 @@ export function renderInvoiceEmail(inv, items, opts = {}) {
       <td align="right" style="padding:6px 10px;font-family:${MONO};color:${SOFT}">${esc(fmtUnits(units))}</td></tr>` : ""}
    ${totRow("Subtotal", t.subtotal)}
    ${t.disc ? totRow(`Discount (${discPct}%)`, t.disc, { neg: true }) : ""}
-   ${t.shipping ? totRow(inv.shipping_mode ? `Shipping (${inv.shipping_mode})` : "Shipping", t.shipping) : ""}
+   ${t.shipping
+       ? totRow(inv.shipping_mode ? `Shipping (${inv.shipping_mode})` : "Shipping", t.shipping)
+       : inv.shipping_mode
+         // A mode with no charge is still worth stating: it is how the goods
+         // reached the customer, which the shipping ROW only ever mentioned by
+         // accident of being attached to a fee.
+         ? `<tr><td style="padding:6px 10px;color:${SOFT}">Delivery</td>
+            <td align="right" style="padding:6px 10px;color:${SOFT}">${esc(inv.shipping_mode)}</td></tr>`
+         : ""}
    ${(t.disc || t.shipping) && t.taxRows.length ? totRow("Taxable value", t.taxable) : ""}
    ${taxRows}
    ${showRoundOff(t) ? totRow("Round off", Math.abs(t.round), { neg: t.round < 0, pos: t.round > 0 }) : ""}
