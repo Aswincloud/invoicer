@@ -114,3 +114,31 @@ import { readFileSync } from "node:fs";
     console.log(cols.includes(c) ? "PASS" : "FAIL", ` businesses.${c} exists in the schema`);
   if (!selects.length || selects.some((c) => !cols.includes(c))) process.exitCode = 1;
 }
+
+// Verifying a quoted invoice from a phone that is not on it. The comparison is
+// code, on what the customer typed, against what is printed on the invoice.
+import { amountsIn, hintMatches } from "../src/shipment.js";
+{
+  const inv = { client_name: "Vennila R", total: 1299.5, biz_name: "Aswin3DPrints" };
+  const cases = [
+    ["full name",             hintMatches(inv, ["my name is Vennila R"]),        "name"],
+    ["first name only",       hintMatches(inv, ["vennila"]),                     "name"],
+    ["name inside a sentence",hintMatches(inv, ["it was billed to VENNILA"]),    "name"],
+    ["exact amount",          hintMatches(inv, ["1299.50"]),                     "amount"],
+    ["rounded amount",        hintMatches(inv, ["it was 1300 rupees"]),          "amount"],
+    ["amount with symbol",    hintMatches(inv, ["₹1,299.5"]),                   "amount"],
+    ["biller, spaced",        hintMatches(inv, ["Aswin 3D Prints"]),             "biller"],
+    ["biller, lowercase",     hintMatches(inv, ["from aswin3dprints"]),          "biller"],
+    ["wrong name",            hintMatches(inv, ["Priya"]),                       ""],
+    ["wrong amount",          hintMatches(inv, ["500"]),                         ""],
+    ["nothing typed",         hintMatches(inv, []),                              ""],
+    ["two-letter name never matches", hintMatches({ client_name: "Al", total: 0, biz_name: "" }, ["al"]), ""],
+    ["short biller never matches",    hintMatches({ client_name: "", total: 0, biz_name: "Ab" }, ["ab"]), ""],
+    ["order date is not an amount",   hintMatches({ client_name: "", total: 2026, biz_name: "" }, ["ordered on 19/9/2026"]), "amount"],
+  ];
+  console.log("\n— quoted-invoice verification —");
+  let bad = 0;
+  for (const [name, got, want] of cases) { const ok = got === want; bad += !ok; console.log(ok ? "PASS" : "FAIL", ` ${name}`, ok ? "" : `got=${JSON.stringify(got)} want=${JSON.stringify(want)}`); }
+  console.log(JSON.stringify(amountsIn("₹1,299.00 and 350 or 2 items")) === "[1299,350,2]" ? "PASS" : "FAIL", " amountsIn parses separators");
+  if (bad) process.exitCode = 1;
+}
