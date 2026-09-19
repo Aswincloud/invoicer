@@ -40,16 +40,27 @@ check("id only", !waConfigured({ WA_PHONE_NUMBER_ID: "1" }));
 check("token only", !waConfigured({ WA_ACCESS_TOKEN: "t" }));
 check("both", waConfigured({ WA_PHONE_NUMBER_ID: "1", WA_ACCESS_TOKEN: "t" }));
 
-console.log("\n— the template: unpaid gets a pay button, paid does not —");
+console.log("\n— only PAID may be sent: the template thanks them for paying —");
+import { canSendWhatsApp } from "../src/wa.js";
+check("PAID is sendable", canSendWhatsApp({ status: "PAID" }).ok);
+check("paid, any case", canSendWhatsApp({ status: "paid" }).ok);
+check("UNPAID is refused, and says why", !canSendWhatsApp({ status: "UNPAID" }).ok
+  && /paid/i.test(canSendWhatsApp({ status: "UNPAID" }).why));
+check("DUE is refused", !canSendWhatsApp({ status: "DUE" }).ok);
+check("VOID is refused with its own reason", !canSendWhatsApp({ status: "VOID" }).ok
+  && /cancelled/i.test(canSendWhatsApp({ status: "VOID" }).why));
+check("missing status is refused", !canSendWhatsApp({}).ok && !canSendWhatsApp(null).ok);
+
+console.log("\n— the template: one, paid, no button —");
 const ENV = { WA_PHONE_NUMBER_ID: "1", WA_ACCESS_TOKEN: "t" };
-const INV = { number: "INV-AC-2026-3201", status: "UNPAID", currency: "₹", total: 350,
+const INV = { number: "INV-AC-2026-3201", status: "PAID", currency: "₹", total: 350,
               client_name: "Devadharshan", biz_name: "Aswin3DPrints" };
-const ARGS = { to: "919876543210", inv: INV, pdfUrl: "https://x.test/i/abc.pdf", payToken: "abc" };
+const ARGS = { to: "919876543210", inv: INV, pdfUrl: "https://x.test/i/abc.pdf" };
 const u = buildTemplateMessage(ENV, ARGS);
 check("messaging_product", u.messaging_product === "whatsapp");
 check("to is the E.164 digits", u.to === "919876543210");
 check("type template", u.type === "template");
-check("unpaid template name", u.template.name === "invoice_ready", u.template.name);
+check("template name invoice_paid", u.template.name === "invoice_paid", u.template.name);
 check("language en", u.template.language.code === "en");
 const header = u.template.components.find((c) => c.type === "header");
 check("document header with the PDF link", header && header.parameters[0].document.link === ARGS.pdfUrl);
@@ -59,22 +70,18 @@ const body = u.template.components.find((c) => c.type === "body").parameters.map
 check("body params in order: name, number, amount, business",
   JSON.stringify(body) === JSON.stringify(["Devadharshan", "INV-AC-2026-3201", "₹350.00", "Aswin3DPrints"]),
   JSON.stringify(body));
-const btn = u.template.components.find((c) => c.type === "button");
-check("URL button present", btn && btn.sub_type === "url" && btn.index === "0");
-check("button carries only the token (Meta wants the URL tail)", btn.parameters[0].text === "abc");
+check("exactly two components: header and body", u.template.components.length === 2);
+check("NO button anywhere - a receipt must not invite a second payment",
+  !u.template.components.some((c) => c.type === "button"));
+check("no leftover pay-token field", JSON.stringify(u).indexOf("payToken") === -1);
 
-const p = buildTemplateMessage(ENV, { ...ARGS, inv: { ...INV, status: "PAID" } });
-check("paid template name", p.template.name === "invoice_paid", p.template.name);
-check("paid has NO button", !p.template.components.some((c) => c.type === "button"));
-check("paid still has the PDF", p.template.components.some((c) => c.type === "header"));
-
-console.log("\n— template names come from the environment —");
-const custom = buildTemplateMessage({ ...ENV, WA_TEMPLATE_UNPAID: "my_inv", WA_TEMPLATE_LANG: "en_GB" }, ARGS);
-check("custom unpaid name", custom.template.name === "my_inv");
+console.log("\n— template name and language come from the environment —");
+const custom = buildTemplateMessage({ ...ENV, WA_TEMPLATE_PAID: "my_receipt", WA_TEMPLATE_LANG: "en_GB" }, ARGS);
+check("custom name", custom.template.name === "my_receipt");
 check("custom language", custom.template.language.code === "en_GB");
 
 console.log("\n— degenerate rows do not produce empty params (Meta rejects them) —");
-const bare = buildTemplateMessage(ENV, { ...ARGS, inv: { number: "X", status: "UNPAID", total: 0 } });
+const bare = buildTemplateMessage(ENV, { ...ARGS, inv: { number: "X", status: "PAID", total: 0 } });
 const bp = bare.template.components.find((c) => c.type === "body").parameters.map((p) => p.text);
 check("no client name -> 'there'", bp[0] === "there");
 check("no business -> 'us'", bp[3] === "us");

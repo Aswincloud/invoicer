@@ -2,14 +2,18 @@
  *
  * Business-initiated, so it MUST be a template - Meta refuses free-form text to
  * someone who has not messaged in the last 24 hours - and it is billed per
- * delivered message at the utility rate (a few paise in India). Two templates,
- * because a paid receipt must not carry a "Pay online" button:
+ * delivered message at the utility rate (a few paise in India).
  *
- *   invoice_ready   document header (the PDF), body, URL button to the pay page
+ * ONE template, for PAID invoices only. Aswin takes payment before anything
+ * ships, so the message a customer gets is a receipt plus "tracking details
+ * will follow" - and an unpaid invoice is REFUSED rather than sent with "thank
+ * you for your payment" on it. An unpaid variant with a pay button is a second
+ * template away if the workflow ever changes.
+ *
  *   invoice_paid    document header (the PDF), body, no button
  *
- * Both are created and approved once in Meta Business Manager, not here; their
- * names are configurable because Meta owns them.
+ * Created and approved once in Meta Business Manager, not here; the name is
+ * configurable because Meta owns it.
  *
  * Feature-flagged by secret presence, the way print and Razorpay are: with no
  * phone-number id or token there is nothing to call, and the button does not
@@ -20,7 +24,6 @@ export const WA_ENV = {
   phoneId:   "WA_PHONE_NUMBER_ID",
   token:     "WA_ACCESS_TOKEN",
   version:   "WA_API_VERSION",       // default below
-  tplUnpaid: "WA_TEMPLATE_UNPAID",   // default "invoice_ready"
   tplPaid:   "WA_TEMPLATE_PAID",     // default "invoice_paid"
   lang:      "WA_TEMPLATE_LANG",     // default "en"
 };
@@ -65,6 +68,18 @@ export function prettyE164(e164) {
   return s ? `+${s}` : "";
 }
 
+/* Whether this invoice may be sent at all. One place, so the endpoint and any
+ * future UI gate agree. Only PAID: the template thanks the customer for paying
+ * and promises tracking details, and both would be false on an unpaid bill. */
+export function canSendWhatsApp(inv) {
+  const st = String(inv && inv.status || "").toUpperCase();
+  if (st === "PAID") return { ok: true };
+  if (st === "VOID") return { ok: false, why: "This invoice is cancelled." };
+  return { ok: false,
+           why: "Only paid invoices are sent on WhatsApp for now - the message thanks " +
+                "the customer for paying. Mark it PAID first." };
+}
+
 const money = (cur, n) =>
   `${cur || ""}${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -72,12 +87,9 @@ const money = (cur, n) =>
  *
  *   to        E.164 digits
  *   inv       the invoice row with business attached
- *   pdfUrl    public URL Meta fetches the PDF from
- *   payToken  share token for the pay-page button (unpaid template only) */
-export function buildTemplateMessage(env, { to, inv, pdfUrl, payToken }) {
-  const paid = String(inv.status || "").toUpperCase() === "PAID";
-  const name = paid ? (env[WA_ENV.tplPaid] || "invoice_paid")
-                    : (env[WA_ENV.tplUnpaid] || "invoice_ready");
+ *   pdfUrl    public URL Meta fetches the PDF from */
+export function buildTemplateMessage(env, { to, inv, pdfUrl }) {
+  const name = env[WA_ENV.tplPaid] || "invoice_paid";
   const safeNum = String(inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
   const who = String(inv.client_name || "").trim() || "there";
   const biz = String(inv.biz_name || "").trim() || "us";
@@ -94,12 +106,6 @@ export function buildTemplateMessage(env, { to, inv, pdfUrl, payToken }) {
         { type: "text", text: biz },
       ] },
   ];
-  if (!paid) {
-    // Dynamic URL button: the template holds "https://.../i/{{1}}" and we send
-    // only the suffix. Meta requires the parameter to be the TAIL, not a full URL.
-    components.push({ type: "button", sub_type: "url", index: "0",
-                      parameters: [{ type: "text", text: String(payToken || "") }] });
-  }
 
   return {
     messaging_product: "whatsapp",

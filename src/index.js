@@ -18,7 +18,7 @@ import {
   shareInvoice, shareUrl,
 } from "./pay.js";
 import { sharePdf } from "./pay.js";
-import { waConfigured, toE164, prettyE164, buildTemplateMessage, sendTemplate } from "./wa.js";
+import { waConfigured, toE164, prettyE164, buildTemplateMessage, sendTemplate, canSendWhatsApp } from "./wa.js";
 
 const SESSION_COOKIE = "inv_session";
 const TOKEN_TTL = 15 * 60 * 1000;          // magic link valid 15 min
@@ -178,9 +178,9 @@ async function publicUser(env, u) {
 /* Send the invoice over WhatsApp.
 
    Mirrors emailInvoice: load with the issuing business attached, mint the share
-   token if there is none, then hand Meta a template with the PDF as its header
-   and the pay page behind its button. The PDF is fetched by Meta from
-   /i/<token>.pdf rather than uploaded, which keeps this a single call.
+   token if there is none, then hand Meta a template with the PDF as its header.
+   The PDF is fetched by Meta from /i/<token>.pdf rather than uploaded, which
+   keeps this a single call. PAID only - see canSendWhatsApp.
 
    `b.to` overrides the stored number for a one-off send; either way the number
    used is normalised and refused if ambiguous - see toE164. */
@@ -188,6 +188,9 @@ async function whatsappInvoice(env, user, id, b) {
   if (!waConfigured(env)) return bad("WhatsApp sending is not set up on this deployment.", 503);
   const r = await loadInvoice(env, user, id);
   if (!r) return bad("not found", 404);
+
+  const gate = canSendWhatsApp(r.inv);
+  if (!gate.ok) return bad(gate.why, 409);
 
   const to = toE164(b && b.to ? b.to : r.inv.client_phone);
   if (!to) return bad("A valid mobile number is required (e.g. +91 98765 43210).");
@@ -201,7 +204,7 @@ async function whatsappInvoice(env, user, id, b) {
   const base = String(env.APP_BASE_URL || "").replace(/\/+$/, "");
   const pdfUrl = `${base}/i/${token}.pdf`;
 
-  const msg = buildTemplateMessage(env, { to, inv: r.inv, pdfUrl, payToken: token });
+  const msg = buildTemplateMessage(env, { to, inv: r.inv, pdfUrl });
   const res = await sendTemplate(env, msg);
   if (!res.ok) {
     console.error("whatsapp send failed", r.inv.number, res.status, res.error);
