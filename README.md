@@ -96,6 +96,9 @@ production, set them with `wrangler secret put`:
 | `PRINT_RELAY_SECRET` | Signs print jobs sent to the thermal-printer relay |
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Razorpay API key pair, for pay links |
 | `RAZORPAY_WEBHOOK_SECRET` | A **different** string — signs the webhook body |
+| `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN` | Meta Cloud API: the WhatsApp number messages go out from, and a permanent System User token. Use the number Chatwoot answers on, or replies land with the wrong bot |
+| `WA_TEMPLATE_SHIPPED`, `WA_TEMPLATE_DELIVERED` | Optional; default to the `order_shipped` / `order_delivered` templates on the WABA |
+| `INVOICER_CHAT_SECRET` | Shared with the support bot; signs `POST /api/chat/shipments` |
 
 Magic link works with just `RESEND_API_KEY` + a session key. SSO buttons only
 appear when the broker trio (`AUTH_BROKER_URL` + `RELAY_SECRET` +
@@ -174,6 +177,48 @@ HMAC-signs the PDF and forwards it to a relay running on the printer's LAN
 (`tejprint-relay.py`, exposed at `PRINT_RELAY_URL` via a cloudflared tunnel),
 which hands it to an ESP32-C3 BLE bridge. `PRINT_RELAY_SECRET` must match on
 both ends. Set `PRINT_ENABLED = "false"` to turn the whole path off.
+
+### WhatsApp messages and shipments
+
+For a customer who paid directly there is no shop order anywhere: **the invoice
+is the order record.** It carries the customer's phone, and from `0019` the
+courier and tracking number too.
+
+The **WhatsApp ▾** button on a paid invoice is a menu of three messages. Each
+opens a modal with the recipient and the **exact text** the customer will read,
+and nothing is sent until you confirm:
+
+| Item | Template | Also |
+|---|---|---|
+| Send invoice | `order_confirmed` (PDF as document header) | |
+| Share tracking | `order_shipped` | records courier + tracking on the invoice **before** sending |
+| Send delivered | `order_delivered` | stamps `delivered_at` |
+
+Preview and send build the same template params from the same code
+(`src/shipment.js`), so the two cannot disagree. All three are business-
+initiated messages and must use Meta-**approved** templates; until a template
+is approved a send fails with Meta's own message in the modal. Paid invoices
+stay edit-locked; `POST /api/invoices/:id/whatsapp` is the one deliberate way
+through that lock, for shipment fields only.
+
+**Delivered is detected automatically.** A cron (`[triggers]` in
+`wrangler.toml`, every 30 min) asks ShipTrack's public API about every parcel
+shipped but not delivered, records what it said in `track_status`, and when one
+has arrived stamps the invoice and sends `order_delivered` once (guarded by
+`wa_delivered_at`). A courier site being down costs nothing but a retry.
+
+**`POST /api/chat/shipments`** answers the support bot's "where is my parcel?"
+on WhatsApp. HMAC-SHA256 over the raw body with `INVOICER_CHAT_SECRET`, a
+timestamp within ±5 min, and the answer is scoped to the account in
+`INVOICE_OWNER_EMAIL` — read from config, never the request — so however it is
+called it cannot return another user's invoices. The customer is selected by the
+phone Meta verified as the WhatsApp sender.
+
+Migration note: `d1 migrations apply --remote` failed in Sept 2026 because
+`0015`–`0018` had been applied by hand and never recorded in `d1_migrations`.
+They were recorded (metadata only, every column verified present first) and
+`0019` applied normally. If it happens again, that is the fix — not re-running
+the SQL.
 
 ## Notes
 
