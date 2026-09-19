@@ -210,8 +210,16 @@ async function whatsappInvoice(env, user, id, b) {
     console.error("whatsapp send failed", r.inv.number, res.status, res.error);
     return bad("WhatsApp failed: " + res.error, 502);
   }
-  await env.DB.prepare("UPDATE invoices SET wa_message_id=?, wa_sent_at=?, updated_at=? WHERE id=?")
-    .bind(res.id, now(), now(), id).run();
+  // Record the send - and, when the row had no number, the number it went to.
+  // A paid invoice cannot be edited through the normal path (that lock is
+  // deliberate), so this is the only way the mobile typed at send time gets
+  // kept, and "where did this go?" stays answerable from the row. Never
+  // overwrites a stored number: the override is for this send, not forever.
+  await env.DB.prepare(
+    `UPDATE invoices SET wa_message_id=?, wa_sent_at=?, updated_at=?,
+       client_phone = CASE WHEN client_phone='' OR client_phone IS NULL THEN ? ELSE client_phone END
+     WHERE id=?`
+  ).bind(res.id, now(), now(), to, id).run();
   return json({ ok: true, id: res.id, to: prettyE164(to) });
 }
 

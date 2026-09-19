@@ -2295,12 +2295,29 @@ function wireBackend(){
       alert("Save failed: "+e.message);
     }
   };
+  /* Sending is not editing.
+
+     A PAID invoice cannot be saved - updateInvoice refuses with a 409, on
+     purpose, so a document the customer has paid against cannot be changed
+     under them. But sending it is exactly what you do with a paid invoice. So
+     an invoice that already exists is sent AS STORED, with the number typed
+     into the prompt passed as a one-off override; only an invoice that has
+     never been saved is saved first, because it needs an id to be sent at all.
+
+     The first real send hit this: "WhatsApp failed: This invoice is paid and
+     can no longer be edited" - the edit lock, not WhatsApp, and Meta was never
+     reached. The email button had the same latent fault. */
+  async function sendableId(){
+    if(CURRENT_ID) return CURRENT_ID;
+    const s = await persistInvoice();
+    return s.id;
+  }
   $("btnWa").onclick = async () => {
     const to = prompt("Send on WhatsApp to (mobile number):", $("clPhone").value||"");
     if(!to) return;
     try{
-      const s = await persistInvoice();
-      const r = await api("/invoices/"+s.id+"/whatsapp",{method:"POST",body:JSON.stringify({to})});
+      const id = await sendableId();
+      const r = await api("/invoices/"+id+"/whatsapp",{method:"POST",body:JSON.stringify({to})});
       alert("Sent on WhatsApp to "+(r.to||to)+" ✓");
     }catch(e){ alert("WhatsApp failed: "+e.message); }
   };
@@ -2308,9 +2325,9 @@ function wireBackend(){
     const to = prompt("Send invoice to (client email):", $("clEmail").value||"");
     if(!to) return;
     try{
-      const s = await persistInvoice();
+      const id = await sendableId();            // see sendableId: a paid invoice cannot be re-saved
       const pdfBase64 = await tryRenderPdf();   // attach PDF if it renders
-      await api("/invoices/"+s.id+"/email",{method:"POST",body:JSON.stringify({to, pdfBase64})});
+      await api("/invoices/"+id+"/email",{method:"POST",body:JSON.stringify({to, pdfBase64})});
       alert("Invoice emailed to "+to+" ✓"+(pdfBase64?" (PDF attached)":""));
     }catch(e){ alert("Email failed: "+e.message); }
   };
