@@ -214,20 +214,44 @@ export async function chatShipmentsHandler(request, env) {
   if (!Number.isFinite(ts) || Math.abs(now() - ts) > MAX_SKEW_MS) return bad("stale", 401);
 
   const phone = toE164(body.phone);
-  if (!phone) return json({ shipments: [] });
+  // Invoice numbers the customer quoted in the chat, if any. Normalised the
+  // way they are printed: upper-case, no spaces.
+  const quoted = [...new Set((Array.isArray(body.numbers) ? body.numbers : [])
+    .map((n) => String(n || "").toUpperCase().replace(/\s+/g, "").trim())
+    .filter((n) => /^[A-Z0-9][A-Z0-9-]{3,39}$/.test(n)))].slice(0, 3);
+  if (!phone && !quoted.length) return json({ shipments: [] });
 
   const owner = await ownerUser(env);
   if (!owner) return json({ shipments: [] });
 
+  // Two ways in, one rule about who may see what:
+  //
+  //   by phone   the sender's own invoices — Meta verified the phone, so this
+  //              is the customer's own information.
+  //   by number  an invoice the customer quoted. A number on its own proves
+  //              little (they are guessable), so it is honoured ONLY when the
+  //              invoice has no phone on file — then the number is the one key
+  //              there is, and it is printed on the document the customer holds.
+  //              An invoice that carries a DIFFERENT phone is locked to that
+  //              phone and is not returned, however the number was obtained.
+  const params = [owner.id];
+  const where = [];
+  if (phone) { where.push("client_phone = ?"); params.push(phone); }
+  if (quoted.length) {
+    where.push(`(number IN (${quoted.map(() => "?").join(",")}) AND (client_phone = '' OR client_phone IS NULL${phone ? " OR client_phone = ?" : ""}))`);
+    params.push(...quoted); if (phone) params.push(phone);
+  }
+  // Placeholders bind in textual order: WHERE (…owner, phone, numbers, phone…),
+  // created_at, then the ORDER BY's copy of the numbers, then LIMIT.
   const { results } = await env.DB.prepare(
     `SELECT id, number, status, currency, total, courier, tracking_id, shipped_at, delivered_at,
-            track_status, track_checked_at, paid_at, created_at
+            track_status, track_checked_at, paid_at, created_at, client_phone
        FROM invoices
-      WHERE user_id = ? AND client_phone = ? AND status <> 'VOID'
+      WHERE user_id = ? AND (${where.join(" OR ")}) AND status <> 'VOID'
         AND (status = 'PAID' OR shipped_at IS NOT NULL)
         AND created_at > ?
-      ORDER BY created_at DESC LIMIT ?`
-  ).bind(owner.id, phone, now() - LOOKBACK_MS, MAX_SHIPMENTS).all();
+      ORDER BY (number IN (${quoted.length ? quoted.map(() => "?").join(",") : "''"})) DESC, created_at DESC LIMIT ?`
+  ).bind(...params, now() - LOOKBACK_MS, ...quoted, MAX_SHIPMENTS).all();
 
   const rows = results || [];
   let items = {};
