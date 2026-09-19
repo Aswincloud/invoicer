@@ -30,7 +30,7 @@
 // The one import: deciding what sits where "PAY TO" goes is a rule about the
 // document, not about PDF drawing, and a second copy of it here is how the PDF
 // and the email would end up disagreeing on a paid invoice.
-import { paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
+import { packagingLabel, paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
          itemUnits, fmtUnits, giftBlock } from "./invoice-html.js";
 import { qrMatrix, QR_QUIET } from "./qr.js";
 import { parseSignature } from "./signature.js";
@@ -324,9 +324,11 @@ export function renderInvoicePdf(inv, items, totals, { showGift = false } = {}) 
     // Free delivery is still delivery — say how it went.
     totRow("Delivery", inv.shipping_mode, { text: true });
   }
+  if (totals.packaging) totRow(packagingLabel(inv), totals.packaging);
   // Same rule as the HTML: "Taxable value" is the base a tax was computed on, so
   // it is meaningless — and misleading — when no tax applies.
-  if ((totals.disc || totals.shipping) && totals.taxRows.length) totRow("Taxable value", totals.taxable);
+  if ((totals.disc || totals.shipping || totals.packaging) && totals.taxRows.length)
+    totRow("Taxable value", totals.taxable);
   for (const [l, v] of totals.taxRows) totRow(l, v);
   // Signed, like the screen: "Round off  0.40" leaves the reader to work out
   // which way it moved the total.

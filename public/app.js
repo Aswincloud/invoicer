@@ -313,7 +313,7 @@ const BIZ_QR_FIELDS = ["bizQrUrl","bizQrCaption","bizUpiVpa","bizPayQr"];
 
 const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clAddr","clGst",
   "invNo","currency","issueDate","dueDate","discount","taxMode","taxRate",
-  "shipping","shippingMode","shippingModeOther","status","notes"];
+  "shipping","shippingMode","shippingModeOther","packaging","packagingLabel","status","notes"];
 
 // ── money helpers ────────────────────────────────────────────────
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
@@ -377,7 +377,9 @@ function computeTotals(items){
   // Shipping joins the taxable value (GST treatment for freight), so tax applies
   // to it — mirrors computeTotals() in src/invoice-html.js.
   const shipping = num($("shipping").value);
-  const taxable = subtotal - disc + shipping;
+  // Packaging is a fee on the same footing as shipping — mirrors the server.
+  const packaging = num($("packaging").value);
+  const taxable = subtotal - disc + shipping + packaging;
   const mode = $("taxMode").value;
   const rate = num($("taxRate").value);
   let taxRows = [], taxTotal = 0;
@@ -395,7 +397,13 @@ function computeTotals(items){
   // so the figures on the page still add up to the total.
   const gross = taxable + taxTotal;
   const total = $("roundOff").checked ? Math.round(gross) : gross;
-  return {subtotal, disc, shipping, taxable, taxRows, gross, round: total - gross, total};
+  return {subtotal, disc, shipping, packaging, taxable, taxRows, gross, round: total - gross, total};
+}
+
+// The packaging row's label: free text so "Secure 3-layer packaging" prints as
+// written, plain "Packaging" when left blank. Mirrors packagingLabel() server-side.
+function pkgLabel(){
+  return $("packagingLabel").value.trim().slice(0,60) || "Packaging";
 }
 
 // Show the round-off row only when it actually moves the total. An adjustment
@@ -466,23 +474,24 @@ function applyInference(){
 }
 
 /* ── reverse solve: target total → product cost ────────────────────
-   Given an all-in figure ("quote them 400"), undo tax, shipping and discount
-   to get the subtotal the line items must add up to. Inverts computeTotals:
+   Given an all-in figure ("quote them 400"), undo tax, fees and discount to
+   get the subtotal the line items must add up to. Inverts computeTotals:
 
-     total   = taxable × (1 + rate/100)      →  taxable  = total / (1 + rate/100)
-     taxable = subtotal − discount% + ship   →  subtotal = (taxable − ship) / (1 − d/100)
+     total   = taxable × (1 + rate/100)           →  taxable  = total / (1 + rate/100)
+     taxable = subtotal − discount% + ship + pkg  →  subtotal = (taxable − ship − pkg) / (1 − d/100)
 */
 function solveSubtotal(total){
   const mode = $("taxMode").value;
   const rate = mode === "none" ? 0 : num($("taxRate").value);
   const taxable = total / (1 + rate/100);
   const ship = num($("shipping").value);
+  const pkg  = num($("packaging").value);
   const d = num($("discount").value);
   if(d >= 100) return { error: "A 100% discount can't reach a non-zero total." };
-  const subtotal = (taxable - ship) / (1 - d/100);
+  const subtotal = (taxable - ship - pkg) / (1 - d/100);
   if(subtotal <= 0)
-    return { error: `Shipping alone (${fmt(ship)}) already exceeds that total.` };
-  return { subtotal, taxable, ship, rate, d };
+    return { error: `Shipping and packaging alone (${fmt(ship + pkg)}) already exceed that total.` };
+  return { subtotal, taxable, ship, pkg, rate, d };
 }
 // Push the solved subtotal onto the line items: with one row we set its rate
 // (dividing by qty); with several we scale every rate proportionally so the
@@ -661,7 +670,8 @@ function render(){
   ${t.disc?`<tr><td>Discount (${num($("discount").value)}%)</td><td class="r">– ${fmt(t.disc)}</td></tr>`:""}
   ${t.shipping?`<tr><td>Shipping${shipMode()?` (${esc(shipMode())})`:""}</td><td class="r">${fmt(t.shipping)}</td></tr>`
     :shipMode()?`<tr><td>Delivery</td><td class="r">${esc(shipMode())}</td></tr>`:""}
-  ${(t.disc||t.shipping)&&t.taxRows.length?`<tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
+  ${t.packaging?`<tr><td>${esc(pkgLabel())}</td><td class="r">${fmt(t.packaging)}</td></tr>`:""}
+  ${(t.disc||t.shipping||t.packaging)&&t.taxRows.length?`<tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
   ${taxHtml}
   ${showRound(t)?`<tr><td>Round off</td><td class="r">${t.round<0?"– ":"+ "}${fmt(Math.abs(t.round))}</td></tr>`:""}
   <tr class="grand"><td>Total ${cur?`(${cur})`:""}</td><td class="r">${fmt(t.total)}</td></tr>
@@ -1417,6 +1427,11 @@ function init(){
      "targetTotal","giftCode","giftAmount"].forEach(f=>$(f).value="");
     $("giftOn").checked = false; syncGift();
     syncShippingMode();
+    // Packaging carries a business default, so a fresh invoice gets the default
+    // back rather than a blank — the same way discount survives a reset.
+    { const d = (activeBiz() || {}).defaults || {};
+      $("packaging").value = (d.packaging != null && d.packaging !== "") ? d.packaging : "";
+      $("packagingLabel").value = d.packagingLabel || ""; }
     $("solveMsg").textContent = "";
     $("autoSolve").checked = true;   // back to the default
     $("roundOff").checked = true;
@@ -1455,6 +1470,7 @@ function collect(){
   return {number:v("invNo"),issueDate:v("issueDate"),dueDate:v("dueDate"),
     currency:v("currency"),taxMode:v("taxMode"),taxRate:v("taxRate"),
     discount:v("discount"),shipping:v("shipping"),shippingMode:shipMode(),
+    packaging:v("packaging"),packagingLabel:$("packagingLabel").value.trim().slice(0,60),
     roundOff:$("roundOff").checked,
     status:v("status"),notes:v("notes"),
     // Which business is issuing it. Ignored by the server on an edit — the
@@ -1748,10 +1764,11 @@ function posOps(){
   // or not it was billed for, and on a counter receipt it is often the only
   // record of how the customer is getting their goods.
   else if(shipMode()) ops.push({t:"kv", k:"Delivery", val:shipMode(), size:PS.totals, fit:true});
+  if(t.packaging) ops.push({t:"kv", k:pkgLabel(), val:money(t.packaging), size:PS.totals, fit:true});
   // Only when a tax actually follows it: "Taxable" names the base a tax was
   // computed on, so on a no-tax invoice it is a number with no meaning. The
   // email and the PDF already had this condition; the receipt did not.
-  if((t.disc || t.shipping) && t.taxRows.length)
+  if((t.disc || t.shipping || t.packaging) && t.taxRows.length)
     ops.push({t:"kv", k:"Taxable", val:money(t.taxable), size:PS.totals, fit:true});
   t.taxRows.forEach(([l,val]) => ops.push({t:"kv", k:l, val:money(val), size:PS.totals, fit:true}));
   if(showRound(t))
@@ -1933,12 +1950,22 @@ function posDraw(doc, ops){
     // instead. 0.75 is enough for every label the form can produce while
     // keeping a row recognisably the same size as its neighbours.
     if(op.fit){
+      const full = size;
       const floor = size * 0.75;
       const width = () => op.t === "kv"
         ? doc.getTextWidth(op.k) + doc.getTextWidth(op.val) + 1.5
         : doc.getTextWidth(op.s);
       while(size > floor && width() > POS_CONTENT){
         size -= 0.25;
+        doc.setFontSize(size);
+      }
+      // Shrinking is only worth it if it BUYS the single line. A key so long
+      // that it still cannot share a line with its value at the floor is going
+      // to wrap below regardless - and a wrapped label at three-quarter size is
+      // the worst of both: "Secure 3-layer packaging" came out small AND on two
+      // lines. If it must wrap, wrap at full size.
+      if(op.t === "kv" && width() > POS_CONTENT){
+        size = full;
         doc.setFontSize(size);
       }
     }
@@ -2281,6 +2308,7 @@ document.addEventListener("DOMContentLoaded", wireBackend);
 const SET_FIELDS = {  // modal field id -> defaults key
   setCurrency:"currency", setPrefix:"prefix", setTaxMode:"taxMode",
   setTaxRate:"taxRate", setDiscount:"discount", setDueDays:"dueDays", setNotes:"notes",
+  setPackaging:"packaging", setPackagingLabel:"packagingLabel",
 };
 const SET_BIZ = { setBizName:"bizName", setBizEmail:"bizEmail", setBizAddr:"bizAddr",
   setBizPhone:"bizPhone", setBizGst:"bizGst", setBizPay:"bizPay",
@@ -2294,6 +2322,8 @@ function applyDefaults(d){
   if(d.taxMode)  $("taxMode").value  = d.taxMode;
   if(d.taxRate!=="" && d.taxRate!=null) $("taxRate").value = d.taxRate;
   if(d.discount!=="" && d.discount!=null) $("discount").value = d.discount;
+  if(d.packaging!=="" && d.packaging!=null) $("packaging").value = d.packaging;
+  if(d.packagingLabel!=null && d.packagingLabel!=="") $("packagingLabel").value = d.packagingLabel;
   if(d.notes && !$("notes").value) $("notes").value = d.notes;
   if(d.dueDays!=="" && d.dueDays!=null){
     const n=parseInt(d.dueDays,10); if(Number.isFinite(n)) $("dueDate").value = todayISO(n);
@@ -2463,6 +2493,10 @@ async function openInvoiceInEditor(id){
     $("discount").value = inv.discount_pct ?? "";
     $("shipping").value = inv.shipping ? String(inv.shipping) : "";
     setShippingMode(inv.shipping_mode || "");
+    // The saved fee and its saved label — not the business default, which may
+    // have changed since this invoice went out.
+    $("packaging").value = inv.packaging ? String(inv.packaging) : "";
+    $("packagingLabel").value = inv.packaging_label || "";
     // Restore the saved setting rather than the default: an invoice stored with
     // exact paise must not gain a round-off line just because it was reopened.
     $("roundOff").checked = !!inv.round_off;

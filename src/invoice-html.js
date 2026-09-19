@@ -30,7 +30,10 @@ export function computeTotals(inv, items) {
   // Shipping is part of the taxable value (standard GST treatment for freight
   // on a composite supply), so it lands before tax — not after.
   const shipping = +inv.shipping || 0;
-  const taxable = subtotal - disc + shipping;
+  // Packaging is a fee on the same footing as shipping: part of the taxable
+  // value, shown as its own row, never a line item.
+  const packaging = +inv.packaging || 0;
+  const taxable = subtotal - disc + shipping + packaging;
   const rate = inv.tax_rate || 0;
   let taxRows = [], taxTotal = 0;
   if (inv.tax_mode === "gst") {
@@ -46,8 +49,12 @@ export function computeTotals(inv, items) {
   // exact — mirrors computeTotals() in public/app.js.
   const gross = taxable + taxTotal;
   const total = inv.round_off ? Math.round(gross) : gross;
-  return { subtotal, disc, shipping, taxable, taxRows, gross, round: total - gross, total };
+  return { subtotal, disc, shipping, packaging, taxable, taxRows, gross, round: total - gross, total };
 }
+
+/* The packaging row's label. Free text so "Secure 3-layer packaging" prints
+   as written; an empty label is plain "Packaging" rather than a blank cell. */
+export const packagingLabel = (inv) => (inv.packaging_label || "").trim() || "Packaging";
 
 // Only worth a row when it actually moves the total; below half a paisa it
 // would print as "0.00" and read as a bug.
@@ -567,7 +574,8 @@ export function renderInvoiceEmail(inv, items, opts = {}) {
          ? `<tr><td style="padding:6px 10px;color:${SOFT}">Delivery</td>
             <td align="right" style="padding:6px 10px;color:${SOFT}">${esc(inv.shipping_mode)}</td></tr>`
          : ""}
-   ${(t.disc || t.shipping) && t.taxRows.length ? totRow("Taxable value", t.taxable) : ""}
+   ${t.packaging ? totRow(packagingLabel(inv), t.packaging) : ""}
+   ${(t.disc || t.shipping || t.packaging) && t.taxRows.length ? totRow("Taxable value", t.taxable) : ""}
    ${taxRows}
    ${showRoundOff(t) ? totRow("Round off", Math.abs(t.round), { neg: t.round < 0, pos: t.round > 0 }) : ""}
    <tr><td style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${SANS};font-weight:700;text-transform:uppercase;letter-spacing:.6px">Total ${cur ? `(${esc(cur)})` : ""}</td>
