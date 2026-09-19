@@ -27,6 +27,7 @@
 
 import { json, bad, now, randToken, sendEmail } from "./lib.js";
 import { computeTotals, renderInvoiceEmail, esc, fmtDate } from "./invoice-html.js";
+import { renderInvoicePdf } from "./invoice-pdf.js";
 import { BIZ_SELECT, BIZ_JOIN } from "./business.js";
 import {
   createOrder, paymentsConfigured, publicKeyId,
@@ -91,6 +92,27 @@ function payability(env, inv, total) {
   }
   if (paise(total) < 100) return { ok: false, why: "This invoice is below the ₹1 minimum." };
   return { ok: true };
+}
+
+// ── GET /i/:token.pdf — the invoice as a file ────────────────────────────────
+//
+// Public under the same token as the page, and for the same audience: the
+// WhatsApp send hands Meta this URL to fetch the document header from, and a
+// customer who saved the message can open it later. Rendered fresh from the
+// row each time, so it always shows the invoice as it currently stands.
+export async function sharePdf(env, token) {
+  const loaded = await loadByToken(env, token);
+  if (!loaded) return new Response("Not found", { status: 404 });
+  const { inv, items } = loaded;
+  const bytes = renderInvoicePdf(inv, items, computeTotals(inv, items), { showGift: false });
+  const safeNum = String(inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
+  return new Response(bytes, {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="${safeNum}.pdf"`,
+      "Cache-Control": "private, no-store",
+    },
+  });
 }
 
 // ── GET /i/:token — the public page ──────────────────────────────────────────

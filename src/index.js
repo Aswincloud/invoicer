@@ -17,6 +17,8 @@ import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
 } from "./pay.js";
+import { sharePdf } from "./pay.js";
+import { waConfigured, toE164, prettyE164, buildTemplateMessage, sendTemplate, canSendWhatsApp } from "./wa.js";
 
 const SESSION_COOKIE = "inv_session";
 const TOKEN_TTL = 15 * 60 * 1000;          // magic link valid 15 min
@@ -35,11 +37,12 @@ export default {
 
     // Public invoice link. Above the assets fallback, which would 404 it — there
     // is no /i/<token> file, the page is rendered from the database.
-    const share = url.pathname.match(/^\/i\/([^/]+?)(\/logo)?\/?$/);
+    const share = url.pathname.match(/^\/i\/([^/]+?)(\/logo|\.pdf)?\/?$/);
     if (share && request.method === "GET") {
       try {
-        return share[2] ? await shareLogo(env, share[1])
-                        : await sharePage(env, share[1]);
+        if (share[2] === "/logo") return await shareLogo(env, share[1]);
+        if (share[2] === ".pdf")  return await sharePdf(env, share[1]);
+        return await sharePage(env, share[1]);
       } catch (e) { return bad("server error: " + (e?.message || e), 500); }
     }
 
@@ -141,6 +144,8 @@ async function api(request, env, url, ctx) {
     return emailInvoice(env, user, match[1], body);
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/share$/)) && m === "POST")
     return shareInvoice(env, user, match[1], request.url);
+  if ((match = p.match(/^\/api\/invoices\/([^/]+)\/whatsapp$/)) && m === "POST")
+    return whatsappInvoice(env, user, match[1], body);
 
   return bad("not found", 404);
 }
@@ -165,7 +170,49 @@ async function publicUser(env, u) {
     defaultBusinessId: active ? active.id : null,
     biz: active ? active.biz : {},
     defaults: active ? active.defaults : {},
+    // What this deployment can do, so the client shows only buttons that work.
+    features: { whatsapp: waConfigured(env) },
   };
+}
+
+/* Send the invoice over WhatsApp.
+
+   Mirrors emailInvoice: load with the issuing business attached, mint the share
+   token if there is none, then hand Meta a template with the PDF as its header.
+   The PDF is fetched by Meta from /i/<token>.pdf rather than uploaded, which
+   keeps this a single call. PAID only - see canSendWhatsApp.
+
+   `b.to` overrides the stored number for a one-off send; either way the number
+   used is normalised and refused if ambiguous - see toE164. */
+async function whatsappInvoice(env, user, id, b) {
+  if (!waConfigured(env)) return bad("WhatsApp sending is not set up on this deployment.", 503);
+  const r = await loadInvoice(env, user, id);
+  if (!r) return bad("not found", 404);
+
+  const gate = canSendWhatsApp(r.inv);
+  if (!gate.ok) return bad(gate.why, 409);
+
+  const to = toE164(b && b.to ? b.to : r.inv.client_phone);
+  if (!to) return bad("A valid mobile number is required (e.g. +91 98765 43210).");
+
+  let token = r.inv.share_token;
+  if (!token) {
+    token = randToken(16);
+    await env.DB.prepare("UPDATE invoices SET share_token=?, updated_at=? WHERE id=?")
+      .bind(token, now(), id).run();
+  }
+  const base = String(env.APP_BASE_URL || "").replace(/\/+$/, "");
+  const pdfUrl = `${base}/i/${token}.pdf`;
+
+  const msg = buildTemplateMessage(env, { to, inv: r.inv, pdfUrl });
+  const res = await sendTemplate(env, msg);
+  if (!res.ok) {
+    console.error("whatsapp send failed", r.inv.number, res.status, res.error);
+    return bad("WhatsApp failed: " + res.error, 502);
+  }
+  await env.DB.prepare("UPDATE invoices SET wa_message_id=?, wa_sent_at=?, updated_at=? WHERE id=?")
+    .bind(res.id, now(), now(), id).run();
+  return json({ ok: true, id: res.id, to: prettyE164(to) });
 }
 
 // ── magic-link auth ──────────────────────────────────────────────
@@ -384,6 +431,9 @@ function invoiceFields(b) {
     show_pay_qr: (b.showPayQr === false || b.showPayQr === 0) ? 0 : 1,
     status: b.status || "UNPAID", notes: b.notes || "",
     client_name: b.clName || "", client_email: b.clEmail || "",
+    // Normalised to E.164 digits on the way in, or "" - never a raw string a
+    // later send would have to guess at. See toE164.
+    client_phone: toE164(b.clPhone),
     client_addr: b.clAddr || "", client_gst: b.clGst || "",
     // A thank-you, not a charge. Deliberately NOT read by computeTotals, so it
     // cannot move the amount due or the taxable value in either direction.
@@ -442,14 +492,14 @@ async function createInvoice(env, user, b) {
 
   await env.DB.prepare(
     `INSERT INTO invoices (id,user_id,business_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
-       discount_pct,shipping,shipping_mode,packaging,packaging_label,round_off,show_pay_qr,status,notes,client_name,client_email,client_addr,client_gst,total,gift_code,gift_amount,created_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       discount_pct,shipping,shipping_mode,packaging,packaging_label,round_off,show_pay_qr,status,notes,client_name,client_email,client_phone,client_addr,client_gst,total,gift_code,gift_amount,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(id, user.id, biz ? biz.id : null,
          inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
          inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode,
          inv.packaging, inv.packaging_label, inv.round_off, inv.show_pay_qr,
          inv.status, inv.notes,
-         inv.client_name, inv.client_email, inv.client_addr, inv.client_gst, total,
+         inv.client_name, inv.client_email, inv.client_phone, inv.client_addr, inv.client_gst, total,
          inv.gift_code, inv.gift_amount, t, t).run();
 
   await writeLineItems(env, id, items);
@@ -506,13 +556,13 @@ async function updateInvoice(env, user, id, b) {
     `UPDATE invoices SET number=?, issue_date=?, due_date=?, currency=?, tax_mode=?,
        tax_rate=?, discount_pct=?, shipping=?, shipping_mode=?, packaging=?, packaging_label=?,
        round_off=?, show_pay_qr=?,
-       status=?, notes=?, client_name=?, client_email=?, client_addr=?, client_gst=?,
+       status=?, notes=?, client_name=?, client_email=?, client_phone=?, client_addr=?, client_gst=?,
        total=?, gift_code=?, gift_amount=?, updated_at=?
      WHERE id=? AND user_id=?`
   ).bind(inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
          inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode,
          inv.packaging, inv.packaging_label, inv.round_off, inv.show_pay_qr,
-         inv.status, inv.notes, inv.client_name, inv.client_email, inv.client_addr,
+         inv.status, inv.notes, inv.client_name, inv.client_email, inv.client_phone, inv.client_addr,
          inv.client_gst, total, inv.gift_code, inv.gift_amount, now(), id, user.id).run();
 
   await writeLineItems(env, id, items);
