@@ -32,7 +32,14 @@
       <button id="btnWa" class="btn ghost" title="Send this invoice to the client on WhatsApp" hidden>WhatsApp</button>
       <button id="btnPos" class="btn ghost" title="Download a 57mm thermal receipt PDF">POS receipt</button>
       <button id="btnPosPrint" class="btn ghost" title="Print the receipt on the thermal printer" hidden>Print receipt</button>
-      <button id="btnPrint" class="btn primary" title="Download / print as PDF">Download PDF</button>
+      <div class="dd" id="dlWrap">
+        <button id="btnDownload" class="btn primary dd-main" title="Download this invoice as a PDF file">Download</button><button id="btnDownloadMore" class="btn primary dd-caret" aria-haspopup="menu" aria-expanded="false" aria-label="More download options">▾</button>
+        <div id="dlMenu" class="dd-menu" role="menu" hidden>
+          <button type="button" class="dd-item" id="dlPdf" role="menuitem">PDF <span class="hint">file</span></button>
+          <button type="button" class="dd-item" id="dlPng" role="menuitem">Image <span class="hint">PNG</span></button>
+          <button type="button" class="dd-item" id="dlPrint" role="menuitem">Print… <span class="hint">browser dialog</span></button>
+        </div>
+      </div>
     </div>
   </div>
 </header>

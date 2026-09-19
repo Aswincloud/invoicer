@@ -67,6 +67,22 @@ body{font-family:var(--font-ui);font-size:14px;line-height:1.5;
 .btn.primary{background:var(--primary);color:var(--primary-ink);border-color:var(--primary)}
 .btn.primary:hover{filter:brightness(1.08)}
 .btn.ghost{background:transparent;color:var(--muted)}
+/* Split button: a main action and a caret that opens a menu of alternatives.
+   One control, two halves, so it reads as one thing. */
+.dd{position:relative;display:inline-flex}
+.dd-main{border-radius:9px 0 0 9px}
+.dd-caret{border-radius:0 9px 9px 0;padding:9px 10px}
+/* Two classes, so this outranks .btn.primary's border-color and the seam
+   between the halves actually shows - a split button with no seam reads as
+   one button with a stray arrow on it. */
+.dd-caret.primary{border-left:1px solid color-mix(in srgb,var(--primary-ink) 35%,transparent)}
+.dd-menu{position:absolute;right:0;top:calc(100% + 6px);min-width:190px;z-index:30;
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.18);padding:6px;display:flex;flex-direction:column;gap:2px}
+.dd-item{font:inherit;font-size:13.5px;text-align:left;background:transparent;border:0;color:var(--ink);
+  padding:9px 12px;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;gap:12px}
+.dd-item:hover,.dd-item:focus-visible{background:var(--surface-2);outline:none}
+.dd-item .hint{color:var(--muted);font-weight:500;font-size:12px}
 .btn.ghost:hover{color:var(--ink);background:var(--surface-2)}
 .btn.sm{padding:7px 12px;font-size:12.5px}
 .icon-btn{width:38px;height:38px;padding:0;justify-content:center;font-size:19px;line-height:1}
