@@ -315,7 +315,7 @@ function placeOfSupplyFromGst(gstin){
 // before they can be printed.
 const BIZ_QR_FIELDS = ["bizQrUrl","bizQrCaption","bizUpiVpa","bizPayQr"];
 
-const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clAddr","clGst",
+const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clPhone","clAddr","clGst",
   "invNo","currency","issueDate","dueDate","discount","taxMode","taxRate",
   "shipping","shippingMode","shippingModeOther","packaging","packagingLabel","status","notes"];
 
@@ -1428,7 +1428,7 @@ function init(){
   $("bizDelete").onclick   = deleteBizProfile;
   $("btnReset").onclick = () => {
     if(!confirm("Start a new blank invoice? (Your saved business details are kept.)")) return;
-    ["clName","clEmail","clAddr","clGst","notes","shipping","shippingMode",
+    ["clName","clEmail","clPhone","clAddr","clGst","notes","shipping","shippingMode",
      "targetTotal","giftCode","giftAmount"].forEach(f=>$(f).value="");
     $("giftOn").checked = false; syncGift();
     syncShippingMode();
@@ -1483,7 +1483,7 @@ function collect(){
     // Which business is issuing it. Ignored by the server on an edit — the
     // issuing business is fixed at creation.
     businessId: ACTIVE_BIZ,
-    clName:v("clName"),clEmail:v("clEmail"),clAddr:v("clAddr"),clGst:v("clGst"),
+    clName:v("clName"),clEmail:v("clEmail"),clPhone:v("clPhone"),clAddr:v("clAddr"),clGst:v("clGst"),
     // A present, never a charge: these do not enter computeTotals on either
     // side of the wire. The checkbox is what decides whether it is sent at all,
     // so unticking it clears the card rather than hiding it.
@@ -2186,6 +2186,9 @@ async function refreshMe(){
   $("who").textContent = on ? ME.email : "";
   $("btnAuth").textContent = on ? "Sign out" : "Sign in";
   $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
+  // Only when the server can actually send one - the button is gated on the
+  // secrets being set, the same way printing is.
+  $("btnWa").hidden = !(on && ME.features && ME.features.whatsapp);
   // Printing goes through the account (and an allowlist on the server), so the
   // button only makes sense signed in. "POS receipt" stays visible either way.
   $("btnPosPrint").hidden = !on;
@@ -2291,6 +2294,15 @@ function wireBackend(){
       // that rather than burying it in "Save failed".
       alert("Save failed: "+e.message);
     }
+  };
+  $("btnWa").onclick = async () => {
+    const to = prompt("Send on WhatsApp to (mobile number):", $("clPhone").value||"");
+    if(!to) return;
+    try{
+      const s = await persistInvoice();
+      const r = await api("/invoices/"+s.id+"/whatsapp",{method:"POST",body:JSON.stringify({to})});
+      alert("Sent on WhatsApp to "+(r.to||to)+" ✓");
+    }catch(e){ alert("WhatsApp failed: "+e.message); }
   };
   $("btnEmail").onclick = async () => {
     const to = prompt("Send invoice to (client email):", $("clEmail").value||"");
@@ -2526,6 +2538,8 @@ async function openInvoiceInEditor(id){
     $("notes").value    = inv.notes || "";
     $("clName").value   = inv.client_name || "";
     $("clEmail").value  = inv.client_email || "";
+    // Stored as E.164 digits; shown with the plus so it reads as a number.
+    $("clPhone").value  = inv.client_phone ? "+" + inv.client_phone : "";
     $("clAddr").value   = inv.client_addr || "";
     $("clGst").value    = inv.client_gst || "";
     $("giftCode").value = inv.gift_code || "";

@@ -29,6 +29,7 @@
       <button id="btnReset" class="btn ghost" title="Start a new blank invoice">New</button>
       <button id="btnSave" class="btn ghost" title="Save to your account" hidden>Save</button>
       <button id="btnEmail" class="btn ghost" title="Email this invoice to the client" hidden>Email</button>
+      <button id="btnWa" class="btn ghost" title="Send this invoice to the client on WhatsApp" hidden>WhatsApp</button>
       <button id="btnPos" class="btn ghost" title="Download a 57mm thermal receipt PDF">POS receipt</button>
       <button id="btnPosPrint" class="btn ghost" title="Print the receipt on the thermal printer" hidden>Print receipt</button>
       <button id="btnPrint" class="btn primary" title="Download / print as PDF">Download PDF</button>
@@ -105,6 +106,7 @@
       <div class="grid2">
         <label>Client name<input id="clName" placeholder="Nova Retail Pvt. Ltd."></label>
         <label>Client email<input id="clEmail" type="email" placeholder="priya@novaretail.com"></label>
+        <label>Client mobile <span class="hint">(for WhatsApp)</span><input id="clPhone" type="tel" placeholder="+91 98765 43210" maxlength="20"></label>
         <label class="col2">Client address<textarea id="clAddr" rows="2" placeholder="14 MG Road, Bengaluru 560001"></textarea></label>
         <label>Client GSTIN<input id="clGst" placeholder="29ABCDE1234F1Z5"></label>
       </div>
