@@ -196,6 +196,52 @@ const MAX_SHIPMENTS = 5;
 const MAX_SKEW_MS = 5 * 60 * 1000;     // matches the shop's chat endpoints
 const LOOKBACK_MS = 120 * 24 * 60 * 60 * 1000;
 
+/* Verifying a quoted invoice when the phone does not match.
+ *
+ * The customer quoted a number, but the message came from a phone that is not
+ * on that invoice (or the invoice has none). The number alone proves little —
+ * they are guessable — so the customer is asked for something printed on the
+ * document they hold: the name it is billed to, the amount, or the business
+ * that billed them. Any one matching is enough. The comparison happens HERE,
+ * on what the customer typed (`hints`), never in the model.
+ *
+ * Returns which field matched ("name" | "amount" | "biller") or "". */
+const normText = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+export function amountsIn(text) {
+  // "₹1,299.00", "1299", "Rs 350" -> [1299, 350]. Digits-with-separators only.
+  return [...String(text || "").matchAll(/\d[\d,]*(?:\.\d+)?/g)]
+    .map((m) => Number(m[0].replace(/,/g, "")))
+    .filter((n) => Number.isFinite(n));
+}
+
+export function hintMatches(inv, hints) {
+  const texts = (Array.isArray(hints) ? hints : []).map((h) => String(h || "")).filter(Boolean);
+  if (!texts.length) return "";
+  const joined = texts.join(" \n ");
+  const normJoined = normText(joined);
+
+  // Name: the full billed-to name, or its first word when that is 3+ letters
+  // ("Vennila" for "Vennila R"). Two letters would match half the alphabet.
+  const name = normText(inv.client_name);
+  const first = normText(String(inv.client_name || "").trim().split(/\s+/)[0]);
+  if (name.length >= 3 && normJoined.includes(name)) return "name";
+  if (first.length >= 3 && normJoined.includes(first)) return "name";
+
+  // Amount: the invoice total, to the rupee or exactly. "350" matches 350.00.
+  const total = Number(inv.total);
+  if (Number.isFinite(total) && total > 0) {
+    for (const n of amountsIn(joined)) {
+      if (Math.abs(n - total) < 0.005 || Math.round(n) === Math.round(total)) return "amount";
+    }
+  }
+
+  // Biller: the business name on the invoice ("Aswin 3D Prints" == "Aswin3DPrints").
+  const biz = normText(inv.biz_name);
+  if (biz.length >= 4 && normJoined.includes(biz)) return "biller";
+  return "";
+}
+
 export async function chatShipmentsHandler(request, env) {
   // Fails CLOSED: without the secret nothing here can tell the bot from anyone.
   if (!env.INVOICER_CHAT_SECRET) {
@@ -219,41 +265,67 @@ export async function chatShipmentsHandler(request, env) {
   const quoted = [...new Set((Array.isArray(body.numbers) ? body.numbers : [])
     .map((n) => String(n || "").toUpperCase().replace(/\s+/g, "").trim())
     .filter((n) => /^[A-Z0-9][A-Z0-9-]{3,39}$/.test(n)))].slice(0, 3);
-  if (!phone && !quoted.length) return json({ shipments: [] });
+  // What the customer has typed recently — compared against a quoted invoice
+  // when the phone does not match it. Strings, capped, never interpreted.
+  const hints = (Array.isArray(body.hints) ? body.hints : [])
+    .map((h) => String(h || "").slice(0, 200)).filter(Boolean).slice(0, 8);
+  if (!phone && !quoted.length) return json({ shipments: [], pending_verification: [] });
 
   const owner = await ownerUser(env);
-  if (!owner) return json({ shipments: [] });
+  if (!owner) return json({ shipments: [], pending_verification: [] });
 
   // Two ways in, one rule about who may see what:
   //
   //   by phone   the sender's own invoices — Meta verified the phone, so this
-  //              is the customer's own information.
-  //   by number  an invoice the customer quoted. A number on its own proves
-  //              little (they are guessable), so it is honoured ONLY when the
-  //              invoice has no phone on file — then the number is the one key
-  //              there is, and it is printed on the document the customer holds.
-  //              An invoice that carries a DIFFERENT phone is locked to that
-  //              phone and is not returned, however the number was obtained.
+  //              is the customer's own information. Shared at once.
+  //   by number  an invoice the customer quoted from a phone that is not on it
+  //              (or it has none). Shared only once something printed on the
+  //              invoice has been confirmed — the billed-to name, the amount or
+  //              the biller — see hintMatches. Until then the reply carries
+  //              the number under pending_verification with what to ask for,
+  //              and no details.
   const params = [owner.id];
   const where = [];
   if (phone) { where.push("client_phone = ?"); params.push(phone); }
-  if (quoted.length) {
-    where.push(`(number IN (${quoted.map(() => "?").join(",")}) AND (client_phone = '' OR client_phone IS NULL${phone ? " OR client_phone = ?" : ""}))`);
-    params.push(...quoted); if (phone) params.push(phone);
-  }
-  // Placeholders bind in textual order: WHERE (…owner, phone, numbers, phone…),
+  if (quoted.length) { where.push(`number IN (${quoted.map(() => "?").join(",")})`); params.push(...quoted); }
+
+  // Placeholders bind in textual order: WHERE (owner, phone, numbers),
   // created_at, then the ORDER BY's copy of the numbers, then LIMIT.
   const { results } = await env.DB.prepare(
     `SELECT id, number, status, currency, total, courier, tracking_id, shipped_at, delivered_at,
-            track_status, track_checked_at, paid_at, created_at, client_phone
+            track_status, track_checked_at, paid_at, created_at, client_phone, client_name, business_id
        FROM invoices
       WHERE user_id = ? AND (${where.join(" OR ")}) AND status <> 'VOID'
         AND (status = 'PAID' OR shipped_at IS NOT NULL)
         AND created_at > ?
       ORDER BY (number IN (${quoted.length ? quoted.map(() => "?").join(",") : "''"})) DESC, created_at DESC LIMIT ?`
-  ).bind(...params, now() - LOOKBACK_MS, ...quoted, MAX_SHIPMENTS).all();
+  ).bind(...params, now() - LOOKBACK_MS, ...quoted, MAX_SHIPMENTS + 3).all();
 
-  const rows = results || [];
+  // Business names, for the biller check and for the message.
+  const bizRows = (await env.DB.prepare(
+    "SELECT id, biz_name, is_default FROM businesses WHERE user_id = ?"
+  ).bind(owner.id).all().catch(() => ({ results: [] }))).results || [];
+  const bizName = (id) => (bizRows.find((b) => b.id === id) || bizRows.find((b) => b.is_default) || {}).biz_name || "";
+
+  const rows = [];
+  const pending = [];
+  for (const r of results || []) {
+    r.biz_name = bizName(r.business_id);
+    if (phone && r.client_phone === phone) { rows.push(r); continue; }
+    // Quoted from another phone (or none on file): needs one printed detail.
+    const how = hintMatches(r, hints);
+    if (how) {
+      console.log(JSON.stringify({ msg: "chat shipments: quoted invoice verified", number: r.number, by: how }));
+      rows.push(r);
+    } else {
+      const needs = [];
+      if (normText(r.client_name).length >= 3) needs.push("name");
+      if (Number(r.total) > 0) needs.push("amount");
+      if (normText(r.biz_name).length >= 4) needs.push("biller");
+      pending.push({ number: r.number, needs });
+    }
+  }
+  rows.splice(MAX_SHIPMENTS);
   let items = {};
   if (rows.length) {
     const ph = rows.map(() => "?").join(",");
@@ -264,11 +336,13 @@ export async function chatShipmentsHandler(request, env) {
   }
 
   return json({
+    pending_verification: pending,
     shipments: rows.map((r) => ({
       number: r.number,
       status: r.status,
       total: r.total,
       currency: r.currency,
+      biz_name: r.biz_name || null,
       items: (items[r.id] || []).slice(0, 4),
       courier: r.courier || null,
       courier_name: carrierName(r.courier) || null,
