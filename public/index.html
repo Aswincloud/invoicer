@@ -29,7 +29,14 @@
       <button id="btnReset" class="btn ghost" title="Start a new blank invoice">New</button>
       <button id="btnSave" class="btn ghost" title="Save to your account" hidden>Save</button>
       <button id="btnEmail" class="btn ghost" title="Email this invoice to the client" hidden>Email</button>
-      <button id="btnWa" class="btn ghost" title="Send this invoice to the client on WhatsApp" hidden>WhatsApp</button>
+      <div class="dd" id="waWrap" hidden>
+        <button id="btnWa" class="btn ghost dd-main" title="Message the client on WhatsApp">WhatsApp</button><button id="btnWaMore" class="btn ghost dd-caret" aria-haspopup="menu" aria-expanded="false" aria-label="WhatsApp message options">▾</button>
+        <div id="waMenu" class="dd-menu" role="menu" hidden>
+          <button type="button" class="dd-item" id="waInvoice" role="menuitem">Send invoice <span class="hint">PDF + confirmation</span></button>
+          <button type="button" class="dd-item" id="waShipped" role="menuitem">Share tracking <span class="hint">courier + number</span></button>
+          <button type="button" class="dd-item" id="waDelivered" role="menuitem">Send delivered <span class="hint">closes the order</span></button>
+        </div>
+      </div>
       <button id="btnPos" class="btn ghost" title="Download a 57mm thermal receipt PDF">POS receipt</button>
       <button id="btnPosPrint" class="btn ghost" title="Print the receipt on the thermal printer" hidden>Print receipt</button>
       <div class="dd" id="dlWrap">
@@ -223,6 +230,41 @@
     </label>
     <button id="magicSend" class="btn primary" style="width:100%;margin-top:10px;justify-content:center">Email me a sign-in link</button>
     <div id="authMsg" class="msg" role="status" aria-live="polite"></div>
+  </div>
+</div>
+
+<!-- ────── WHATSAPP PREVIEW / CONFIRM ────── -->
+<div id="waModal" class="modal-scrim no-print" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="waTitle">
+    <div class="modal-head">
+      <div>
+        <h3 id="waTitle">Send on WhatsApp</h3>
+        <p class="sub" id="waSub">Nothing is sent until you confirm.</p>
+      </div>
+      <button class="close" id="waClose" aria-label="Close">×</button>
+    </div>
+
+    <label>To (mobile)
+      <input id="waTo" type="tel" placeholder="+91 98765 43210" autocomplete="off">
+    </label>
+
+    <div id="waShipFields" hidden>
+      <label>Courier
+        <select id="waCourier"></select>
+      </label>
+      <label>Tracking number
+        <input id="waTracking" type="text" placeholder="e.g. 1234567890123" autocomplete="off" spellcheck="false">
+      </label>
+      <p class="sub" id="waTrackLink"></p>
+    </div>
+
+    <div class="wa-preview" id="waPreview" aria-live="polite"></div>
+    <div id="waMsg" class="msg" role="status" aria-live="polite"></div>
+
+    <div class="wa-actions">
+      <button class="btn ghost" id="waCancel" type="button">Cancel</button>
+      <button class="btn primary" id="waSend" type="button">Send</button>
+    </div>
   </div>
 </div>
 

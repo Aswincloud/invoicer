@@ -12,10 +12,19 @@ binding = "DB"
 database_name = "invoicer-db"
 database_id = "6e9cc928-6f49-4ea6-a59a-f64de796ad01"
 
+# Every 30 minutes: check shipped-not-delivered parcels on ShipTrack and send
+# the customer the delivered message when one has arrived. See src/shipment.js.
+[triggers]
+crons = ["*/30 * * * *"]
+
 [vars]
 APP_NAME = "Invoicer"
 RESEND_FROM_EMAIL = "notify@aswincloud.com"
 APP_BASE_URL = "https://invoicer.aswincloud.com"
+
+# Live parcel status and the customer's tracking links come from ShipTrack's
+# public API. No credentials; its /api/track is open.
+SHIPTRACK_BASE_URL = "https://shiptrack.aswincloud.com"
 
 # Invoices raised automatically from paid orders at 3d-prints.aswincloud.com.
 #
@@ -49,6 +58,15 @@ PAY_ENABLED = "true"
 #   RESEND_API_KEY, AUTH_SIGNING_KEY
 #   SHOP_INGEST_SECRET — shared with the shop Worker; signs POST /api/ingest/order.
 #                        Must match the secret of the same name in 3d_printing.
+#   INVOICER_CHAT_SECRET — shared with the support bot (offhours-bot in the
+#                        chatwoot repo); signs POST /api/chat/shipments, the
+#                        lookup that answers "where is my parcel?" on WhatsApp.
+#   WA_PHONE_NUMBER_ID / WA_ACCESS_TOKEN — the WhatsApp number these messages go
+#                        out from. Must be the number Chatwoot answers on
+#                        (+91 413 235 7944, id 1336188189573573), or a customer's
+#                        reply to an invoice lands with the wrong bot.
+#   WA_TEMPLATE_SHIPPED / WA_TEMPLATE_DELIVERED — optional; default to the
+#                        templates order_shipped / order_delivered on the WABA.
 #   PRINT_RELAY_SECRET — shared with the print relay; signs POST to PRINT_RELAY_URL.
 #                        Must match PRINT_RELAY_SECRET in /etc/tejprint-relay.env
 #                        on the machine running tejprint-relay.py.
