@@ -450,3 +450,11 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
   .paper{border:none;box-shadow:none;border-radius:0;padding:0}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* WhatsApp preview: the message as a chat bubble, so what is confirmed reads
+   like what the customer will see. */
+.wa-preview{white-space:pre-wrap;background:#e7ffdb;color:#111;border-radius:12px;padding:12px 14px;
+  margin:12px 0 6px;font-size:14px;line-height:1.45;border:1px solid #cfe9c3;min-height:48px}
+:root[data-theme="dark"] .wa-preview{background:#1f3a2a;color:#e8f5e8;border-color:#2c5a3c}
+.wa-preview.pending{color:var(--muted);font-style:italic;background:var(--surface-2);border-color:var(--border)}
+.wa-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}

@@ -19,12 +19,24 @@ import {
 } from "./pay.js";
 import { sharePdf } from "./pay.js";
 import { waConfigured, toE164, prettyE164, buildTemplateMessage, sendTemplate, canSendWhatsApp } from "./wa.js";
+import {
+  CARRIERS, carrierName, isCarrier, normalizeAwb, trackUrl,
+  shippedParams, deliveredParams, buildShippedMessage, buildDeliveredMessage, previewText,
+  chatShipmentsHandler, checkDeliveries,
+} from "./shipment.js";
 
 const SESSION_COOKIE = "inv_session";
 const TOKEN_TTL = 15 * 60 * 1000;          // magic link valid 15 min
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export default {
+  // Cron (see [triggers] in wrangler.toml): look up every shipped-not-delivered
+  // parcel on ShipTrack, and when one has arrived, stamp the invoice and tell
+  // the customer on WhatsApp. Never throws — see checkDeliveries.
+  async scheduled(_event, env, ctx) {
+    ctx.waitUntil(checkDeliveries(env).catch((e) => console.error("checkDeliveries crashed", String(e?.message || e))));
+  },
+
   // `ctx` is threaded through for the Razorpay webhook: Razorpay times out at
   // ~5s, so the "payment received" emails go out via ctx.waitUntil after the
   // response rather than inside it.
@@ -85,6 +97,10 @@ async function api(request, env, url, ctx) {
   // on a webhook from Razorpay either.
   if (p === "/api/ingest/order" && m === "POST") return ingestOrder(request, env);
   if (p === "/api/webhook/razorpay" && m === "POST") return razorpayWebhook(request, env, ctx);
+  // The support bot asking for a WhatsApp customer's shipments. Signed with
+  // INVOICER_CHAT_SECRET over the raw body and scoped to the owner account —
+  // see src/shipment.js. Reads the body itself, so it stays above the parse.
+  if (p === "/api/chat/shipments" && m === "POST") return chatShipmentsHandler(request, env);
 
   const body = (m === "POST" || m === "PUT" || m === "PATCH")
     ? await request.json().catch(() => ({})) : {};
@@ -144,10 +160,133 @@ async function api(request, env, url, ctx) {
     return emailInvoice(env, user, match[1], body);
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/share$/)) && m === "POST")
     return shareInvoice(env, user, match[1], request.url);
+  if ((match = p.match(/^\/api\/invoices\/([^/]+)\/whatsapp\/preview$/)) && m === "GET")
+    return whatsappPreview(env, user, match[1], url);
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/whatsapp$/)) && m === "POST")
-    return whatsappInvoice(env, user, match[1], body);
+    return whatsappSend(env, user, match[1], body);
 
   return bad("not found", 404);
+}
+
+/* The three WhatsApp messages about an invoice, previewed and sent.
+
+   kind = "invoice"   the paid invoice with the PDF attached (order_confirmed)
+   kind = "shipped"   courier + tracking number (order_shipped); also RECORDS the
+                      shipment on the invoice, before sending, so the row is
+                      right even if Meta refuses the message
+   kind = "delivered" order_delivered; also stamps delivered_at
+
+   Preview and send build the SAME params, so the text Aswin confirms is the
+   text that goes out. PAID only for all three: every template speaks of a
+   confirmed, paid order. */
+const WA_KINDS = new Set(["invoice", "shipped", "delivered"]);
+
+function shipmentInput(inv, src) {
+  // What the request says wins over what the row has, so the preview follows
+  // the dropdown and the field as they are typed; blank falls back to the row.
+  const courier = String(src.courier ?? "").trim().toLowerCase() || String(inv.courier || "");
+  const awb = normalizeAwb(src.tracking ?? "") || normalizeAwb(inv.tracking_id || "");
+  return { courier, awb };
+}
+
+async function whatsappPreview(env, user, id, url) {
+  const kind = String(url.searchParams.get("kind") || "invoice");
+  if (!WA_KINDS.has(kind)) return bad("unknown kind");
+  const r = await loadInvoice(env, user, id);
+  if (!r) return bad("not found", 404);
+  const inv = r.inv;
+
+  const to = toE164(url.searchParams.get("to") || inv.client_phone);
+  const { courier, awb } = shipmentInput(inv, {
+    courier: url.searchParams.get("courier"), tracking: url.searchParams.get("tracking"),
+  });
+
+  let canSend = waConfigured(env), why = canSend ? "" : "WhatsApp sending is not set up on this deployment.";
+  const gate = canSendWhatsApp(inv);
+  if (canSend && !gate.ok) { canSend = false; why = gate.why; }
+  if (canSend && !to) { canSend = false; why = "Add the customer's mobile number to the invoice first."; }
+  if (canSend && kind === "shipped" && (!isCarrier(courier) || !awb)) {
+    canSend = false; why = "Choose the courier and enter the tracking number.";
+  }
+  if (canSend && kind === "delivered" && !inv.shipped_at) {
+    canSend = false; why = "Mark it shipped first, so the customer has had the tracking details.";
+  }
+
+  const params = kind === "shipped" ? shippedParams(inv, courier, awb)
+               : kind === "delivered" ? deliveredParams(inv)
+               : [String(inv.client_name || "").trim() || "there", String(inv.number || ""),
+                  `${inv.currency || ""}${Number(inv.total || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                  String(inv.biz_name || "").trim() || "us"];
+
+  return json({
+    kind, canSend, why,
+    to: to ? prettyE164(to) : "", toRaw: to,
+    text: previewText(kind, params),
+    pdf: kind === "invoice",
+    carriers: CARRIERS,
+    courier, courierName: carrierName(courier), tracking: awb,
+    trackUrl: trackUrl(env, courier, awb),
+    shipment: {
+      courier: inv.courier || "", tracking_id: inv.tracking_id || "",
+      shipped_at: inv.shipped_at || null, delivered_at: inv.delivered_at || null,
+      track_status: inv.track_status || "", track_checked_at: inv.track_checked_at || null,
+      wa_sent_at: inv.wa_sent_at || null, wa_shipped_at: inv.wa_shipped_at || null,
+      wa_delivered_at: inv.wa_delivered_at || null,
+    },
+  });
+}
+
+async function whatsappSend(env, user, id, b) {
+  const kind = String((b && b.kind) || "invoice");
+  if (!WA_KINDS.has(kind)) return bad("unknown kind");
+  if (kind === "invoice") return whatsappInvoice(env, user, id, b);
+
+  if (!waConfigured(env)) return bad("WhatsApp sending is not set up on this deployment.", 503);
+  const r = await loadInvoice(env, user, id);
+  if (!r) return bad("not found", 404);
+  const inv = r.inv;
+  const gate = canSendWhatsApp(inv);
+  if (!gate.ok) return bad(gate.why, 409);
+  const to = toE164(b.to || inv.client_phone);
+  if (!to) return bad("A valid mobile number is required (e.g. +91 98765 43210).");
+
+  if (kind === "shipped") {
+    const { courier, awb } = shipmentInput(inv, b);
+    if (!isCarrier(courier)) return bad("Choose a courier from the list.");
+    if (!awb) return bad("A tracking number is required (letters and digits, 4-40 characters).");
+    // Record first. The shipment is a fact about the order whether or not the
+    // message goes through; shipped_at is set once and kept on a resend.
+    await env.DB.prepare(
+      `UPDATE invoices SET courier=?, tracking_id=?, shipped_at=COALESCE(shipped_at, ?), updated_at=?,
+         client_phone = CASE WHEN client_phone='' OR client_phone IS NULL THEN ? ELSE client_phone END
+       WHERE id=?`
+    ).bind(courier, awb, now(), now(), to, id).run();
+
+    const res = await sendTemplate(env, buildShippedMessage(env, { to, inv, courier, awb }));
+    if (!res.ok) {
+      console.error("whatsapp shipped failed", inv.number, res.status, res.error);
+      return bad("Shipment saved, but WhatsApp failed: " + res.error, 502);
+    }
+    await env.DB.prepare(
+      "UPDATE invoices SET wa_shipped_message_id=?, wa_shipped_at=?, updated_at=? WHERE id=?"
+    ).bind(res.id, now(), now(), id).run();
+    return json({ ok: true, id: res.id, to: prettyE164(to), courier, tracking: awb, trackUrl: trackUrl(env, courier, awb) });
+  }
+
+  // delivered
+  if (!inv.shipped_at) return bad("Mark it shipped first.", 409);
+  await env.DB.prepare(
+    "UPDATE invoices SET delivered_at=COALESCE(delivered_at, ?), track_status='delivered', updated_at=? WHERE id=?"
+  ).bind(now(), now(), id).run();
+  const res = await sendTemplate(env, buildDeliveredMessage(env, { to, inv }));
+  if (!res.ok) {
+    console.error("whatsapp delivered failed", inv.number, res.status, res.error);
+    return bad("Marked delivered, but WhatsApp failed: " + res.error, 502);
+  }
+  await env.DB.prepare(
+    "UPDATE invoices SET wa_delivered_message_id=?, wa_delivered_at=?, updated_at=? WHERE id=?"
+  ).bind(res.id, now(), now(), id).run();
+  return json({ ok: true, id: res.id, to: prettyE164(to) });
 }
 
 /* What the browser gets about the signed-in account.

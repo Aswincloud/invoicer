@@ -2245,7 +2245,7 @@ async function refreshMe(){
   $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
   // Only when the server can actually send one - the button is gated on the
   // secrets being set, the same way printing is.
-  $("btnWa").hidden = !(on && ME.features && ME.features.whatsapp);
+  $("waWrap").hidden = !(on && ME.features && ME.features.whatsapp);
   // Printing goes through the account (and an allowlist on the server), so the
   // button only makes sense signed in. "POS receipt" stays visible either way.
   $("btnPosPrint").hidden = !on;
@@ -2369,15 +2369,104 @@ function wireBackend(){
     const s = await persistInvoice();
     return s.id;
   }
-  $("btnWa").onclick = async () => {
-    const to = prompt("Send on WhatsApp to (mobile number):", $("clPhone").value||"");
-    if(!to) return;
-    try{
-      const id = await sendableId();
-      const r = await api("/invoices/"+id+"/whatsapp",{method:"POST",body:JSON.stringify({to})});
-      alert("Sent on WhatsApp to "+(r.to||to)+" ✓");
-    }catch(e){ alert("WhatsApp failed: "+e.message); }
-  };
+  /* WhatsApp ▾ — three messages about this invoice, each previewed exactly as
+     the customer will read it and sent only on confirmation:
+       Send invoice     the paid invoice, PDF attached
+       Share tracking   courier + tracking number (also records the shipment)
+       Send delivered   (also stamps delivered_at)
+     The preview text comes from the server, built from the SAME params the send
+     uses, so there is no way for the two to disagree. */
+  {
+    const menu = $("waMenu"), caret = $("btnWaMore");
+    const openMenu = (on) => { menu.hidden = !on; caret.setAttribute("aria-expanded", String(on)); };
+    caret.onclick = (e) => { e.stopPropagation(); openMenu(menu.hidden); };
+    document.addEventListener("click", (e) => { if(!$("waWrap").contains(e.target)) openMenu(false); });
+    document.addEventListener("keydown", (e) => { if(e.key === "Escape") { openMenu(false); closeWa(); } });
+
+    $("btnWa").onclick      = () => { openMenu(false); openWa("invoice"); };
+    $("waInvoice").onclick  = () => { openMenu(false); openWa("invoice"); };
+    $("waShipped").onclick  = () => { openMenu(false); openWa("shipped"); };
+    $("waDelivered").onclick= () => { openMenu(false); openWa("delivered"); };
+    $("waClose").onclick = $("waCancel").onclick = closeWa;
+
+    let WA = null;            // { id, kind } while the modal is open
+    let previewTimer = null;
+
+    function closeWa(){ $("waModal").hidden = true; WA = null; }
+
+    const TITLES = { invoice: "Send invoice on WhatsApp", shipped: "Share tracking on WhatsApp", delivered: "Send delivered on WhatsApp" };
+
+    async function openWa(kind){
+      let id;
+      try{ id = await sendableId(); }catch(e){ alert("Save the invoice first: "+e.message); return; }
+      WA = { id, kind };
+      $("waTitle").textContent = TITLES[kind];
+      $("waSub").textContent = "Nothing is sent until you confirm.";
+      $("waTo").value = $("clPhone").value || "";
+      $("waShipFields").hidden = kind !== "shipped";
+      $("waMsg").textContent = ""; $("waTrackLink").textContent = "";
+      $("waPreview").textContent = "Loading preview…"; $("waPreview").classList.add("pending");
+      $("waSend").disabled = true;
+      $("waModal").hidden = false;
+      await refreshPreview(true);
+    }
+
+    async function refreshPreview(first){
+      if(!WA) return;
+      const q = new URLSearchParams({ kind: WA.kind });
+      const to = $("waTo").value.trim(); if(to) q.set("to", to);
+      if(WA.kind === "shipped"){
+        q.set("courier", $("waCourier").value || "");
+        q.set("tracking", $("waTracking").value || "");
+      }
+      let p;
+      try{ p = await api("/invoices/"+WA.id+"/whatsapp/preview?"+q); }
+      catch(e){ $("waPreview").textContent = ""; $("waMsg").textContent = "Couldn't build the preview: "+e.message; return; }
+      if(!WA) return;
+      if(first && WA.kind === "shipped"){
+        // Courier dropdown from the server's list; preselect what the row has.
+        const sel = $("waCourier"); sel.innerHTML = "";
+        const opt0 = document.createElement("option"); opt0.value = ""; opt0.textContent = "Choose courier…"; sel.appendChild(opt0);
+        for(const c of p.carriers){ const o = document.createElement("option"); o.value = c.id; o.textContent = c.name; sel.appendChild(o); }
+        sel.value = p.courier || "";
+        $("waTracking").value = p.tracking || "";
+      }
+      if(first && p.to && !$("waTo").value) $("waTo").value = p.to;
+      $("waPreview").textContent = p.text;
+      $("waPreview").classList.toggle("pending", !p.canSend);
+      $("waTrackLink").textContent = p.trackUrl ? "Customer's tracking link: "+p.trackUrl : "";
+      const s = p.shipment || {};
+      const already = WA.kind === "invoice" ? s.wa_sent_at : WA.kind === "shipped" ? s.wa_shipped_at : s.wa_delivered_at;
+      $("waSub").textContent = already
+        ? "Already sent "+new Date(already).toLocaleString("en-IN")+". Sending again will send it again."
+        : (p.pdf ? "The invoice PDF is attached to the message." : "Nothing is sent until you confirm.");
+      $("waMsg").textContent = p.canSend ? "" : p.why;
+      $("waSend").disabled = !p.canSend;
+    }
+
+    // Re-preview as the fields change, lightly debounced so typing a tracking
+    // number does not fire a request per keystroke.
+    const queue = () => { clearTimeout(previewTimer); previewTimer = setTimeout(() => refreshPreview(false), 350); };
+    $("waCourier").onchange = () => refreshPreview(false);
+    $("waTracking").oninput = queue;
+    $("waTo").oninput = queue;
+
+    $("waSend").onclick = async () => {
+      if(!WA) return;
+      const body = { kind: WA.kind, to: $("waTo").value.trim() };
+      if(WA.kind === "shipped"){ body.courier = $("waCourier").value; body.tracking = $("waTracking").value; }
+      $("waSend").disabled = true; $("waMsg").textContent = "Sending…";
+      try{
+        const r = await api("/invoices/"+WA.id+"/whatsapp",{method:"POST",body:JSON.stringify(body)});
+        $("waMsg").textContent = "";
+        closeWa();
+        alert("Sent on WhatsApp to "+(r.to||body.to)+" ✓");
+      }catch(e){
+        $("waMsg").textContent = "WhatsApp failed: "+e.message;
+        $("waSend").disabled = false;
+      }
+    };
+  }
   $("btnEmail").onclick = async () => {
     const to = prompt("Send invoice to (client email):", $("clEmail").value||"");
     if(!to) return;
