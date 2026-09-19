@@ -130,6 +130,9 @@ section("the money on the PDF is the money charged");
       [{ description: "Big", qty: 1, rate: 123456.5 }], "1,23,456.50"],
     ["multi-quantity", INV({ shipping: 0 }),
       [{ description: "Set", qty: 7, rate: 349 }], "2,443.00"],
+    ["with a packaging fee", INV({ shipping: 0, packaging: 30 }),
+      [{ description: "Thing", qty: 1, rate: 100 }], "130.00"],
+    ["packaging on top of shipping and discount", INV({ packaging: 30 }), ITEMS, "1,128.00"],
   ];
   for (const [label, inv, items, expect] of cases) {
     const s = asText(build(inv, items));
@@ -142,6 +145,17 @@ section("the money on the PDF is the money charged");
   const s = asText(build(INV({ shipping: 0 }), [{ description: "X", qty: 1, rate: 1234567 }]));
   ok("uses Indian lakh grouping", s.includes("12,34,567.00"), "expected 12,34,567.00");
   ok("not western grouping", !s.includes("1,234,567.00"));
+}
+{
+  // The packaging row carries the merchant's own words, and is absent - not a
+  // "Packaging 0.00" row - when there is no fee.
+  const labelled = asText(build(INV({ shipping: 0, packaging: 30,
+    packaging_label: "Secure 3-layer packaging" }), [{ description: "Thing", qty: 1, rate: 100 }]));
+  ok("packaging row prints the label as written", labelled.includes("Secure 3-layer packaging"));
+  const plain = asText(build(INV({ shipping: 0, packaging: 30 }), [{ description: "Thing", qty: 1, rate: 100 }]));
+  ok("a blank label falls back to 'Packaging'", plain.includes("Packaging"));
+  const none = asText(build(INV({ shipping: 0, packaging: 0 }), [{ description: "Thing", qty: 1, rate: 100 }]));
+  ok("no fee, no row", !none.includes("Packaging"));
 }
 
 // ── escaping ──────────────────────────────────────────────────────

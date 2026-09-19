@@ -106,6 +106,7 @@ export function publicBusiness(b) {
       taxRate: b.def_tax_rate || "", discount: b.def_discount || "",
       notes: b.def_notes || "", dueDays: b.def_due_days || "",
       prefix: b.def_prefix || "",
+      packaging: b.def_packaging || "", packagingLabel: b.def_packaging_label || "",
     },
     // rows of "0110…", or null when this business has no shop link
     qrRows: rows(matrix),
@@ -141,6 +142,7 @@ const DEFAULTS_MAP = {
   currency: "def_currency", taxMode: "def_tax_mode", taxRate: "def_tax_rate",
   discount: "def_discount", notes: "def_notes", dueDays: "def_due_days",
   prefix: "def_prefix",
+  packaging: "def_packaging", packagingLabel: "def_packaging_label",
 };
 
 // Ceilings on the two that carry image data, so one oversized upload cannot

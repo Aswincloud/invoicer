@@ -186,5 +186,21 @@ check("writes to its own column",
 check("survives the round trip",
   businessPatch({ receiptLogo: RLOGO }).vals[0] === RLOGO);
 
+console.log("\n— the packaging default —");
+// A fee that is the same on every order is a property of the business, so it
+// lives beside the other def_* columns and rides the same partial-save rules.
+const withPkg = publicBusiness({ ...PRINTS, def_packaging: "30", def_packaging_label: "Secure 3-layer packaging" });
+check("default fee ships to the browser", withPkg.defaults.packaging === "30");
+check("default label ships to the browser", withPkg.defaults.packagingLabel === "Secure 3-layer packaging");
+check("absent means empty", pub.defaults.packaging === "" && pub.defaults.packagingLabel === "");
+const pkgSave = businessPatch({ defaults: { packaging: "30", packagingLabel: "Secure 3-layer packaging" } });
+check("writes both default columns",
+  pkgSave.cols.includes("def_packaging") && pkgSave.cols.includes("def_packaging_label"),
+  pkgSave.cols.join(","));
+check("a save that does not mention it leaves it alone",
+  !businessPatch({ defaults: { discount: "5" } }).cols.includes("def_packaging"));
+check("clearing is a value, not an absence",
+  businessPatch({ defaults: { packaging: "" } }).cols.includes("def_packaging"));
+
 console.log(failed ? `\n${failed} FAILED` : "\nall pass");
 process.exit(failed ? 1 : 0);
