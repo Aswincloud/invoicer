@@ -1950,12 +1950,22 @@ function posDraw(doc, ops){
     // instead. 0.75 is enough for every label the form can produce while
     // keeping a row recognisably the same size as its neighbours.
     if(op.fit){
+      const full = size;
       const floor = size * 0.75;
       const width = () => op.t === "kv"
         ? doc.getTextWidth(op.k) + doc.getTextWidth(op.val) + 1.5
         : doc.getTextWidth(op.s);
       while(size > floor && width() > POS_CONTENT){
         size -= 0.25;
+        doc.setFontSize(size);
+      }
+      // Shrinking is only worth it if it BUYS the single line. A key so long
+      // that it still cannot share a line with its value at the floor is going
+      // to wrap below regardless - and a wrapped label at three-quarter size is
+      // the worst of both: "Secure 3-layer packaging" came out small AND on two
+      // lines. If it must wrap, wrap at full size.
+      if(op.t === "kv" && width() > POS_CONTENT){
+        size = full;
         doc.setFontSize(size);
       }
     }
