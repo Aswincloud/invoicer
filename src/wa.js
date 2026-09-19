@@ -10,7 +10,7 @@
  * you for your payment" on it. An unpaid variant with a pay button is a second
  * template away if the workflow ever changes.
  *
- *   invoice_paid    document header (the PDF), body, no button
+ *   order_confirmed   document header (the PDF), body, no button
  *
  * Created and approved once in Meta Business Manager, not here; the name is
  * configurable because Meta owns it.
@@ -24,7 +24,7 @@ export const WA_ENV = {
   phoneId:   "WA_PHONE_NUMBER_ID",
   token:     "WA_ACCESS_TOKEN",
   version:   "WA_API_VERSION",       // default below
-  tplPaid:   "WA_TEMPLATE_PAID",     // default "invoice_paid"
+  tplPaid:   "WA_TEMPLATE_CONFIRMED", // default "order_confirmed"
   lang:      "WA_TEMPLATE_LANG",     // default "en"
 };
 
@@ -89,7 +89,7 @@ const money = (cur, n) =>
  *   inv       the invoice row with business attached
  *   pdfUrl    public URL Meta fetches the PDF from */
 export function buildTemplateMessage(env, { to, inv, pdfUrl }) {
-  const name = env[WA_ENV.tplPaid] || "invoice_paid";
+  const name = env[WA_ENV.tplPaid] || "order_confirmed";
   const safeNum = String(inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
   const who = String(inv.client_name || "").trim() || "there";
   const biz = String(inv.biz_name || "").trim() || "us";

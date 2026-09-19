@@ -60,7 +60,7 @@ const u = buildTemplateMessage(ENV, ARGS);
 check("messaging_product", u.messaging_product === "whatsapp");
 check("to is the E.164 digits", u.to === "919876543210");
 check("type template", u.type === "template");
-check("template name invoice_paid", u.template.name === "invoice_paid", u.template.name);
+check("template name order_confirmed", u.template.name === "order_confirmed", u.template.name);
 check("language en", u.template.language.code === "en");
 const header = u.template.components.find((c) => c.type === "header");
 check("document header with the PDF link", header && header.parameters[0].document.link === ARGS.pdfUrl);
@@ -76,7 +76,7 @@ check("NO button anywhere - a receipt must not invite a second payment",
 check("no leftover pay-token field", JSON.stringify(u).indexOf("payToken") === -1);
 
 console.log("\n— template name and language come from the environment —");
-const custom = buildTemplateMessage({ ...ENV, WA_TEMPLATE_PAID: "my_receipt", WA_TEMPLATE_LANG: "en_GB" }, ARGS);
+const custom = buildTemplateMessage({ ...ENV, WA_TEMPLATE_CONFIRMED: "my_receipt", WA_TEMPLATE_LANG: "en_GB" }, ARGS);
 check("custom name", custom.template.name === "my_receipt");
 check("custom language", custom.template.language.code === "en_GB");
 
