@@ -379,6 +379,9 @@ function invoiceFields(b) {
     // total column is computed with it, so a later toggle must not change what
     // an already-sent invoice re-renders as.
     round_off: b.roundOff ? 1 : 0,
+    // Per-invoice pay-QR switch, snapshotted for the same reason. ABSENT means
+    // on: an older client or the shop ingest sends nothing and must not lose it.
+    show_pay_qr: (b.showPayQr === false || b.showPayQr === 0) ? 0 : 1,
     status: b.status || "UNPAID", notes: b.notes || "",
     client_name: b.clName || "", client_email: b.clEmail || "",
     client_addr: b.clAddr || "", client_gst: b.clGst || "",
@@ -439,12 +442,12 @@ async function createInvoice(env, user, b) {
 
   await env.DB.prepare(
     `INSERT INTO invoices (id,user_id,business_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
-       discount_pct,shipping,shipping_mode,packaging,packaging_label,round_off,status,notes,client_name,client_email,client_addr,client_gst,total,gift_code,gift_amount,created_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       discount_pct,shipping,shipping_mode,packaging,packaging_label,round_off,show_pay_qr,status,notes,client_name,client_email,client_addr,client_gst,total,gift_code,gift_amount,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(id, user.id, biz ? biz.id : null,
          inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
          inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode,
-         inv.packaging, inv.packaging_label, inv.round_off,
+         inv.packaging, inv.packaging_label, inv.round_off, inv.show_pay_qr,
          inv.status, inv.notes,
          inv.client_name, inv.client_email, inv.client_addr, inv.client_gst, total,
          inv.gift_code, inv.gift_amount, t, t).run();
@@ -502,13 +505,13 @@ async function updateInvoice(env, user, id, b) {
   await env.DB.prepare(
     `UPDATE invoices SET number=?, issue_date=?, due_date=?, currency=?, tax_mode=?,
        tax_rate=?, discount_pct=?, shipping=?, shipping_mode=?, packaging=?, packaging_label=?,
-       round_off=?,
+       round_off=?, show_pay_qr=?,
        status=?, notes=?, client_name=?, client_email=?, client_addr=?, client_gst=?,
        total=?, gift_code=?, gift_amount=?, updated_at=?
      WHERE id=? AND user_id=?`
   ).bind(inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
          inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode,
-         inv.packaging, inv.packaging_label, inv.round_off,
+         inv.packaging, inv.packaging_label, inv.round_off, inv.show_pay_qr,
          inv.status, inv.notes, inv.client_name, inv.client_email, inv.client_addr,
          inv.client_gst, total, inv.gift_code, inv.gift_amount, now(), id, user.id).run();
 

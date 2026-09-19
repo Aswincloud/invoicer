@@ -48,6 +48,10 @@ const activeBiz = () => BIZ_LIST.find((b) => b.id === ACTIVE_BIZ) || BIZ_LIST[0]
 function payQrRows(){
   const st = fld("status").toUpperCase();
   if(st === "PAID" || st === "VOID") return null;
+  // The per-invoice switch. Off means no pay QR on this receipt even while
+  // unpaid - a quote, or a bill being settled in cash at the counter. Mirrors
+  // wantsPayQr() server-side, which does the same for the PDF and the email.
+  if(!$("payQrOn").checked) return null;
   const b = activeBiz();
   if(!b || !b.payQrRows) return null;
   // Either input, edited but not yet saved, means the shipped matrix is stale —
@@ -1404,6 +1408,7 @@ function init(){
   });
   // Rounding changes the total, so the solver has to re-aim at it.
   $("roundOff").addEventListener("change", update);
+  $("payQrOn").addEventListener("change", update);
   // Business fields persist locally always, and to the account (debounced) when
   // signed in — so a logged-in user's profile lives in the cloud DB, not just
   // this device.
@@ -1435,6 +1440,7 @@ function init(){
     $("solveMsg").textContent = "";
     $("autoSolve").checked = true;   // back to the default
     $("roundOff").checked = true;
+    $("payQrOn").checked = true;   // the default: an unpaid bill invites payment
     TOUCHED.delete("taxMode");   // fresh invoice — infer again
     applyInference();
     $("status").value = "UNPAID";
@@ -1472,6 +1478,7 @@ function collect(){
     discount:v("discount"),shipping:v("shipping"),shippingMode:shipMode(),
     packaging:v("packaging"),packagingLabel:$("packagingLabel").value.trim().slice(0,60),
     roundOff:$("roundOff").checked,
+    showPayQr:$("payQrOn").checked,
     status:v("status"),notes:v("notes"),
     // Which business is issuing it. Ignored by the server on an edit — the
     // issuing business is fixed at creation.
@@ -2500,6 +2507,9 @@ async function openInvoiceInEditor(id){
     // Restore the saved setting rather than the default: an invoice stored with
     // exact paise must not gain a round-off line just because it was reopened.
     $("roundOff").checked = !!inv.round_off;
+    // Absent on rows from before the column existed: those were all printed
+    // with the QR, so absent reads as on.
+    $("payQrOn").checked = inv.show_pay_qr == null ? true : !!inv.show_pay_qr;
     // Clear the target and render directly (not update()): a saved invoice's
     // rates are settled figures, and auto-solve must never rewrite them.
     $("targetTotal").value = ""; $("solveMsg").textContent = "";

@@ -30,7 +30,7 @@
 // The one import: deciding what sits where "PAY TO" goes is a rule about the
 // document, not about PDF drawing, and a second copy of it here is how the PDF
 // and the email would end up disagreeing on a paid invoice.
-import { packagingLabel, paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
+import { packagingLabel, wantsPayQr, paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
          itemUnits, fmtUnits, giftBlock } from "./invoice-html.js";
 import { qrMatrix, QR_QUIET } from "./qr.js";
 import { parseSignature } from "./signature.js";
@@ -429,11 +429,10 @@ export function renderInvoicePdf(inv, items, totals, { showGift = false } = {}) 
     }
   };
 
-  // "Scan to pay" only while the invoice is actually payable. PAID must not
-  // invite a second payment, and VOID must not invite a first one — the same
-  // rule payability() applies in pay.js.
-  const settled = ["PAID", "VOID"].includes(String(inv.status || "").toUpperCase());
-  const payQr = settled ? null : qrMatrix(payQrText(inv));
+  // "Scan to pay" only while the invoice is payable AND has not been switched
+  // off for this invoice - one rule, wantsPayQr, shared with the email and the
+  // receipt so the three cannot drift.
+  const payQr = wantsPayQr(inv) ? qrMatrix(payQrText(inv)) : null;
   const orderQr = qrMatrix(inv.qr_url);
 
   if (payQr || orderQr) {

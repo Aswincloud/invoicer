@@ -10,7 +10,7 @@
 import jsQR from "jsqr";
 import { isVpa, upiPayUri, isPayQrPayload, payQrText, payeeFromPayload } from "../src/upi.js";
 import { qrMatrix, QR_QUIET } from "../src/qr.js";
-import { payQrAttachment, isPayable } from "../src/invoice-html.js";
+import { payQrAttachment, isPayable, wantsPayQr } from "../src/invoice-html.js";
 
 let failed = 0;
 const check = (label, cond, detail = "") => {
@@ -130,6 +130,19 @@ check("even with no upi_vpa set at all",
 check("PAID produces none", payQrAttachment({ ...INV, status: "PAID" }) === null);
 check("VOID produces none", payQrAttachment({ ...INV, status: "VOID" }) === null);
 check("no vpa produces none", payQrAttachment({ ...INV, upi_vpa: "" }) === null);
+
+console.log("\n— the per-invoice switch —");
+// Off means no QR even while unpaid; absent means on, so nothing already
+// issued changes; and it only ever narrows - PAID stays QR-less when it is on.
+check("switched off: unpaid produces none", payQrAttachment({ ...INV, show_pay_qr: 0 }) === null);
+check("switched on: unpaid produces one", Boolean(payQrAttachment({ ...INV, show_pay_qr: 1 })));
+check("absent means on", Boolean(payQrAttachment(INV)) && INV.show_pay_qr === undefined);
+check("on does not override PAID", payQrAttachment({ ...INV, status: "PAID", show_pay_qr: 1 }) === null);
+check("wantsPayQr: off", !wantsPayQr({ ...INV, show_pay_qr: 0 }));
+check("wantsPayQr: false works like 0", !wantsPayQr({ ...INV, show_pay_qr: false }));
+check("wantsPayQr: on", wantsPayQr({ ...INV, show_pay_qr: 1 }));
+check("isPayable is untouched by the switch - the Pay button must stay",
+  isPayable({ ...INV, show_pay_qr: 0 }));
 check("an INVALID vpa produces none — fails closed",
   payQrAttachment({ ...INV, upi_vpa: "GPay - 9000000000" }) === null);
 
