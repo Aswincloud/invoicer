@@ -98,3 +98,19 @@ test("bot lookup keys on the same phone shape the invoice stores", () => {
   assert.equal(toE164("6380157944"), "916380157944");
   assert.equal(toE164("12345"), "", "ambiguous numbers match nobody");
 });
+
+// The cron looks the business name up by its real column. This once read
+// `SELECT name FROM businesses` - no such column - and every automatic
+// delivered message went out as "from us". Pin the SQL to the schema.
+import { readFileSync } from "node:fs";
+{
+  const src = readFileSync(new URL("../src/shipment.js", import.meta.url), "utf8");
+  const ddl = readFileSync(new URL("../migrations/0010_businesses.sql", import.meta.url), "utf8");
+  const cols = [...ddl.matchAll(/^\s*([a-z_]+)\s+(TEXT|INTEGER|REAL)/gmi)].map((m) => m[1]);
+  const selects = [...src.matchAll(/SELECT\s+([a-z_]+)\s+FROM\s+businesses/gi)].map((m) => m[1]);
+  console.log("\n— the cron's business lookup uses a real column —");
+  console.log(selects.length ? "PASS" : "FAIL", " it selects something from businesses", selects);
+  for (const c of selects)
+    console.log(cols.includes(c) ? "PASS" : "FAIL", ` businesses.${c} exists in the schema`);
+  if (!selects.length || selects.some((c) => !cols.includes(c))) process.exitCode = 1;
+}

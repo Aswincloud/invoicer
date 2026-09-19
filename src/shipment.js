@@ -308,12 +308,20 @@ export async function checkDeliveries(env) {
     ).bind(deliveredAt, t, t, inv.id).run();
 
     if (inv.wa_delivered_at || !inv.client_phone || !waConfigured(env)) continue;
-    // biz_name is needed for {{3}}; the row does not carry it. Same lookup the
-    // rest of the app uses would pull in business.js — the name alone is enough.
-    const b = inv.business_id
-      ? await env.DB.prepare("SELECT name FROM businesses WHERE id=?").bind(inv.business_id).first().catch(() => null)
-      : null;
-    const msg = buildDeliveredMessage(env, { to: inv.client_phone, inv: { ...inv, biz_name: b?.name || inv.biz_name } });
+    // biz_name is needed for {{3}}; the raw invoice row does not carry it. The
+    // column is biz_name, not name - this once read `SELECT name`, which throws
+    // "no such column", was swallowed by the catch, and sent every automatic
+    // delivered message as "from us". Falls back to the account default business
+    // for rows raised before business_id existed.
+    const b = await env.DB.prepare(
+      inv.business_id
+        ? "SELECT biz_name FROM businesses WHERE id=?"
+        : "SELECT biz_name FROM businesses WHERE user_id=? ORDER BY is_default DESC, created_at ASC LIMIT 1"
+    ).bind(inv.business_id || inv.user_id).first().catch((e) => {
+      console.error("business lookup failed", inv.number, String(e?.message || e));
+      return null;
+    });
+    const msg = buildDeliveredMessage(env, { to: inv.client_phone, inv: { ...inv, biz_name: b?.biz_name || inv.biz_name } });
     const res = await sendTemplate(env, msg);
     if (!res.ok) {
       summary.errors++;
