@@ -152,6 +152,20 @@ section("the money on the PDF is the money charged");
   const labelled = asText(build(INV({ shipping: 0, packaging: 30,
     packaging_label: "Secure 3-layer packaging" }), [{ description: "Thing", qty: 1, rate: 100 }]));
   ok("packaging row prints the label as written", labelled.includes("Secure 3-layer packaging"));
+}
+{
+  // The pay QR's caption is the tell: present while unpaid and switched on,
+  // gone when switched off, and PAID never has it however the switch is set.
+  const VPA = { status: "UNPAID", upi_vpa: "9000000000@examplebank", shipping: 0 };
+  const item = [{ description: "Thing", qty: 1, rate: 100 }];
+  ok("unpaid, switch on: scan-to-pay caption present",
+     asText(build(INV({ ...VPA, show_pay_qr: 1 }), item)).includes("Scan to pay by UPI"));
+  ok("unpaid, switch absent: still present (older rows)",
+     asText(build(INV(VPA), item)).includes("Scan to pay by UPI"));
+  ok("unpaid, switch off: caption gone",
+     !asText(build(INV({ ...VPA, show_pay_qr: 0 }), item)).includes("Scan to pay by UPI"));
+  ok("PAID with the switch on: still gone",
+     !asText(build(INV({ ...VPA, status: "PAID", show_pay_qr: 1 }), item)).includes("Scan to pay by UPI"));
   const plain = asText(build(INV({ shipping: 0, packaging: 30 }), [{ description: "Thing", qty: 1, rate: 100 }]));
   ok("a blank label falls back to 'Packaging'", plain.includes("Packaging"));
   const none = asText(build(INV({ shipping: 0, packaging: 0 }), [{ description: "Thing", qty: 1, rate: 100 }]));

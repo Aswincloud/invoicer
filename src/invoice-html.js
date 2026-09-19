@@ -359,13 +359,26 @@ export function giftBlock(inv) {
 export const isPayable = (inv) =>
   !["PAID", "VOID"].includes(String(inv && inv.status || "").toUpperCase());
 
+/* Whether THIS invoice shows the "scan to pay" QR.
+
+   Payable, and not switched off. The switch is per invoice and defaults on -
+   a quote, a bill being settled in cash at the counter, or an order already
+   paid through a link are the cases for turning it off. It only ever narrows:
+   PAID and VOID show no QR whatever the switch says. Absent (older rows, the
+   shop ingest) means on, so nothing already issued changes.
+
+   Deliberately separate from isPayable: that rule also governs the Razorpay
+   button and the pay page, and hiding the QR must not hide those. */
+export const wantsPayQr = (inv) =>
+  isPayable(inv) && !(inv && (inv.show_pay_qr === 0 || inv.show_pay_qr === false));
+
 /* The static "scan to pay" QR, as a CID attachment.
 
    Returns null unless the invoice is payable AND the business has a valid VPA —
    upiPayUri yields "" for anything it is unsure of, so a mistyped address sends
    no QR rather than one pointing somewhere unintended. */
 export function payQrAttachment(inv) {
-  if (!isPayable(inv)) return null;
+  if (!wantsPayQr(inv)) return null;
   const uri = payQrText(inv || {});
   if (!uri) return null;
 
@@ -469,7 +482,7 @@ export function renderInvoiceEmail(inv, items, opts = {}) {
      paySrc was passed, which is also what keeps it off the public pay page —
      that page has the Razorpay flow and does not ask for one. */
   const payee = payeeFromPayload(payQrText(inv));
-  const payQr = paySrc && isPayable(inv)
+  const payQr = paySrc && wantsPayQr(inv)
     ? `<table cellpadding="0" cellspacing="0" style="margin-top:24px">
         <tr>
          <td valign="middle" style="padding-right:14px">
