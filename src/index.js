@@ -18,7 +18,7 @@ import {
   shareInvoice, shareUrl,
 } from "./pay.js";
 import { sharePdf } from "./pay.js";
-import { waConfigured, toE164, prettyE164, buildTemplateMessage, sendTemplate, canSendWhatsApp } from "./wa.js";
+import { waConfigured, toE164, prettyE164, buildTemplateMessage, sendTemplate, canSendWhatsApp, confirmedParams } from "./wa.js";
 import {
   CARRIERS, carrierName, isCarrier, normalizeAwb, trackUrl,
   shippedParams, deliveredParams, buildShippedMessage, buildDeliveredMessage, previewText,
@@ -170,11 +170,12 @@ async function api(request, env, url, ctx) {
 
 /* The three WhatsApp messages about an invoice, previewed and sent.
 
-   kind = "invoice"   the paid invoice with the PDF attached (order_confirmed)
-   kind = "shipped"   courier + tracking number (order_shipped); also RECORDS the
-                      shipment on the invoice, before sending, so the row is
-                      right even if Meta refuses the message
-   kind = "delivered" order_delivered; also stamps delivered_at
+   kind = "invoice"   order confirmed, no PDF (order_confirmed_new)
+   kind = "shipped"   courier + tracking number + a tracking-link button
+                      (order_shipped_link); also RECORDS the shipment on the
+                      invoice, before sending, so the row is right even if Meta
+                      refuses the message
+   kind = "delivered" order_delivered_new; also stamps delivered_at
 
    Preview and send build the SAME params, so the text Aswin confirms is the
    text that goes out. PAID only for all three: every template speaks of a
@@ -214,15 +215,14 @@ async function whatsappPreview(env, user, id, url) {
 
   const params = kind === "shipped" ? shippedParams(inv, courier, awb)
                : kind === "delivered" ? deliveredParams(inv)
-               : [String(inv.client_name || "").trim() || "there", String(inv.number || ""),
-                  `${inv.currency || ""}${Number(inv.total || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-                  String(inv.biz_name || "").trim() || "us"];
+               : confirmedParams(inv);
 
   return json({
     kind, canSend, why,
     to: to ? prettyE164(to) : "", toRaw: to,
-    text: previewText(kind, params),
-    pdf: kind === "invoice",
+    text: previewText(kind, params, { buttonUrl: kind === "shipped" ? trackUrl(env, courier, awb) : "" }),
+    // No message attaches the PDF any more; older cached app.js reads `pdf`.
+    pdf: false,
     carriers: CARRIERS,
     courier, courierName: carrierName(courier), tracking: awb,
     trackUrl: trackUrl(env, courier, awb),
@@ -314,12 +314,12 @@ async function publicUser(env, u) {
   };
 }
 
-/* Send the invoice over WhatsApp.
+/* Send the order confirmation over WhatsApp.
 
-   Mirrors emailInvoice: load with the issuing business attached, mint the share
-   token if there is none, then hand Meta a template with the PDF as its header.
-   The PDF is fetched by Meta from /i/<token>.pdf rather than uploaded, which
-   keeps this a single call. PAID only - see canSendWhatsApp.
+   Load with the issuing business attached, then hand Meta the confirmation
+   template with the customer, order number and business as its body params.
+   The template has no document header, so unlike emailInvoice nothing is
+   fetched from /i/<token>.pdf. PAID only - see canSendWhatsApp.
 
    `b.to` overrides the stored number for a one-off send; either way the number
    used is normalised and refused if ambiguous - see toE164. */
@@ -334,16 +334,7 @@ async function whatsappInvoice(env, user, id, b) {
   const to = toE164(b && b.to ? b.to : r.inv.client_phone);
   if (!to) return bad("A valid mobile number is required (e.g. +91 98765 43210).");
 
-  let token = r.inv.share_token;
-  if (!token) {
-    token = randToken(16);
-    await env.DB.prepare("UPDATE invoices SET share_token=?, updated_at=? WHERE id=?")
-      .bind(token, now(), id).run();
-  }
-  const base = String(env.APP_BASE_URL || "").replace(/\/+$/, "");
-  const pdfUrl = `${base}/i/${token}.pdf`;
-
-  const msg = buildTemplateMessage(env, { to, inv: r.inv, pdfUrl });
+  const msg = buildTemplateMessage(env, { to, inv: r.inv });
   const res = await sendTemplate(env, msg);
   if (!res.ok) {
     console.error("whatsapp send failed", r.inv.number, res.status, res.error);

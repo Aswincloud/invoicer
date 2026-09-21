@@ -107,16 +107,38 @@ export function deliveredAtFrom(track) {
 // Both mirror templates that already exist on the WABA. The placeholder ORDER
 // below is the template's, so the params here must stay in this order:
 //
-//   order_shipped   Hi {{1}}, good news — your order {{2}} from {{3}} has shipped
-//                   via {{4}}. Tracking ID: {{5}}. ...
-//   order_delivered Hi {{1}}, your order {{2}} from {{3}} has been delivered. ...
+//   order_shipped_link   Hi {{1}}, good news! 🎉 Your order {{2}} from {{3}} has
+//                        been shipped via {{4}}. 📦 Tracking ID: {{5}} You can
+//                        track your package using the button below.
+//                        + a dynamic URL button, see shippedButtonParam.
+//   order_delivered_new  Hi {{1}}, your order {{2}} from {{3}} has been
+//                        delivered successfully. 🎉 ...
 //
-// Neither template has a URL button, so the tracking LINK is not in the message
-// — only courier and number. The bot hands out the link when asked.
+// The shipped template carries the tracking LINK as its URL button; the
+// delivered one has no button.
 
-const tplShipped   = (env) => env.WA_TEMPLATE_SHIPPED   || "order_shipped";
-const tplDelivered = (env) => env.WA_TEMPLATE_DELIVERED || "order_delivered";
+const tplShipped   = (env) => env.WA_TEMPLATE_SHIPPED   || "order_shipped_link";
+const tplDelivered = (env) => env.WA_TEMPLATE_DELIVERED || "order_delivered_new";
 const lang = (env) => env[WA_ENV.lang] || "en";
+
+/* A Meta URL button is a FIXED prefix set on the template plus one dynamic
+ * suffix sent per message. order_shipped_link's button is expected to be
+ *
+ *   https://shiptrack.aswincloud.com/{{1}}
+ *
+ * so the suffix is everything after the ShipTrack origin: "track/<carrier>/<awb>".
+ * If the template was created with a different prefix, set
+ * WA_SHIPPED_BUTTON_BASE to that prefix (with its trailing slash) and the
+ * suffix follows. A prefix that is not a prefix of the link at all sends the
+ * whole link, which Meta will show doubled - that is the visible failure. */
+const shippedButtonBase = (env) =>
+  String(env.WA_SHIPPED_BUTTON_BASE || `${shiptrackBase(env)}/`);
+
+export function shippedButtonParam(env, courier, awb) {
+  const url = trackUrl(env, courier, awb);
+  const base = shippedButtonBase(env);
+  return url.startsWith(base) ? url.slice(base.length) : url;
+}
 
 const who = (inv) => String(inv.client_name || "").trim() || "there";
 const biz = (inv) => String(inv.biz_name || "").trim() || "us";
@@ -137,7 +159,12 @@ export function buildShippedMessage(env, { to, inv, courier, awb }) {
   return {
     messaging_product: "whatsapp", to, type: "template",
     template: { name: tplShipped(env), language: { code: lang(env) },
-                components: [bodyComponent(shippedParams(inv, courier, awb))] },
+                components: [
+                  bodyComponent(shippedParams(inv, courier, awb)),
+                  // The template's one URL button, index 0.
+                  { type: "button", sub_type: "url", index: "0",
+                    parameters: [{ type: "text", text: shippedButtonParam(env, courier, awb) }] },
+                ] },
   };
 }
 
@@ -154,30 +181,29 @@ export function buildDeliveredMessage(env, { to, inv }) {
  * This is the template TEXT with the same params the send uses substituted in,
  * so what the preview shows is what goes out. If a template is edited in Meta
  * Business Manager, edit the matching string here too — Meta only ever sends
- * its own copy, so a drift shows in the preview, never in the message. */
+ * its own copy, so a drift shows in the preview, never in the message.
+ *
+ * Copied from Meta Business Manager on 20 Sep 2026. None of the three has a
+ * header or footer; `button` is the shipped template's URL button, shown in
+ * the preview with the link it will open. */
 const TEMPLATE_TEXT = {
   invoice: {
-    header: "📄 (invoice PDF attached)",
-    body: "Hi {{1}}, thank you for your payment! Your order {{2}} for {{3}} from {{4}} is confirmed and the invoice is attached. It is being prepared now — shipment tracking details will be shared here shortly.",
-    footer: "Reply here if you have any questions.",
+    body: "Hi {{1}}, thank you for your order! 🎉 Your order {{2}} from {{3}} has been confirmed successfully. We’ll let you know once your order has been shipped. Thank you for shopping with us! ❤️",
   },
   shipped: {
-    header: "Order Shipped",
-    body: "Hi {{1}}, good news — your order {{2}} from {{3}} has shipped via {{4}}. Tracking ID: {{5}}. You can follow it on the courier's website using this ID. It should reach you within a few days.",
-    footer: "Reply here if you have any questions.",
+    body: "Hi {{1}}, good news! 🎉 Your order {{2}} from {{3}} has been shipped via {{4}}. 📦 Tracking ID: {{5}} You can track your package using the button below.",
+    button: "Track your package",
   },
   delivered: {
-    header: "Order Delivered",
-    body: "Hi {{1}}, your order {{2}} from {{3}} has been delivered. We hope you love it! If anything is not right, reply here and we will sort it out. Thank you for choosing us.",
-    footer: "Reply here if you have any questions.",
+    body: "Hi {{1}}, your order {{2}} from {{3}} has been delivered successfully. 🎉 We hope you enjoy your purchase! Thank you for shopping with us. ❤️",
   },
 };
 
-export function previewText(kind, params) {
+export function previewText(kind, params, { buttonUrl = "" } = {}) {
   const t = TEMPLATE_TEXT[kind];
   if (!t) return "";
   const body = t.body.replace(/\{\{(\d+)\}\}/g, (_, n) => String(params[Number(n) - 1] ?? ""));
-  return `${t.header}\n\n${body}\n\n${t.footer}`;
+  return t.button ? `${body}\n\n[ ${t.button} ] → ${buttonUrl}` : body;
 }
 
 // ── the owner ─────────────────────────────────────────────────────

@@ -97,7 +97,8 @@ production, set them with `wrangler secret put`:
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | Razorpay API key pair, for pay links |
 | `RAZORPAY_WEBHOOK_SECRET` | A **different** string — signs the webhook body |
 | `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN` | Meta Cloud API: the WhatsApp number messages go out from, and a permanent System User token. Use the number Chatwoot answers on, or replies land with the wrong bot |
-| `WA_TEMPLATE_SHIPPED`, `WA_TEMPLATE_DELIVERED` | Optional; default to the `order_shipped` / `order_delivered` templates on the WABA |
+| `WA_TEMPLATE_CONFIRMED`, `WA_TEMPLATE_SHIPPED`, `WA_TEMPLATE_DELIVERED` | Optional; default to the `order_confirmed_new` / `order_shipped_link` / `order_delivered_new` templates on the WABA |
+| `WA_SHIPPED_BUTTON_BASE` | Optional; the fixed URL prefix of `order_shipped_link`'s button, default `https://shiptrack.aswincloud.com/`. The message sends the rest of the tracking link as the button's dynamic suffix |
 | `INVOICER_CHAT_SECRET` | Shared with the support bot; signs `POST /api/chat/shipments` |
 
 Magic link works with just `RESEND_API_KEY` + a session key. SSO buttons only
@@ -188,23 +189,29 @@ The **WhatsApp ▾** button on a paid invoice is a menu of three messages. Each
 opens a modal with the recipient and the **exact text** the customer will read,
 and nothing is sent until you confirm:
 
-| Item | Template | Also |
-|---|---|---|
-| Send invoice | `order_confirmed` (PDF as document header) | |
-| Share tracking | `order_shipped` | records courier + tracking on the invoice **before** sending |
-| Send delivered | `order_delivered` | stamps `delivered_at` |
+| Item | Template | Params | Also |
+|---|---|---|---|
+| Send invoice | `order_confirmed_new` | customer, order no., business | body only — the PDF is **not** attached |
+| Share tracking | `order_shipped_link` | customer, order no., business, courier, tracking id + URL button → ShipTrack | records courier + tracking on the invoice **before** sending |
+| Send delivered | `order_delivered_new` | customer, order no., business | stamps `delivered_at` |
 
 Preview and send build the same template params from the same code
-(`src/shipment.js`), so the two cannot disagree. All three are business-
-initiated messages and must use Meta-**approved** templates; until a template
-is approved a send fails with Meta's own message in the modal. Paid invoices
+(`src/wa.js`, `src/shipment.js`), so the two cannot disagree. The preview text
+is a copy of each template's wording; if a template is edited in Meta Business
+Manager, update `TEMPLATE_TEXT` in `src/shipment.js` too. All three are
+business-initiated messages and must use Meta-**approved** templates; until a
+template is approved a send fails with Meta's own message in the modal.
+
+`order_shipped_link`'s button is a dynamic URL button whose fixed prefix must be
+`https://shiptrack.aswincloud.com/` (the message supplies `track/<carrier>/<awb>`).
+If it was created with a different prefix, set `WA_SHIPPED_BUTTON_BASE`. Paid invoices
 stay edit-locked; `POST /api/invoices/:id/whatsapp` is the one deliberate way
 through that lock, for shipment fields only.
 
 **Delivered is detected automatically.** A cron (`[triggers]` in
 `wrangler.toml`, every 30 min) asks ShipTrack's public API about every parcel
 shipped but not delivered, records what it said in `track_status`, and when one
-has arrived stamps the invoice and sends `order_delivered` once (guarded by
+has arrived stamps the invoice and sends `order_delivered_new` once (guarded by
 `wa_delivered_at`). A courier site being down costs nothing but a retry.
 
 **`POST /api/chat/shipments`** answers the support bot's "where is my parcel?"

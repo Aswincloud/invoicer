@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 import {
   CARRIERS, carrierName, isCarrier, normalizeAwb, trackUrl,
-  shippedParams, deliveredParams, buildShippedMessage, buildDeliveredMessage,
+  shippedParams, deliveredParams, buildShippedMessage, buildDeliveredMessage, shippedButtonParam,
   previewText, isDelivered, deliveredAtFrom,
 } from "../src/shipment.js";
 import { toE164 } from "../src/wa.js";
@@ -44,18 +44,37 @@ test("shipped params: name, number, business, COURIER NAME, tracking — the tem
   assert.deepEqual(shippedParams(inv, "delhivery", "1234567890123"),
     ["Priya", "INV-AC-2026-3201", "Aswin3DPrints", "Delhivery", "1234567890123"]);
   const m = buildShippedMessage(env, { to: "916380157944", inv, courier: "delhivery", awb: "1234567890123" });
-  assert.equal(m.template.name, "order_shipped");
+  assert.equal(m.template.name, "order_shipped_link");
   assert.equal(m.template.language.code, "en");
   assert.equal(m.to, "916380157944");
+  assert.equal(m.template.components[0].type, "body");
   assert.deepEqual(m.template.components[0].parameters.map((p) => p.text),
     ["Priya", "INV-AC-2026-3201", "Aswin3DPrints", "Delhivery", "1234567890123"]);
+});
+
+test("shipped button: the template's URL button gets the ShipTrack path as its dynamic suffix", () => {
+  const m = buildShippedMessage(env, { to: "916380157944", inv, courier: "delhivery", awb: "1234567890123" });
+  assert.equal(m.template.components.length, 2, "body + one button");
+  const btn = m.template.components[1];
+  assert.deepEqual({ type: btn.type, sub_type: btn.sub_type, index: btn.index }, { type: "button", sub_type: "url", index: "0" });
+  assert.equal(btn.parameters[0].text, "track/delhivery/1234567890123",
+    "suffix after https://shiptrack.aswincloud.com/ — the prefix lives on the template");
+  assert.equal(env.SHIPTRACK_BASE_URL + "/" + btn.parameters[0].text, trackUrl(env, "delhivery", "1234567890123"),
+    "prefix + suffix is exactly the customer's tracking link");
+  assert.equal(shippedButtonParam(env, "stcourier", "ST 123"), "track/stcourier/ST%20123", "encoded like the link");
+  // A template created with a longer fixed prefix: configure it and the suffix shrinks to match.
+  assert.equal(shippedButtonParam({ ...env, WA_SHIPPED_BUTTON_BASE: "https://shiptrack.aswincloud.com/track/" }, "tpc", "PON1"),
+    "tpc/PON1");
+  // A prefix that does not match sends the whole link rather than a wrong one.
+  assert.equal(shippedButtonParam({ ...env, WA_SHIPPED_BUTTON_BASE: "https://example.com/" }, "tpc", "PON1"),
+    "https://shiptrack.aswincloud.com/track/tpc/PON1");
 });
 
 test("delivered params: name, number, business", () => {
   assert.deepEqual(deliveredParams(inv), ["Priya", "INV-AC-2026-3201", "Aswin3DPrints"]);
   const m = buildDeliveredMessage(env, { to: "916380157944", inv });
-  assert.equal(m.template.name, "order_delivered");
-  assert.equal(m.template.components.length, 1, "body only — the template has no document header");
+  assert.equal(m.template.name, "order_delivered_new");
+  assert.equal(m.template.components.length, 1, "body only — the template has no header or button");
 });
 
 test("template names can be overridden from env, defaults match the WABA", () => {
@@ -71,11 +90,16 @@ test("blank customer name and business fall back rather than sending 'Hi ,'", ()
 
 test("previewText: the template sentence with the same params the send uses", () => {
   const p = shippedParams(inv, "stcourier", "ST99");
-  const text = previewText("shipped", p);
-  assert.match(text, /^Order Shipped\n\n/);
-  assert.match(text, /Hi Priya, good news — your order INV-AC-2026-3201 from Aswin3DPrints has shipped via ST Courier\. Tracking ID: ST99\./);
-  assert.match(text, /\n\nReply here if you have any questions\.$/);
-  assert.equal(previewText("delivered", deliveredParams(inv)).includes("{{"), false, "every hole filled");
+  const text = previewText("shipped", p, { buttonUrl: trackUrl(env, "stcourier", "ST99") });
+  assert.match(text, /^Hi Priya, good news! 🎉 Your order INV-AC-2026-3201 from Aswin3DPrints has been shipped via ST Courier\. 📦 Tracking ID: ST99 You can track your package using the button below\./);
+  assert.match(text, /\n\n\[ Track your package \] → https:\/\/shiptrack\.aswincloud\.com\/track\/stcourier\/ST99$/,
+    "the button and the link it opens are part of what Aswin confirms");
+  const d = previewText("delivered", deliveredParams(inv));
+  assert.match(d, /^Hi Priya, your order INV-AC-2026-3201 from Aswin3DPrints has been delivered successfully\. 🎉/);
+  assert.equal(d.includes("{{"), false, "every hole filled");
+  assert.equal(d.includes("["), false, "delivered has no button");
+  assert.match(previewText("invoice", ["Priya", "INV-1", "Aswin3DPrints"]),
+    /^Hi Priya, thank you for your order! 🎉 Your order INV-1 from Aswin3DPrints has been confirmed successfully\./);
   assert.equal(previewText("nonsense", []), "");
 });
 
