@@ -1,16 +1,21 @@
-/* Sending an invoice over WhatsApp, through Meta's Cloud API.
+/* Sending an order confirmation over WhatsApp, through Meta's Cloud API.
  *
  * Business-initiated, so it MUST be a template - Meta refuses free-form text to
  * someone who has not messaged in the last 24 hours - and it is billed per
  * delivered message at the utility rate (a few paise in India).
  *
  * ONE template, for PAID invoices only. Aswin takes payment before anything
- * ships, so the message a customer gets is a receipt plus "tracking details
- * will follow" - and an unpaid invoice is REFUSED rather than sent with "thank
- * you for your payment" on it. An unpaid variant with a pay button is a second
- * template away if the workflow ever changes.
+ * ships, so the message a customer gets is "your order is confirmed, shipping
+ * news will follow" - and an unpaid invoice is REFUSED rather than confirmed.
  *
- *   order_confirmed   document header (the PDF), body, no button
+ *   order_confirmed_new   body only, three params, no header, no button:
+ *     Hi {{1}}, thank you for your order! 🎉 Your order {{2}} from {{3}} has
+ *     been confirmed successfully. We'll let you know once your order has
+ *     been shipped. Thank you for shopping with us! ❤️
+ *
+ * The invoice PDF is NOT attached any more: the earlier `order_confirmed`
+ * template carried it as a document header, this one has no header. The
+ * customer still has the share link, and the bot can hand out the invoice.
  *
  * Created and approved once in Meta Business Manager, not here; the name is
  * configurable because Meta owns it.
@@ -24,7 +29,7 @@ export const WA_ENV = {
   phoneId:   "WA_PHONE_NUMBER_ID",
   token:     "WA_ACCESS_TOKEN",
   version:   "WA_API_VERSION",       // default below
-  tplPaid:   "WA_TEMPLATE_CONFIRMED", // default "order_confirmed"
+  tplPaid:   "WA_TEMPLATE_CONFIRMED", // default "order_confirmed_new"
   lang:      "WA_TEMPLATE_LANG",     // default "en"
 };
 
@@ -69,8 +74,8 @@ export function prettyE164(e164) {
 }
 
 /* Whether this invoice may be sent at all. One place, so the endpoint and any
- * future UI gate agree. Only PAID: the template thanks the customer for paying
- * and promises tracking details, and both would be false on an unpaid bill. */
+ * future UI gate agree. Only PAID: the template confirms the order and promises
+ * shipping news, and both would be false on an unpaid bill. */
 export function canSendWhatsApp(inv) {
   const st = String(inv && inv.status || "").toUpperCase();
   if (st === "PAID") return { ok: true };
@@ -80,33 +85,27 @@ export function canSendWhatsApp(inv) {
                 "the customer for paying. Mark it PAID first." };
 }
 
-const money = (cur, n) =>
-  `${cur || ""}${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/* The template's body params, in ITS order: {{1}} customer, {{2}} order number,
+ * {{3}} business. Shared by the send and the preview so they cannot disagree.
+ * Blanks fall back rather than sending "Hi ," - Meta rejects empty params. */
+export function confirmedParams(inv) {
+  return [
+    String(inv.client_name || "").trim() || "there",
+    String(inv.number || ""),
+    String(inv.biz_name || "").trim() || "us",
+  ];
+}
 
 /* The request body for one invoice. Pure, so it can be tested without a network.
  *
  *   to        E.164 digits
- *   inv       the invoice row with business attached
- *   pdfUrl    public URL Meta fetches the PDF from */
-export function buildTemplateMessage(env, { to, inv, pdfUrl }) {
-  const name = env[WA_ENV.tplPaid] || "order_confirmed";
-  const safeNum = String(inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
-  const who = String(inv.client_name || "").trim() || "there";
-  const biz = String(inv.biz_name || "").trim() || "us";
-
+ *   inv       the invoice row with business attached */
+export function buildTemplateMessage(env, { to, inv }) {
+  const name = env[WA_ENV.tplPaid] || "order_confirmed_new";
   const components = [
-    { type: "header",
-      parameters: [{ type: "document",
-                     document: { link: pdfUrl, filename: `${safeNum}.pdf` } }] },
     { type: "body",
-      parameters: [
-        { type: "text", text: who },
-        { type: "text", text: String(inv.number || "") },
-        { type: "text", text: money(inv.currency, inv.total) },
-        { type: "text", text: biz },
-      ] },
+      parameters: confirmedParams(inv).map((text) => ({ type: "text", text })) },
   ];
-
   return {
     messaging_product: "whatsapp",
     to,

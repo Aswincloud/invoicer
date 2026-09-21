@@ -65,8 +65,11 @@ PAY_ENABLED = "true"
 #                        out from. Must be the number Chatwoot answers on
 #                        (+91 413 235 7944, id 1336188189573573), or a customer's
 #                        reply to an invoice lands with the wrong bot.
-#   WA_TEMPLATE_SHIPPED / WA_TEMPLATE_DELIVERED — optional; default to the
-#                        templates order_shipped / order_delivered on the WABA.
+#   WA_TEMPLATE_CONFIRMED / WA_TEMPLATE_SHIPPED / WA_TEMPLATE_DELIVERED — optional;
+#                        default to order_confirmed_new / order_shipped_link /
+#                        order_delivered_new on the WABA.
+#   WA_SHIPPED_BUTTON_BASE — optional; fixed prefix of order_shipped_link's URL
+#                        button, default https://shiptrack.aswincloud.com/ .
 #   PRINT_RELAY_SECRET — shared with the print relay; signs POST to PRINT_RELAY_URL.
 #                        Must match PRINT_RELAY_SECRET in /etc/tejprint-relay.env
 #                        on the machine running tejprint-relay.py.
