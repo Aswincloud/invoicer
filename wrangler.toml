@@ -69,7 +69,7 @@ PAY_ENABLED = "true"
 #                        default to order_confirmed_new / order_shipped_link /
 #                        order_delivered_new on the WABA.
 #   WA_SHIPPED_BUTTON_BASE — optional; fixed prefix of order_shipped_link's URL
-#                        button, default https://shiptrack.aswincloud.com/ .
+#                        button, default https://shiptrack.aswincloud.com/track/ .
 #   PRINT_RELAY_SECRET — shared with the print relay; signs POST to PRINT_RELAY_URL.
 #                        Must match PRINT_RELAY_SECRET in /etc/tejprint-relay.env
 #                        on the machine running tejprint-relay.py.
