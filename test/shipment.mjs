@@ -91,15 +91,16 @@ test("blank customer name and business fall back rather than sending 'Hi ,'", ()
 test("previewText: the template sentence with the same params the send uses", () => {
   const p = shippedParams(inv, "stcourier", "ST99");
   const text = previewText("shipped", p, { buttonUrl: trackUrl(env, "stcourier", "ST99") });
-  assert.match(text, /^Hi Priya, good news! 🎉 Your order INV-AC-2026-3201 from Aswin3DPrints has been shipped via ST Courier\. 📦 Tracking ID: ST99 You can track your package using the button below\./);
+  assert.match(text, /^Hi Priya, good news! 🎉\nYour order INV-AC-2026-3201 from Aswin3DPrints has been shipped via ST Courier\.\n📦 Tracking ID: ST99\nYou can track your package using the button below\./,
+    "line breaks as on the template, so the preview reads like the phone");
   assert.match(text, /\n\n\[ Track your package \] → https:\/\/shiptrack\.aswincloud\.com\/track\/stcourier\/ST99$/,
     "the button and the link it opens are part of what Aswin confirms");
   const d = previewText("delivered", deliveredParams(inv));
-  assert.match(d, /^Hi Priya, your order INV-AC-2026-3201 from Aswin3DPrints has been delivered successfully\. 🎉/);
+  assert.match(d, /^Hi Priya, your order INV-AC-2026-3201 from Aswin3DPrints has been delivered successfully\. 🎉\nWe hope you enjoy your purchase!\n/);
   assert.equal(d.includes("{{"), false, "every hole filled");
   assert.equal(d.includes("["), false, "delivered has no button");
   assert.match(previewText("invoice", ["Priya", "INV-1", "Aswin3DPrints"]),
-    /^Hi Priya, thank you for your order! 🎉 Your order INV-1 from Aswin3DPrints has been confirmed successfully\./);
+    /^Hi Priya, thank you for your order! 🎉\nYour order INV-1 from Aswin3DPrints has been confirmed successfully\.\n/);
   assert.equal(previewText("nonsense", []), "");
 });
 

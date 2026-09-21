@@ -184,19 +184,28 @@ export function buildDeliveredMessage(env, { to, inv }) {
  * Business Manager, edit the matching string here too — Meta only ever sends
  * its own copy, so a drift shows in the preview, never in the message.
  *
- * Copied from Meta Business Manager on 20 Sep 2026. None of the three has a
- * header or footer; `button` is the shipped template's URL button, shown in
- * the preview with the link it will open. */
+ * Copied from Meta Business Manager on 20 Sep 2026, line breaks included (the
+ * template LIST view flattens them; the editor shows them). None of the three
+ * has a header or footer; `button` is the shipped template's URL button, shown
+ * in the preview with the link it will open. */
 const TEMPLATE_TEXT = {
   invoice: {
-    body: "Hi {{1}}, thank you for your order! 🎉 Your order {{2}} from {{3}} has been confirmed successfully. We’ll let you know once your order has been shipped. Thank you for shopping with us! ❤️",
+    body: "Hi {{1}}, thank you for your order! 🎉\n" +
+          "Your order {{2}} from {{3}} has been confirmed successfully.\n" +
+          "We’ll let you know once your order has been shipped.\n" +
+          "Thank you for shopping with us! ❤️",
   },
   shipped: {
-    body: "Hi {{1}}, good news! 🎉 Your order {{2}} from {{3}} has been shipped via {{4}}. 📦 Tracking ID: {{5}} You can track your package using the button below.",
+    body: "Hi {{1}}, good news! 🎉\n" +
+          "Your order {{2}} from {{3}} has been shipped via {{4}}.\n" +
+          "📦 Tracking ID: {{5}}\n" +
+          "You can track your package using the button below.",
     button: "Track your package",
   },
   delivered: {
-    body: "Hi {{1}}, your order {{2}} from {{3}} has been delivered successfully. 🎉 We hope you enjoy your purchase! Thank you for shopping with us. ❤️",
+    body: "Hi {{1}}, your order {{2}} from {{3}} has been delivered successfully. 🎉\n" +
+          "We hope you enjoy your purchase!\n" +
+          "Thank you for shopping with us. ❤️",
   },
 };
 
