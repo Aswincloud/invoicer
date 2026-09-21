@@ -122,17 +122,18 @@ const tplDelivered = (env) => env.WA_TEMPLATE_DELIVERED || "order_delivered_new"
 const lang = (env) => env[WA_ENV.lang] || "en";
 
 /* A Meta URL button is a FIXED prefix set on the template plus one dynamic
- * suffix sent per message. order_shipped_link's button is expected to be
+ * suffix sent per message. order_shipped_link's button is
  *
- *   https://shiptrack.aswincloud.com/{{1}}
+ *   https://shiptrack.aswincloud.com/track/{{1}}
  *
- * so the suffix is everything after the ShipTrack origin: "track/<carrier>/<awb>".
- * If the template was created with a different prefix, set
- * WA_SHIPPED_BUTTON_BASE to that prefix (with its trailing slash) and the
- * suffix follows. A prefix that is not a prefix of the link at all sends the
- * whole link, which Meta will show doubled - that is the visible failure. */
+ * so the suffix is "<carrier>/<awb>" — NOT "track/<carrier>/<awb>", which
+ * produced .../track/track/bluedart/... once. If the template is ever
+ * recreated with a different prefix, set WA_SHIPPED_BUTTON_BASE to that
+ * prefix (with its trailing slash) and the suffix follows. A prefix that is
+ * not a prefix of the link at all sends the whole link, which Meta will show
+ * doubled - that is the visible failure. */
 const shippedButtonBase = (env) =>
-  String(env.WA_SHIPPED_BUTTON_BASE || `${shiptrackBase(env)}/`);
+  String(env.WA_SHIPPED_BUTTON_BASE || `${shiptrackBase(env)}/track/`);
 
 export function shippedButtonParam(env, courier, awb) {
   const url = trackUrl(env, courier, awb);

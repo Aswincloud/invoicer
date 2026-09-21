@@ -57,14 +57,14 @@ test("shipped button: the template's URL button gets the ShipTrack path as its d
   assert.equal(m.template.components.length, 2, "body + one button");
   const btn = m.template.components[1];
   assert.deepEqual({ type: btn.type, sub_type: btn.sub_type, index: btn.index }, { type: "button", sub_type: "url", index: "0" });
-  assert.equal(btn.parameters[0].text, "track/delhivery/1234567890123",
-    "suffix after https://shiptrack.aswincloud.com/ — the prefix lives on the template");
-  assert.equal(env.SHIPTRACK_BASE_URL + "/" + btn.parameters[0].text, trackUrl(env, "delhivery", "1234567890123"),
-    "prefix + suffix is exactly the customer's tracking link");
-  assert.equal(shippedButtonParam(env, "stcourier", "ST 123"), "track/stcourier/ST%20123", "encoded like the link");
-  // A template created with a longer fixed prefix: configure it and the suffix shrinks to match.
-  assert.equal(shippedButtonParam({ ...env, WA_SHIPPED_BUTTON_BASE: "https://shiptrack.aswincloud.com/track/" }, "tpc", "PON1"),
-    "tpc/PON1");
+  assert.equal(btn.parameters[0].text, "delhivery/1234567890123",
+    "suffix after https://shiptrack.aswincloud.com/track/ — the prefix lives on the template");
+  assert.equal(env.SHIPTRACK_BASE_URL + "/track/" + btn.parameters[0].text, trackUrl(env, "delhivery", "1234567890123"),
+    "prefix + suffix is exactly the customer's tracking link, no doubled /track/");
+  assert.equal(shippedButtonParam(env, "stcourier", "ST 123"), "stcourier/ST%20123", "encoded like the link");
+  // A template created with a shorter fixed prefix: configure it and the suffix grows to match.
+  assert.equal(shippedButtonParam({ ...env, WA_SHIPPED_BUTTON_BASE: "https://shiptrack.aswincloud.com/" }, "tpc", "PON1"),
+    "track/tpc/PON1");
   // A prefix that does not match sends the whole link rather than a wrong one.
   assert.equal(shippedButtonParam({ ...env, WA_SHIPPED_BUTTON_BASE: "https://example.com/" }, "tpc", "PON1"),
     "https://shiptrack.aswincloud.com/track/tpc/PON1");
