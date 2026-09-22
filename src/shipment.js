@@ -241,7 +241,12 @@ const LOOKBACK_MS = 120 * 24 * 60 * 60 * 1000;
  * that billed them. Any one matching is enough. The comparison happens HERE,
  * on what the customer typed (`hints`), never in the model.
  *
- * Returns which field matched ("name" | "amount" | "biller") or "". */
+ * Returns which field matched ("name" | "amount") or "".
+ *
+ * The biller was a third factor and is not any more. The business name is on
+ * the public website and on every receipt - anyone can type "Aswin3DPrints" -
+ * so it proved nothing about WHO was asking. Only facts the customer would know
+ * from having the invoice count: their own name as billed, or the amount. */
 const normText = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
 export function amountsIn(text) {
@@ -272,9 +277,6 @@ export function hintMatches(inv, hints) {
     }
   }
 
-  // Biller: the business name on the invoice ("Aswin 3D Prints" == "Aswin3DPrints").
-  const biz = normText(inv.biz_name);
-  if (biz.length >= 4 && normJoined.includes(biz)) return "biller";
   return "";
 }
 
@@ -317,7 +319,7 @@ export async function chatShipmentsHandler(request, env) {
   //   by number  an invoice the customer quoted from a phone that is not on it
   //              (or it has none). Shared only once something printed on the
   //              invoice has been confirmed — the billed-to name, the amount or
-  //              the biller — see hintMatches. Until then the reply carries
+  //              see hintMatches. Until then the reply carries
   //              the number under pending_verification with what to ask for,
   //              and no details.
   const params = [owner.id];
@@ -337,7 +339,7 @@ export async function chatShipmentsHandler(request, env) {
       ORDER BY (number IN (${quoted.length ? quoted.map(() => "?").join(",") : "''"})) DESC, created_at DESC LIMIT ?`
   ).bind(...params, now() - LOOKBACK_MS, ...quoted, MAX_SHIPMENTS + 3).all();
 
-  // Business names, for the biller check and for the message.
+  // Business names, for the message (no longer a verification factor).
   const bizRows = (await env.DB.prepare(
     "SELECT id, biz_name, is_default FROM businesses WHERE user_id = ?"
   ).bind(owner.id).all().catch(() => ({ results: [] }))).results || [];
@@ -357,7 +359,6 @@ export async function chatShipmentsHandler(request, env) {
       const needs = [];
       if (normText(r.client_name).length >= 3) needs.push("name");
       if (Number(r.total) > 0) needs.push("amount");
-      if (normText(r.biz_name).length >= 4) needs.push("biller");
       pending.push({ number: r.number, needs });
     }
   }
