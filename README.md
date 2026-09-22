@@ -191,7 +191,7 @@ and nothing is sent until you confirm:
 
 | Item | Template | Params | Also |
 |---|---|---|---|
-| Send invoice | `order_confirmed_new` | customer, order no., business | body only — the PDF is **not** attached |
+| Send invoice | `order_confirmed_new` | customer, order no., business | **DOCUMENT header**: the invoice PDF, fetched by Meta from `/i/<token>.pdf` |
 | Share tracking | `order_shipped_link` | customer, order no., business, courier, tracking id + URL button → ShipTrack | records courier + tracking on the invoice **before** sending |
 | Send delivered | `order_delivered_new` | customer, order no., business | stamps `delivered_at` |
 

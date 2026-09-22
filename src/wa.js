@@ -8,14 +8,18 @@
  * ships, so the message a customer gets is "your order is confirmed, shipping
  * news will follow" - and an unpaid invoice is REFUSED rather than confirmed.
  *
- *   order_confirmed_new   body only, three params, no header, no button:
+ *   order_confirmed_new   DOCUMENT header (the invoice PDF) + three body params:
  *     Hi {{1}}, thank you for your order! 🎉 Your order {{2}} from {{3}} has
  *     been confirmed successfully. We'll let you know once your order has
  *     been shipped. Thank you for shopping with us! ❤️
  *
- * The invoice PDF is NOT attached any more: the earlier `order_confirmed`
- * template carried it as a document header, this one has no header. The
- * customer still has the share link, and the bot can hand out the invoice.
+ * The header is not optional. This once shipped body-only on the belief the
+ * template had no header, and every send failed with Meta's
+ * "(#132012) Parameter format does not match format in the created template -
+ * header: Format mismatch, expected DOCUMENT, received UNKNOWN". Zero invoice
+ * messages had ever been delivered when that was noticed. The components sent
+ * MUST mirror the template as approved in Business Manager, component for
+ * component - Meta does not fill in a missing one.
  *
  * Created and approved once in Meta Business Manager, not here; the name is
  * configurable because Meta owns it.
@@ -100,9 +104,15 @@ export function confirmedParams(inv) {
  *
  *   to        E.164 digits
  *   inv       the invoice row with business attached */
-export function buildTemplateMessage(env, { to, inv }) {
+export function buildTemplateMessage(env, { to, inv, pdfUrl }) {
   const name = env[WA_ENV.tplPaid] || "order_confirmed_new";
+  const safeNum = String(inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
   const components = [
+    // The template's DOCUMENT header. Meta fetches the file from this URL and
+    // shows it as a card named `filename`, so the card reads as the invoice.
+    { type: "header",
+      parameters: [{ type: "document",
+                     document: { link: pdfUrl, filename: `${safeNum}.pdf` } }] },
     { type: "body",
       parameters: confirmedParams(inv).map((text) => ({ type: "text", text })) },
   ];
