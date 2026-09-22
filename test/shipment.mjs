@@ -99,8 +99,10 @@ test("previewText: the template sentence with the same params the send uses", ()
   assert.match(d, /^Hi Priya, your order INV-AC-2026-3201 from Aswin3DPrints has been delivered successfully\. 🎉\nWe hope you enjoy your purchase!\n/);
   assert.equal(d.includes("{{"), false, "every hole filled");
   assert.equal(d.includes("["), false, "delivered has no button");
+  // The invoice preview leads with the document header the template carries,
+  // so the owner sees the PDF is part of what is sent.
   assert.match(previewText("invoice", ["Priya", "INV-1", "Aswin3DPrints"]),
-    /^Hi Priya, thank you for your order! 🎉\nYour order INV-1 from Aswin3DPrints has been confirmed successfully\.\n/);
+    /^📄 \(invoice PDF attached\)\n\nHi Priya, thank you for your order! 🎉\nYour order INV-1 from Aswin3DPrints has been confirmed successfully\.\n/);
   assert.equal(previewText("nonsense", []), "");
 });
 

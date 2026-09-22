@@ -190,6 +190,9 @@ export function buildDeliveredMessage(env, { to, inv }) {
  * in the preview with the link it will open. */
 const TEMPLATE_TEXT = {
   invoice: {
+    // The template's DOCUMENT header: the invoice PDF, shown as a file card
+    // above the text. Stated in the preview so the owner sees what is sent.
+    header: "📄 (invoice PDF attached)",
     body: "Hi {{1}}, thank you for your order! 🎉\n" +
           "Your order {{2}} from {{3}} has been confirmed successfully.\n" +
           "We’ll let you know once your order has been shipped.\n" +
@@ -213,7 +216,8 @@ export function previewText(kind, params, { buttonUrl = "" } = {}) {
   const t = TEMPLATE_TEXT[kind];
   if (!t) return "";
   const body = t.body.replace(/\{\{(\d+)\}\}/g, (_, n) => String(params[Number(n) - 1] ?? ""));
-  return t.button ? `${body}\n\n[ ${t.button} ] → ${buttonUrl}` : body;
+  const head = t.header ? `${t.header}\n\n` : "";
+  return t.button ? `${head}${body}\n\n[ ${t.button} ] → ${buttonUrl}` : `${head}${body}`;
 }
 
 // ── the owner ─────────────────────────────────────────────────────

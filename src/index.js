@@ -221,8 +221,8 @@ async function whatsappPreview(env, user, id, url) {
     kind, canSend, why,
     to: to ? prettyE164(to) : "", toRaw: to,
     text: previewText(kind, params, { buttonUrl: kind === "shipped" ? trackUrl(env, courier, awb) : "" }),
-    // No message attaches the PDF any more; older cached app.js reads `pdf`.
-    pdf: false,
+    // The invoice message carries the PDF as its document header.
+    pdf: kind === "invoice",
     carriers: CARRIERS,
     courier, courierName: carrierName(courier), tracking: awb,
     trackUrl: trackUrl(env, courier, awb),
@@ -334,7 +334,18 @@ async function whatsappInvoice(env, user, id, b) {
   const to = toE164(b && b.to ? b.to : r.inv.client_phone);
   if (!to) return bad("A valid mobile number is required (e.g. +91 98765 43210).");
 
-  const msg = buildTemplateMessage(env, { to, inv: r.inv });
+  // The template's document header is the invoice PDF, fetched by Meta from
+  // /i/<token>.pdf - the same share token as the pay page, minted here if the
+  // invoice has none yet, kept if it has.
+  let token = r.inv.share_token;
+  if (!token) {
+    token = randToken(16);
+    await env.DB.prepare("UPDATE invoices SET share_token=?, updated_at=? WHERE id=?")
+      .bind(token, now(), id).run();
+  }
+  const pdfUrl = `${String(env.APP_BASE_URL || "").replace(/\/+$/, "")}/i/${token}.pdf`;
+
+  const msg = buildTemplateMessage(env, { to, inv: r.inv, pdfUrl });
   const res = await sendTemplate(env, msg);
   if (!res.ok) {
     console.error("whatsapp send failed", r.inv.number, res.status, res.error);

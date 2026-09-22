@@ -2462,7 +2462,9 @@ function wireBackend(){
         closeWa();
         alert("Sent on WhatsApp to "+(r.to||body.to)+" ✓");
       }catch(e){
-        $("waMsg").textContent = "WhatsApp failed: "+e.message;
+        // The server's message already begins "WhatsApp failed:" - do not
+        // prefix it twice.
+        $("waMsg").textContent = /^whatsapp failed/i.test(e.message||"") ? e.message : "WhatsApp failed: "+e.message;
         $("waSend").disabled = false;
       }
     };
