@@ -6,7 +6,7 @@ import {
 import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
          signAttachment, payQrAttachment } from "./invoice-html.js";
 import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
-import { ingestOrder } from "./ingest.js";
+import { ingestOrder, ingestShipment } from "./ingest.js";
 import { printReceipt } from "./print.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
 import {
@@ -96,6 +96,9 @@ async function api(request, env, url, ctx) {
   // session gate below — there is no cookie on a Worker-to-Worker call, and none
   // on a webhook from Razorpay either.
   if (p === "/api/ingest/order" && m === "POST") return ingestOrder(request, env);
+  // The shop marking an order shipped or delivered. Same signature scheme as
+  // ingest, same position above the parse — see ingestShipment in src/ingest.js.
+  if (p === "/api/ingest/shipment" && m === "POST") return ingestShipment(request, env);
   if (p === "/api/webhook/razorpay" && m === "POST") return razorpayWebhook(request, env, ctx);
   // The support bot asking for a WhatsApp customer's shipments. Signed with
   // INVOICER_CHAT_SECRET over the raw body and scoped to the owner account —

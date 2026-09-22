@@ -13,7 +13,7 @@
 // support argument. So the total is asserted in paise, as an integer, for every
 // awkward combination of shipping and discount that can occur.
 
-import { ingestOrder, buildInvoice } from "../src/ingest.js";
+import { ingestOrder, ingestShipment, buildInvoice } from "../src/ingest.js";
 import { computeTotals, renderInvoiceEmail, logoAttachment } from "../src/invoice-html.js";
 import { hmacHex } from "../src/lib.js";
 
@@ -101,7 +101,7 @@ function makeDB({ users = [USER], invoices = [], businesses = null } = {}) {
     if (s.startsWith("INSERT INTO invoices")) {
       const [id, user_id, business_id, number, issue_date, due_date, currency, tax_mode, tax_rate,
              discount_pct, shipping, shipping_mode, round_off, status, notes,
-             client_name, client_email, client_addr, client_gst, total,
+             client_name, client_email, client_addr, client_gst, client_phone, total,
              source, source_ref] = a;
       // Emulate the partial UNIQUE index on source_ref, or the idempotency test
       // would pass against a fake that is more permissive than the database.
@@ -112,13 +112,53 @@ function makeDB({ users = [USER], invoices = [], businesses = null } = {}) {
       }
       db.invoices.push({ id, user_id, business_id, number, issue_date, due_date, currency,
         tax_mode, tax_rate, discount_pct, shipping, shipping_mode, round_off, status, notes,
-        client_name, client_email, client_addr, client_gst, total, source, source_ref });
+        client_name, client_email, client_addr, client_gst, client_phone, total, source, source_ref });
       return { meta: { changes: 1 } };
     }
     if (s.startsWith("INSERT INTO line_items")) {
       const [id, invoice_id, pos, description, qty, rate] = a;
       db.line_items.push({ id, invoice_id, pos, description, qty, rate });
       return { meta: { changes: 1 } };
+    }
+    // ── the WhatsApp paths ──
+    if (s.startsWith("UPDATE invoices SET share_token=COALESCE(share_token, ?)")) {
+      const i = db.invoices.find((x) => x.id === a[2]);
+      if (i) { i.share_token = i.share_token || a[0]; i.updated_at = a[1]; }
+      return { meta: { changes: i ? 1 : 0 } };
+    }
+    if (s.startsWith("SELECT share_token FROM invoices WHERE id=?")) {
+      const i = db.invoices.find((x) => x.id === a[0]);
+      return { first: i ? { share_token: i.share_token || null } : null };
+    }
+    if (s.startsWith("UPDATE invoices SET wa_message_id=?")) {
+      const i = db.invoices.find((x) => x.id === a[3]);
+      if (i) { i.wa_message_id = a[0]; i.wa_sent_at = a[1]; }
+      return { meta: { changes: i ? 1 : 0 } };
+    }
+    // Matched on the FULL scoping clause. A loosened query in src must land on the
+    // catch-all below and blow up, not be quietly answered by a laxer matcher.
+    if (s.startsWith("SELECT * FROM invoices WHERE source_ref=? AND source='shop' AND user_id=?")) {
+      return { first: db.invoices.find((x) => x.source_ref === a[0] && x.source === "shop" && x.user_id === a[1]) || null };
+    }
+    if (s.startsWith("UPDATE invoices SET courier=?, tracking_id=?, shipped_at=COALESCE(shipped_at, ?)")) {
+      const i = db.invoices.find((x) => x.id === a[4]);
+      if (i) { i.courier = a[0]; i.tracking_id = a[1]; i.shipped_at = i.shipped_at || a[2]; }
+      return { meta: { changes: i ? 1 : 0 } };
+    }
+    if (s.startsWith("UPDATE invoices SET wa_shipped_message_id=?")) {
+      const i = db.invoices.find((x) => x.id === a[3]);
+      if (i) { i.wa_shipped_message_id = a[0]; i.wa_shipped_at = a[1]; }
+      return { meta: { changes: i ? 1 : 0 } };
+    }
+    if (s.startsWith("UPDATE invoices SET delivered_at=COALESCE(delivered_at, ?)")) {
+      const i = db.invoices.find((x) => x.id === a[2]);
+      if (i) { i.delivered_at = i.delivered_at || a[0]; i.track_status = "delivered"; }
+      return { meta: { changes: i ? 1 : 0 } };
+    }
+    if (s.startsWith("UPDATE invoices SET wa_delivered_message_id=?")) {
+      const i = db.invoices.find((x) => x.id === a[3]);
+      if (i) { i.wa_delivered_message_id = a[0]; i.wa_delivered_at = a[1]; }
+      return { meta: { changes: i ? 1 : 0 } };
     }
     throw new Error("unhandled SQL in fake D1: " + s.slice(0, 90));
   };
@@ -150,15 +190,39 @@ function makeDB({ users = [USER], invoices = [], businesses = null } = {}) {
 // Captures outbound email instead of calling Resend.
 function envWith(opts = {}, over = {}) {
   const sent = [];
-  const env = { ...ENV, ...over, DB: makeDB(opts), _sent: sent };
+  const wa = [];
+  const env = { ...ENV, ...over, DB: makeDB(opts), _sent: sent, _wa: wa };
   globalThis.fetch = async (url, init) => {
-    if (String(url).includes("resend.com")) {
+    const u = String(url);
+    if (u.includes("resend.com")) {
       sent.push(JSON.parse(init.body));
       return new Response(JSON.stringify({ id: "email-" + sent.length }), { status: 200 });
     }
-    throw new Error("unexpected fetch to " + url);
+    // Meta's Cloud API. Captures the exact template payload; a test can make it
+    // refuse by setting env._waFail to Meta's error message.
+    if (u.includes("graph.facebook.com")) {
+      const body = JSON.parse(init.body);
+      wa.push({ url: u, body, auth: init.headers?.Authorization || "" });
+      if (env._waFail) {
+        return new Response(JSON.stringify({ error: { message: env._waFail, code: 132012 } }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ messages: [{ id: "wamid.stub" + wa.length }] }), { status: 200 });
+    }
+    throw new Error("unexpected fetch to " + u);
   };
   return env;
+}
+
+// WhatsApp switched on, the way production has it. Kept separate so every
+// existing test still runs with it OFF and proves the feature is opt-in by config.
+const WA = { WA_PHONE_NUMBER_ID: "1234567890", WA_ACCESS_TOKEN: "EAAtest", APP_BASE_URL: "https://invoicer.aswincloud.com" };
+
+async function signedShipment(bodyObj, { secret = SECRET, signature = null } = {}) {
+  const raw = JSON.stringify(bodyObj);
+  return new Request("https://invoicer/api/ingest/shipment", {
+    method: "POST", body: raw,
+    headers: { "x-shop-signature": signature ?? (await hmacHex(raw, secret)) },
+  });
 }
 
 async function signedRequest(bodyObj, { secret = SECRET, signature = null } = {}) {
@@ -640,6 +704,203 @@ section("line items reach the database");
   ok("quantities survive", li[0].qty === 2, String(li[0].qty));
   ok("the discount line is last", li[2].rate === -300, String(li[2].rate));
   ok("positions are ordered", li.map((x) => x.pos).join(",") === "0,1,2");
+}
+
+
+// ══ WhatsApp ══════════════════════════════════════════════════════════════════
+//
+// The templates, the token and the PDF all live here, so the shop's WhatsApp
+// messages are sent from here: the confirmation the moment a shop order is
+// invoiced, shipped and delivered when the shop dashboard says so. Every send
+// is stubbed at graph.facebook.com and the payload is asserted component by
+// component — Meta only checks the count, so params in the wrong order go out
+// as nonsense.
+
+section("whatsapp: the confirmation goes out when a shop order is invoiced");
+{
+  const env = envWith({}, WA);
+  const res = await ingestOrder(await signedRequest(ORDER()), env);
+  const b = await res.json();
+  ok("ingest still succeeds", res.status === 200 && b.ok === true, JSON.stringify(b));
+  ok("reports the WhatsApp as sent", b.whatsapp === "sent", b.whatsapp);
+  ok("one message to Meta", env._wa.length === 1, String(env._wa.length));
+  const msg = env._wa[0]?.body;
+  ok("to the customer's mobile as E.164 digits", msg?.to === "919876543210", msg?.to);
+  ok("uses the confirmation template", msg?.template?.name === "order_confirmed_new", msg?.template?.name);
+  const header = msg?.template?.components?.find((c) => c.type === "header");
+  ok("carries the DOCUMENT header Meta demands", header?.parameters?.[0]?.type === "document", JSON.stringify(header));
+  ok("the document is the invoice PDF at /i/<token>.pdf",
+     /^https:\/\/invoicer\.aswincloud\.com\/i\/[A-Za-z0-9_-]+\.pdf$/.test(header?.parameters?.[0]?.document?.link || ""),
+     header?.parameters?.[0]?.document?.link);
+  const bodyC = msg?.template?.components?.find((c) => c.type === "body");
+  ok("body params: customer, order number, business — in that order",
+     JSON.stringify(bodyC?.parameters?.map((p) => p.text)) === JSON.stringify(["Test Buyer", "AP-2026-1A2B3C4D", "AswinPrints"]),
+     JSON.stringify(bodyC?.parameters));
+  const inv = env.DB._db.invoices[0];
+  ok("the phone is stored on the invoice as E.164", inv.client_phone === "919876543210", inv.client_phone);
+  ok("the send is recorded on the row", inv.wa_message_id === "wamid.stub1" && typeof inv.wa_sent_at === "number");
+  ok("a share token was minted for the PDF", typeof inv.share_token === "string" && inv.share_token.length > 8);
+  ok("the email still went too", env._sent.length === 1);
+}
+
+section("whatsapp: nothing goes out when it cannot be sure of the number");
+{
+  for (const [label, phone] of [["blank", ""], ["landline-shaped", "0413 222 3344"], ["too short", "98765"], ["letters", "call me"]]) {
+    const env = envWith({}, WA);
+    const order = ORDER(); order.customer.phone = phone;
+    const b = await (await ingestOrder(await signedRequest(order), env)).json();
+    ok(`${label} phone → skipped, invoice still raised`, b.ok === true && b.whatsapp === "skipped" && env._wa.length === 0,
+       `whatsapp=${b.whatsapp} sends=${env._wa.length}`);
+    ok(`${label} phone → stored as empty, never as typed`, env.DB._db.invoices[0].client_phone === "");
+  }
+}
+
+section("whatsapp: opt-in by config — without WA_* nothing is attempted");
+{
+  const env = envWith();
+  const b = await (await ingestOrder(await signedRequest(ORDER()), env)).json();
+  ok("skipped when not configured", b.whatsapp === "skipped", b.whatsapp);
+  ok("no call to Meta", env._wa.length === 0);
+  ok("the phone is still stored for later", env.DB._db.invoices[0].client_phone === "919876543210");
+}
+
+section("whatsapp: Meta refusing does not fail the ingest");
+{
+  const env = envWith({}, WA);
+  env._waFail = "(#132012) Parameter format does not match format in the created template";
+  const res = await ingestOrder(await signedRequest(ORDER()), env);
+  const b = await res.json();
+  ok("ingest is still 200 ok", res.status === 200 && b.ok === true);
+  ok("reports the WhatsApp as failed", b.whatsapp === "failed", b.whatsapp);
+  ok("invoice row exists", env.DB._db.invoices.length === 1);
+  ok("email still sent", env._sent.length === 1);
+  ok("no message id recorded for a refused send", !env.DB._db.invoices[0].wa_message_id);
+}
+
+section("whatsapp: a redelivered webhook sends ONE confirmation");
+{
+  const env = envWith({}, WA);
+  await ingestOrder(await signedRequest(ORDER()), env);
+  const second = await (await ingestOrder(await signedRequest(ORDER()), env)).json();
+  ok("second call is the duplicate branch", second.duplicate === true);
+  ok("exactly one WhatsApp went out", env._wa.length === 1, String(env._wa.length));
+}
+
+async function invoicedEnv(over = {}) {
+  const env = envWith({}, { ...WA, ...over });
+  await ingestOrder(await signedRequest(ORDER()), env);
+  env._wa.length = 0;
+  return env;
+}
+const SHIP = (over = {}) => ({ ts: Date.now(), receipt: "AP-1a2b3c4d", kind: "shipped", courier: "Blue Dart", tracking: "BD 1234 5678", ...over });
+
+section("shipment: the same door as ingest — signature, replay, kill switch");
+{
+  const env = await invoicedEnv();
+  ok("no signature → 401",
+     (await ingestShipment(new Request("https://invoicer/api/ingest/shipment", { method: "POST", body: JSON.stringify(SHIP()) }), env)).status === 401);
+  ok("wrong secret → 401", (await ingestShipment(await signedShipment(SHIP(), { secret: "wrong" }), env)).status === 401);
+  ok("stale timestamp → 401", (await ingestShipment(await signedShipment(SHIP({ ts: Date.now() - 10 * 60 * 1000 })), env)).status === 401);
+  ok("kill switch → 503", (await ingestShipment(await signedShipment(SHIP()), { ...env, SHOP_INGEST_ENABLED: "false" })).status === 503);
+  ok("unknown kind → 400", (await ingestShipment(await signedShipment(SHIP({ kind: "teleported" })), env)).status === 400);
+  ok("unknown receipt → 404", (await ingestShipment(await signedShipment(SHIP({ receipt: "AP-nope0000" })), env)).status === 404);
+  ok("none of those sent anything", env._wa.length === 0, String(env._wa.length));
+}
+
+section("shipment: shipped sends the tracking message and records the shipment");
+{
+  const env = await invoicedEnv();
+  const res = await ingestShipment(await signedShipment(SHIP()), env);
+  const b = await res.json();
+  ok("200 and sent", res.status === 200 && b.whatsapp === "sent", JSON.stringify(b));
+  ok("ShipTrack knows Blue Dart, so the button is live", b.tracked === true);
+  const msg = env._wa[0]?.body;
+  ok("uses the shipped template", msg?.template?.name === "order_shipped_link", msg?.template?.name);
+  const bodyC = msg?.template?.components?.find((c) => c.type === "body");
+  ok("body: customer, order, business, courier NAME, awb",
+     JSON.stringify(bodyC?.parameters?.map((p) => p.text)) === JSON.stringify(["Test Buyer", "AP-2026-1A2B3C4D", "AswinPrints", "Blue Dart", "BD12345678"]),
+     JSON.stringify(bodyC?.parameters));
+  const btn = msg?.template?.components?.find((c) => c.type === "button");
+  ok("button suffix is <carrier>/<awb> under ShipTrack's fixed prefix", btn?.parameters?.[0]?.text === "bluedart/BD12345678", btn?.parameters?.[0]?.text);
+  const inv = env.DB._db.invoices[0];
+  ok("courier and tracking recorded on the invoice", inv.courier === "bluedart" && inv.tracking_id === "BD12345678", `${inv.courier} ${inv.tracking_id}`);
+  ok("shipped_at set", typeof inv.shipped_at === "number");
+  ok("the send is recorded", inv.wa_shipped_message_id === "wamid.stub1");
+}
+
+section("shipment: a courier ShipTrack cannot track is still named, honestly buttoned");
+{
+  const env = await invoicedEnv();
+  const b = await (await ingestShipment(await signedShipment(SHIP({ courier: "DTDC", tracking: "D456789" })), env)).json();
+  ok("still sent", b.whatsapp === "sent", JSON.stringify(b));
+  ok("reports the button as not tracked", b.tracked === false);
+  const msg = env._wa[0]?.body;
+  const bodyC = msg?.template?.components?.find((c) => c.type === "body");
+  ok("the body names the courier as typed", bodyC?.parameters?.[3]?.text === "DTDC", bodyC?.parameters?.[3]?.text);
+  const btn = msg?.template?.components?.find((c) => c.type === "button");
+  ok("the button suffix is other/<awb> — ShipTrack's unknown-carrier page, not a broken link",
+     btn?.parameters?.[0]?.text === "other/D456789", btn?.parameters?.[0]?.text);
+  ok("the typed courier is what is recorded", env.DB._db.invoices[0].courier === "DTDC");
+}
+
+section("shipment: sends at most once per kind — a tracking correction must not re-notify");
+{
+  const env = await invoicedEnv();
+  await ingestShipment(await signedShipment(SHIP()), env);
+  const again = await (await ingestShipment(await signedShipment(SHIP({ tracking: "BD99999999" })), env)).json();
+  ok("second shipped call is already_sent", again.whatsapp === "already_sent", again.whatsapp);
+  ok("exactly one shipped message", env._wa.length === 1, String(env._wa.length));
+}
+
+section("shipment: no tracking number → no message (the template needs {{5}})");
+{
+  const env = await invoicedEnv();
+  const b = await (await ingestShipment(await signedShipment(SHIP({ tracking: "" })), env)).json();
+  ok("skipped with a reason", b.whatsapp === "skipped" && /tracking/.test(b.why || ""), JSON.stringify(b));
+  ok("nothing sent", env._wa.length === 0);
+}
+
+section("shipment: delivered");
+{
+  const env = await invoicedEnv();
+  await ingestShipment(await signedShipment(SHIP()), env);
+  const b = await (await ingestShipment(await signedShipment(SHIP({ kind: "delivered" })), env)).json();
+  ok("delivered sent", b.whatsapp === "sent", JSON.stringify(b));
+  ok("uses the delivered template", env._wa[1]?.body?.template?.name === "order_delivered_new");
+  const inv = env.DB._db.invoices[0];
+  ok("delivered_at set and recorded", typeof inv.delivered_at === "number" && inv.wa_delivered_message_id === "wamid.stub2");
+  const again = await (await ingestShipment(await signedShipment(SHIP({ kind: "delivered" })), env)).json();
+  ok("a second delivered is already_sent", again.whatsapp === "already_sent" && env._wa.length === 2);
+}
+
+section("shipment: scoped to the owner's SHOP invoices — a receipt alone reaches nothing else");
+{
+  const env = envWith({
+    users: [USER, { ...USER, id: "u-2", email: "someone-else@example.com" }],
+    invoices: [
+      { id: "inv-other", user_id: "u-2", business_id: "b-2", number: "X-1", status: "PAID",
+        source: "shop", source_ref: "AP-1a2b3c4d", client_phone: "919999999999", client_name: "Other" },
+      { id: "inv-manual", user_id: "u-1", business_id: "b-1", number: "M-1", status: "PAID",
+        source: "manual", source_ref: "AP-1a2b3c4d", client_phone: "918888888888", client_name: "Manual" },
+    ],
+  }, WA);
+  const res = await ingestShipment(await signedShipment(SHIP()), env);
+  ok("no owner shop invoice → 404, even though two rows match the receipt", res.status === 404, String(res.status));
+  ok("nothing was sent to either stranger", env._wa.length === 0, String(env._wa.length));
+  ok("neither foreign row was touched",
+     !env.DB._db.invoices.find((i) => i.id === "inv-other").shipped_at &&
+     !env.DB._db.invoices.find((i) => i.id === "inv-manual").shipped_at);
+}
+
+section("shipment: no usable mobile → skipped, never guessed");
+{
+  const env = envWith({}, WA);
+  const order = ORDER(); order.customer.phone = "";
+  await ingestOrder(await signedRequest(order), env);
+  env._wa.length = 0;
+  const b = await (await ingestShipment(await signedShipment(SHIP()), env)).json();
+  ok("skipped for want of a number", b.whatsapp === "skipped" && /mobile/.test(b.why || ""), JSON.stringify(b));
+  ok("nothing sent", env._wa.length === 0);
 }
 
 console.log(`\n  ingest: ${pass} passed, ${fail} failed`);

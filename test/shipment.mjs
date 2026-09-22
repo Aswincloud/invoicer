@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  CARRIERS, carrierName, isCarrier, normalizeAwb, trackUrl,
+  CARRIERS, carrierName, isCarrier, normalizeAwb, trackUrl, shopCourier,
   shippedParams, deliveredParams, buildShippedMessage, buildDeliveredMessage, shippedButtonParam,
   previewText, isDelivered, deliveredAtFrom,
 } from "../src/shipment.js";
@@ -171,3 +171,30 @@ import { amountsIn, hintMatches } from "../src/shipment.js";
   console.log(JSON.stringify(amountsIn("₹1,299.00 and 350 or 2 items")) === "[1299,350,2]" ? "PASS" : "FAIL", " amountsIn parses separators");
   if (bad) process.exitCode = 1;
 }
+
+test("shopCourier: what a person typed in the shop, mapped to ShipTrack when it can be", () => {
+  for (const [raw, id, name] of [
+    ["Blue Dart", "bluedart", "Blue Dart"], ["bluedart", "bluedart", "Blue Dart"], ["BLUE-DART", "bluedart", "Blue Dart"],
+    ["Delhivery", "delhivery", "Delhivery"], ["Shiprocket", "shiprocket", "Shiprocket"],
+    ["ST Courier", "stcourier", "ST Courier"], ["st courier", "stcourier", "ST Courier"],
+    ["TPC", "tpc", "The Professional Couriers"], ["The Professional Couriers", "tpc", "The Professional Couriers"],
+  ]) assert.deepEqual(shopCourier(raw), { id, name }, raw);
+  // Unknown to ShipTrack: named as typed, no carrier id.
+  assert.deepEqual(shopCourier("DTDC"), { id: "", name: "DTDC" });
+  assert.deepEqual(shopCourier("  local courier "), { id: "", name: "local courier" });
+  assert.deepEqual(shopCourier(""), { id: "", name: "" });
+  assert.deepEqual(shopCourier(null), { id: "", name: "" });
+});
+
+test("buildShippedMessage: an unknown courier is named in the body and buttoned to other/<awb>", () => {
+  const msg = buildShippedMessage(env, { to: "919876543210", inv, courier: "", courierName: "DTDC", awb: "D456" });
+  const body = msg.template.components.find((c) => c.type === "body");
+  assert.equal(body.parameters[3].text, "DTDC", "the courier the customer was told about");
+  const btn = msg.template.components.find((c) => c.type === "button");
+  assert.equal(btn.parameters[0].text, "other/D456",
+    "ShipTrack's unknown-carrier page — honest, and never a doubled or broken link");
+  // A known carrier is unchanged by the new argument.
+  const known = buildShippedMessage(env, { to: "919876543210", inv, courier: "bluedart", awb: "BD1" });
+  assert.equal(known.template.components.find((c) => c.type === "body").parameters[3].text, "Blue Dart");
+  assert.equal(known.template.components.find((c) => c.type === "button").parameters[0].text, "bluedart/BD1");
+});
