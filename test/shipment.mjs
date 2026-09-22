@@ -152,8 +152,10 @@ import { amountsIn, hintMatches } from "../src/shipment.js";
     ["exact amount",          hintMatches(inv, ["1299.50"]),                     "amount"],
     ["rounded amount",        hintMatches(inv, ["it was 1300 rupees"]),          "amount"],
     ["amount with symbol",    hintMatches(inv, ["₹1,299.5"]),                   "amount"],
-    ["biller, spaced",        hintMatches(inv, ["Aswin 3D Prints"]),             "biller"],
-    ["biller, lowercase",     hintMatches(inv, ["from aswin3dprints"]),          "biller"],
+    // The biller is public knowledge - website, every receipt - so quoting it
+    // must NOT verify anyone. It used to.
+    ["biller, spaced (no longer a factor)",    hintMatches(inv, ["Aswin 3D Prints"]),    ""],
+    ["biller, lowercase (no longer a factor)", hintMatches(inv, ["from aswin3dprints"]), ""],
     ["wrong name",            hintMatches(inv, ["Priya"]),                       ""],
     ["wrong amount",          hintMatches(inv, ["500"]),                         ""],
     ["nothing typed",         hintMatches(inv, []),                              ""],
