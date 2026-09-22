@@ -181,6 +181,23 @@ both ends. Set `PRINT_ENABLED = "false"` to turn the whole path off.
 
 ### WhatsApp messages and shipments
 
+**Shop orders are messaged automatically.** Every paid order at
+3d-prints.aswincloud.com already arrives here as an invoice (`POST
+/api/ingest/order`); the ingest now stores the customer's mobile and, when
+`WA_PHONE_NUMBER_ID`/`WA_ACCESS_TOKEN` are set, sends `order_confirmed_new` with
+the invoice PDF the moment the invoice is raised. Marking that order shipped or
+delivered in the shop dashboard calls **`POST /api/ingest/shipment`** — the same
+HMAC-over-raw-body + timestamp door as ingest (`verifyShopRequest` in
+`src/ingest.js`) — which records the shipment and sends `order_shipped_link` or
+`order_delivered_new`. Scoped to the owner's `source='shop'` invoice for that
+receipt, so a guessed order number reaches nothing else; each kind is sent at
+most once per invoice, so a tracking-number correction never re-notifies. The
+shop's courier is free text: a ShipTrack carrier gets a live Track button,
+anything else is named as typed and the button opens ShipTrack's unknown-carrier
+page (`other/<awb>`) rather than a broken link — a Meta URL button's prefix is
+fixed on the template, so it can only ever open ShipTrack.
+
+
 For a customer who paid directly there is no shop order anywhere: **the invoice
 is the order record.** It carries the customer's phone, and from `0019` the
 courier and tracking number too.

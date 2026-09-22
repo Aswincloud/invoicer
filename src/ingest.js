@@ -23,11 +23,13 @@
 // own: HMAC-SHA256 over the raw body, plus a timestamp replay window. Without
 // that it is an open "email anyone an invoice from Aswin's business" endpoint.
 
-import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex } from "./lib.js";
+import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex, randToken } from "./lib.js";
+import { waConfigured, toE164, buildTemplateMessage, sendTemplate } from "./wa.js";
+import { shopCourier, normalizeAwb, buildShippedMessage, buildDeliveredMessage } from "./shipment.js";
 import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
          signAttachment, payQrAttachment } from "./invoice-html.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
-import { bizFields, defaultBusiness } from "./business.js";
+import { bizFields, defaultBusiness, attachBusiness } from "./business.js";
 
 const REPLAY_WINDOW_MS = 5 * 60 * 1000;
 
@@ -36,42 +38,57 @@ const REPLAY_WINDOW_MS = 5 * 60 * 1000;
 // columns are REAL rupees. This is the one conversion, in one place.
 const rupees = (paise) => Number(paise || 0) / 100;
 
-// ── the handler ──────────────────────────────────────────────────────────────
-export async function ingestOrder(request, env) {
+// ── who may call these ───────────────────────────────────────────────────────
+//
+// One verifier for every shop-facing endpoint, so a second endpoint cannot be
+// added with a weaker check by accident. Returns { body } on success, or
+// { response } to be returned as-is.
+//
+//   kill switch → secret present → raw bytes → HMAC over raw → parse → replay
+//
+// The signature is checked over the RAW body, before any parsing: re-serialising
+// a parsed object produces different bytes, so a signature over those would never
+// match. The timestamp then proves the request was sent recently — without it,
+// one captured request replays forever.
+export async function verifyShopRequest(request, env) {
   // Kill switch first, so a disabled endpoint does no work and writes nothing.
   if (String(env.SHOP_INGEST_ENABLED ?? "").toLowerCase() !== "true") {
-    return json({ error: "shop ingest is disabled" }, 503);
+    return { response: json({ error: "shop ingest is disabled" }, 503) };
   }
 
   if (!env.SHOP_INGEST_SECRET) {
     // Fails CLOSED. Without a secret there is no way to tell the shop from
-    // anyone else, and the consequence of guessing wrong is sending invoices
-    // from Aswin's business to strangers.
+    // anyone else, and the consequence of guessing wrong is sending invoices —
+    // and now WhatsApp messages — from Aswin's business to strangers.
     console.error("SHOP_INGEST_SECRET is not set — refusing");
-    return json({ error: "shop ingest is disabled" }, 503);
+    return { response: json({ error: "shop ingest is disabled" }, 503) };
   }
 
-  // Raw body, before any parsing: the signature covers the exact bytes sent, and
-  // re-serialising a parsed object produces different ones.
   const raw = await request.text();
   const signature = request.headers.get("x-shop-signature") || "";
-  if (!signature) return bad("unauthorized", 401);
+  if (!signature) return { response: bad("unauthorized", 401) };
 
   const expected = await hmacHex(raw, env.SHOP_INGEST_SECRET);
-  if (!timingSafeEqualHex(expected, signature)) return bad("unauthorized", 401);
+  if (!timingSafeEqualHex(expected, signature)) return { response: bad("unauthorized", 401) };
 
-  let b;
+  let body;
   try {
-    b = JSON.parse(raw || "{}");
+    body = JSON.parse(raw || "{}");
   } catch {
-    return bad("bad request", 400);
+    return { response: bad("bad request", 400) };
   }
 
-  // The signature proves the body came from something holding the secret; the
-  // timestamp proves it was sent recently. Without this, one captured request
-  // re-sends that invoice forever.
-  const skew = Math.abs(now() - Number(b?.ts || 0));
-  if (!Number.isFinite(skew) || skew > REPLAY_WINDOW_MS) return bad("unauthorized", 401);
+  const skew = Math.abs(now() - Number(body?.ts || 0));
+  if (!Number.isFinite(skew) || skew > REPLAY_WINDOW_MS) return { response: bad("unauthorized", 401) };
+
+  return { body };
+}
+
+// ── the handler ──────────────────────────────────────────────────────────────
+export async function ingestOrder(request, env) {
+  const v = await verifyShopRequest(request, env);
+  if (v.response) return v.response;
+  const b = v.body;
 
   const receipt = String(b?.receipt || "").trim().slice(0, 60);
   if (!receipt) return bad("receipt required", 400);
@@ -131,14 +148,14 @@ export async function ingestOrder(request, env) {
     await env.DB.prepare(
       `INSERT INTO invoices (id,user_id,business_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
          discount_pct,shipping,shipping_mode,round_off,status,notes,client_name,client_email,
-         client_addr,client_gst,total,source,source_ref,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         client_addr,client_gst,client_phone,total,source,source_ref,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(
       id, user.id, biz ? biz.id : null,
       inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
       inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode, inv.round_off,
       inv.status, inv.notes, inv.client_name, inv.client_email, inv.client_addr,
-      inv.client_gst, total, "shop", receipt, t, t,
+      inv.client_gst, inv.client_phone, total, "shop", receipt, t, t,
     ).run();
   } catch (e) {
     // The UNIQUE index fired: a concurrent delivery won the race. That is the
@@ -223,11 +240,140 @@ export async function ingestOrder(request, env) {
     // and a response that omits the amount on the failure path is exactly where
     // you want it most — it is the line that tells you what the unsent invoice
     // was for.
-    return json({ ok: true, id, number: inv.number, total, emailed: false,
+    const whatsapp = await sendShopConfirmation(env, { id, inv, rendered, receipt });
+    return json({ ok: true, id, number: inv.number, total, emailed: false, whatsapp,
                   error: "invoice created but email failed" });
   }
 
-  return json({ ok: true, id, number: inv.number, total, emailed: true });
+  const whatsapp = await sendShopConfirmation(env, { id, inv, rendered, receipt });
+  return json({ ok: true, id, number: inv.number, total, emailed: true, whatsapp });
+}
+
+// ── the WhatsApp confirmation ────────────────────────────────────────────────
+//
+// order_confirmed_new, with the invoice PDF as its DOCUMENT header — the same
+// message the dashboard's "Send invoice" button sends, now sent automatically the
+// moment a shop order is invoiced. Same builder, same token scheme, so the two
+// paths cannot drift.
+//
+// Never fails the ingest: the invoice exists and the email was attempted whether
+// or not Meta accepts the message. Returns a word the shop can log.
+//
+//   "sent"     accepted by Meta; wa_message_id recorded
+//   "skipped"  WhatsApp not configured here, or no usable mobile on the order
+//   "failed"   Meta refused; logged with Meta's own reason
+//
+// Idempotent under Razorpay redelivery for free: both duplicate branches above
+// return before this runs, so a redelivered webhook cannot send a second one.
+async function sendShopConfirmation(env, { id, inv, rendered, receipt }) {
+  if (!waConfigured(env)) return "skipped";
+  const to = inv.client_phone;                 // already E.164 or "" (buildInvoice)
+  if (!to) return "skipped";
+
+  // Meta fetches the PDF from /i/<token>.pdf — the pay page's share token. Minted
+  // here on first use and kept, exactly as whatsappInvoice() does in index.js.
+  const token = randToken(16);
+  await env.DB.prepare(
+    "UPDATE invoices SET share_token=COALESCE(share_token, ?), updated_at=? WHERE id=?"
+  ).bind(token, now(), id).run();
+  const row = await env.DB.prepare("SELECT share_token FROM invoices WHERE id=?").bind(id).first();
+  const pdfUrl = `${String(env.APP_BASE_URL || "").replace(/\/+$/, "")}/i/${row?.share_token || token}.pdf`;
+
+  const res = await sendTemplate(env, buildTemplateMessage(env, { to, inv: rendered, pdfUrl }));
+  if (!res.ok) {
+    console.error("shop whatsapp confirmation failed", receipt, res.status, res.error);
+    return "failed";
+  }
+  await env.DB.prepare(
+    "UPDATE invoices SET wa_message_id=?, wa_sent_at=?, updated_at=? WHERE id=?"
+  ).bind(res.id, now(), now(), id).run();
+  return "sent";
+}
+
+// ── shipped / delivered, from the shop dashboard ────────────────────────────
+//
+// POST /api/ingest/shipment  { ts, receipt, kind: "shipped"|"delivered", courier?, tracking? }
+//
+// The shop marks an order shipped or delivered and tells us; we record it on the
+// invoice and send the matching template, exactly as the dashboard's WhatsApp
+// menu does for a hand-raised invoice (whatsappSend in index.js). Same verifier
+// as ingest, same owner scoping, same recording — a second signed endpoint with
+// its own rules is how the two would drift.
+//
+// Sends at most ONCE per kind per invoice: if wa_shipped_message_id (or the
+// delivered one) is already set, this answers "already_sent" and sends nothing.
+// The shop only calls on a status TRANSITION, so this is belt and braces — but a
+// dashboard "correct the tracking number" re-save must never re-notify a customer.
+export async function ingestShipment(request, env) {
+  const v = await verifyShopRequest(request, env);
+  if (v.response) return v.response;
+  const b = v.body;
+
+  const receipt = String(b?.receipt || "").trim().slice(0, 60);
+  if (!receipt) return bad("receipt required", 400);
+  const kind = String(b?.kind || "");
+  if (kind !== "shipped" && kind !== "delivered") return bad("kind must be shipped or delivered", 400);
+
+  const ownerEmail = String(env.INVOICE_OWNER_EMAIL || "").trim().toLowerCase();
+  if (!ownerEmail) return json({ error: "invoicing is not configured" }, 503);
+  const user = await env.DB.prepare("SELECT * FROM users WHERE lower(email)=?").bind(ownerEmail).first();
+  if (!user) return json({ error: "invoicing is not configured" }, 503);
+
+  // Scoped three ways: the receipt, the shop as source, the owner as user. A
+  // receipt alone would let a guessed AP- number reach a hand-raised invoice.
+  const inv = await env.DB.prepare(
+    "SELECT * FROM invoices WHERE source_ref=? AND source='shop' AND user_id=?"
+  ).bind(receipt, user.id).first();
+  if (!inv) return bad("no invoice for that order", 404);
+  // The templates say "your order from {{3}}", and {{3}} is the business that
+  // issued the invoice — which lives on the businesses row, not the invoice. The
+  // dashboard's path gets this from loadInvoice(); this one has to do it itself,
+  // or the customer reads "your order from us". The test that caught that stays.
+  await attachBusiness(env, inv);
+
+  if (!waConfigured(env)) return json({ ok: true, whatsapp: "skipped", why: "whatsapp not configured" });
+  const to = toE164(inv.client_phone);
+  if (!to) return json({ ok: true, whatsapp: "skipped", why: "no valid mobile on the order" });
+
+  if (kind === "shipped") {
+    if (inv.wa_shipped_message_id) return json({ ok: true, whatsapp: "already_sent" });
+    const courier = shopCourier(b?.courier);
+    const awb = normalizeAwb(b?.tracking);
+    // {{5}} is the tracking id and Meta rejects an empty parameter, so without an
+    // awb there is no message to send. The email still went from the shop.
+    if (!awb) return json({ ok: true, whatsapp: "skipped", why: "no tracking number" });
+
+    // Record first: the shipment is a fact about the order whether or not Meta
+    // accepts the message. shipped_at is set once and kept.
+    await env.DB.prepare(
+      `UPDATE invoices SET courier=?, tracking_id=?, shipped_at=COALESCE(shipped_at, ?), updated_at=? WHERE id=?`
+    ).bind(courier.id || courier.name, awb, now(), now(), inv.id).run();
+
+    const res = await sendTemplate(env, buildShippedMessage(env, { to, inv, courier: courier.id, courierName: courier.name, awb }));
+    if (!res.ok) {
+      console.error("shop whatsapp shipped failed", receipt, res.status, res.error);
+      return json({ ok: true, whatsapp: "failed", why: res.error });
+    }
+    await env.DB.prepare(
+      "UPDATE invoices SET wa_shipped_message_id=?, wa_shipped_at=?, updated_at=? WHERE id=?"
+    ).bind(res.id, now(), now(), inv.id).run();
+    return json({ ok: true, whatsapp: "sent", id: res.id, tracked: Boolean(courier.id) });
+  }
+
+  // delivered
+  if (inv.wa_delivered_message_id) return json({ ok: true, whatsapp: "already_sent" });
+  await env.DB.prepare(
+    "UPDATE invoices SET delivered_at=COALESCE(delivered_at, ?), track_status='delivered', updated_at=? WHERE id=?"
+  ).bind(now(), now(), inv.id).run();
+  const res = await sendTemplate(env, buildDeliveredMessage(env, { to, inv }));
+  if (!res.ok) {
+    console.error("shop whatsapp delivered failed", receipt, res.status, res.error);
+    return json({ ok: true, whatsapp: "failed", why: res.error });
+  }
+  await env.DB.prepare(
+    "UPDATE invoices SET wa_delivered_message_id=?, wa_delivered_at=?, updated_at=? WHERE id=?"
+  ).bind(res.id, now(), now(), inv.id).run();
+  return json({ ok: true, whatsapp: "sent", id: res.id });
 }
 
 // ── mapping a shop order onto an invoice ─────────────────────────────────────
@@ -307,6 +453,11 @@ export function buildInvoice(b, receipt, user) {
     client_email: email,
     client_addr: addr,
     client_gst: "",
+    // The mobile the customer typed at checkout, as E.164 digits or "". toE164
+    // fails CLOSED: anything it cannot be sure is one mobile number becomes ""
+    // and nothing is sent to it. A confirmation reaching a stranger because a
+    // digit was misread is the one mistake here that cannot be taken back.
+    client_phone: toE164(b?.customer?.phone),
   };
 
   const t = computeTotals(inv, items);

@@ -42,6 +42,29 @@ export const carrierName = (id) =>
 
 export const isCarrier = (id) => CARRIERS.some((c) => c.id === String(id || "").toLowerCase());
 
+/* The shop's courier is FREE TEXT ("Blue Dart", "DTDC", "local courier"); the
+ * shipped template needs a display name for {{4}} and, for its Track button, a
+ * ShipTrack carrier id. This maps what a person typed to both.
+ *
+ *   { id, name }   id is a ShipTrack carrier id or "" when ShipTrack cannot track
+ *                  it; name is what the message says — the carrier's proper name
+ *                  when known, otherwise the text as typed, trimmed.
+ *
+ * Letters only for the match, so "Blue Dart", "blue-dart" and "BLUEDART" all
+ * resolve; "The Professional Couriers" and "TPC" both reach tpc. Anything else is
+ * named but not tracked, and the caller decides what the button does. */
+export function shopCourier(raw) {
+  const text = String(raw ?? "").trim().slice(0, 60);
+  const key = text.toLowerCase().replace(/[^a-z]/g, "");
+  const id =
+    /^bluedart/.test(key)                   ? "bluedart"  :
+    /^delhivery/.test(key)                  ? "delhivery" :
+    /^shiprocket/.test(key)                 ? "shiprocket" :
+    /^stcourier/.test(key)                  ? "stcourier" :
+    (key === "tpc" || /professional/.test(key)) ? "tpc" : "";
+  return { id, name: id ? carrierName(id) : text };
+}
+
 /* A tracking number as typed by a person: spaces and stray punctuation gone,
  * upper-cased. Anything outside 4..40 chars of letters/digits/dash is refused
  * rather than sent to a courier as-is. */
@@ -144,8 +167,9 @@ export function shippedButtonParam(env, courier, awb) {
 const who = (inv) => String(inv.client_name || "").trim() || "there";
 const biz = (inv) => String(inv.biz_name || "").trim() || "us";
 
-export function shippedParams(inv, courier, awb) {
-  return [who(inv), String(inv.number || ""), biz(inv), carrierName(courier) || String(courier || ""), String(awb || "")];
+export function shippedParams(inv, courier, awb, courierName = "") {
+  return [who(inv), String(inv.number || ""), biz(inv),
+          courierName || carrierName(courier) || String(courier || ""), String(awb || "")];
 }
 export function deliveredParams(inv) {
   return [who(inv), String(inv.number || ""), biz(inv)];
@@ -156,15 +180,24 @@ const bodyComponent = (params) => ({
   parameters: params.map((text) => ({ type: "text", text })),
 });
 
-export function buildShippedMessage(env, { to, inv, courier, awb }) {
+/* `courier` is a ShipTrack carrier id, or "" for one ShipTrack cannot track.
+ * `courierName` is what the message calls it; when blank it is derived from the
+ * id. The button's URL is a FIXED ShipTrack prefix plus this suffix, so it can
+ * only ever open ShipTrack — for an unknown courier the suffix is `other/<awb>`,
+ * which ShipTrack renders as "Unknown carrier" with the awb shown. Honest, and
+ * the customer still has the tracking id in the body to use on the courier's own
+ * site. (A generic "open the shop" button is not possible: Meta fixes the prefix
+ * on the approved template.) */
+export function buildShippedMessage(env, { to, inv, courier, awb, courierName = "" }) {
+  const id = courier || "other";
   return {
     messaging_product: "whatsapp", to, type: "template",
     template: { name: tplShipped(env), language: { code: lang(env) },
                 components: [
-                  bodyComponent(shippedParams(inv, courier, awb)),
+                  bodyComponent(shippedParams(inv, courier, awb, courierName)),
                   // The template's one URL button, index 0.
                   { type: "button", sub_type: "url", index: "0",
-                    parameters: [{ type: "text", text: shippedButtonParam(env, courier, awb) }] },
+                    parameters: [{ type: "text", text: shippedButtonParam(env, id, awb) }] },
                 ] },
   };
 }
