@@ -8,7 +8,7 @@ const BIZ_KEY = "invoicer.biz.v1";
 const LOGIN_EMAIL_KEY = "invoicer.loginEmail.v1"; // last sign-in identity (≠ business email)
 
 // Fields that make up the reusable "your business" profile.
-const BIZ_FIELDS = ["bizName","bizEmail","bizAddr","bizPhone","bizGst","bizPay"];
+const BIZ_FIELDS = ["bizName","bizEmail","bizAddr","bizPhone","bizGst","bizUdyam","bizPay"];
 
 // Optional business logo (data-URL). Not a form <input>, so it's tracked
 // separately from BIZ_FIELDS and persisted alongside them.
@@ -636,6 +636,7 @@ function render(){
     <p>${esc(v("bizAddr"))}</p>
     <p>${esc(v("bizPhone"))}${v("bizPhone")&&v("bizEmail")?" · ":""}${esc(v("bizEmail"))}</p>
     ${v("bizGst")?`<p>GSTIN: ${esc(v("bizGst"))}</p>`:""}
+    ${v("bizUdyam")?`<p>Udyam Reg. No.: ${esc(v("bizUdyam"))}</p>`:""}
   </div>
   <div class="title">
     <h2>INVOICE</h2>
@@ -1775,6 +1776,9 @@ function posOps(){
   if(v("bizPhone")) ops.push({t:"center", s:v("bizPhone"), size:PS.bizMeta});
   if(v("bizEmail")) ops.push({t:"center", s:v("bizEmail"), size:PS.bizMeta});
   if(v("bizGst")) ops.push({t:"center", s:"GSTIN: "+v("bizGst"), size:PS.bizMeta});
+  // Bare, no label: "Udyam: UDYAM-PY-03-0060956" is 26 characters and wrapped
+  // to two lines on the 48mm head. The number is self-identifying.
+  if(v("bizUdyam")) ops.push({t:"center", s:v("bizUdyam"), size:PS.bizMeta, fit:true});
 
   ops.push({t:"rule"});
   ops.push({t:"center", s:docTitle(), bold:true, size:PS.docType, track:true});
@@ -2498,7 +2502,7 @@ const SET_FIELDS = {  // modal field id -> defaults key
   setPackaging:"packaging", setPackagingLabel:"packagingLabel",
 };
 const SET_BIZ = { setBizName:"bizName", setBizEmail:"bizEmail", setBizAddr:"bizAddr",
-  setBizPhone:"bizPhone", setBizGst:"bizGst", setBizPay:"bizPay",
+  setBizPhone:"bizPhone", setBizGst:"bizGst", setBizUdyam:"bizUdyam", setBizPay:"bizPay",
   setQrUrl:"qrUrl", setQrCaption:"qrCaption", setUpiVpa:"upiVpa", setPayQr:"payQr" };
 
 // Apply saved defaults to a fresh invoice. Only fills fields the user left at

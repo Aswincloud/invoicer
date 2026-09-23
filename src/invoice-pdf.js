@@ -211,6 +211,9 @@ export function renderInvoicePdf(inv, items, totals, { showGift = false } = {}) 
   const contact = [inv.biz_phone, inv.biz_email].filter(Boolean).join("  ·  ");
   if (contact) { p.text(MARGIN, y, contact, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 11; }
   if (inv.biz_gst) { p.text(MARGIN, y, "GSTIN: " + inv.biz_gst, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 11; }
+  // MSME registration - the one government identifier a proprietorship with no
+  // GSTIN holds, and what makes the MSMED Act 45-day rule apply to a buyer.
+  if (inv.biz_udyam) { p.text(MARGIN, y, "Udyam Reg. No.: " + inv.biz_udyam, { size: 8.5, color: "0.36 0.39 0.45" }); y -= 11; }
 
   // Invoice meta, right column, aligned with the header block above.
   let my = PAGE_H - MARGIN - 30;

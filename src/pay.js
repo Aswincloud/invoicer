@@ -184,9 +184,14 @@ export async function sharePage(env, token) {
     inv.biz_phone ? `<a href="tel:${esc(String(inv.biz_phone).replace(/[^\d+]/g, ""))}">${esc(inv.biz_phone)}</a>` : "",
     inv.biz_email ? `<a href="mailto:${esc(inv.biz_email)}">${esc(inv.biz_email)}</a>` : "",
   ].filter(Boolean).join(" &nbsp;·&nbsp; ");
-  const contact = contactBits
+  // A government registration number is the strongest thing this block can
+  // carry: unlike a phone or an email, a stranger can check it against the
+  // Udyam portal. Shown as plain text, not a badge.
+  const reg = inv.biz_udyam
+    ? `<div class="contact reg">Udyam Reg. No. (MSME): <b>${esc(inv.biz_udyam)}</b></div>` : "";
+  const contact = (contactBits
     ? `<div class="contact">Questions about this invoice? Contact ${esc(bizName)}:<br>${contactBits}</div>`
-    : "";
+    : "") + reg;
 
   const html = `<!doctype html>
 <html lang="en"><head>

@@ -30,7 +30,7 @@ const CLOUD = {
   id: "b-cloud", user_id: "u-1", is_default: 0, created_at: 1,
   biz_name: "AswinCloud", biz_email: "billing@aswincloud.com",
   biz_addr: "Puducherry", biz_phone: "+91 90000 00000",
-  biz_gst: "34ABCDE1234F1Z9", biz_pay: "UPI aswincloud@hdfcbank", biz_logo: "",
+  biz_gst: "34ABCDE1234F1Z9", biz_udyam: "UDYAM-PY-03-0000001", biz_pay: "UPI aswincloud@hdfcbank", biz_logo: "",
   qr_url: "", qr_caption: "",
   def_prefix: "INV-AC", def_tax_mode: "gst", def_tax_rate: "18", def_currency: "₹",
   def_discount: "", def_notes: "", def_due_days: "",
@@ -79,6 +79,7 @@ const cloudInv = { id: "i-1", user_id: "u-1", business_id: "b-cloud",
 await attachBusiness(ENV, cloudInv);
 check("name", cloudInv.biz_name === "AswinCloud", cloudInv.biz_name);
 check("GSTIN", cloudInv.biz_gst === "34ABCDE1234F1Z9", cloudInv.biz_gst);
+check("Udyam rides with the business too", cloudInv.biz_udyam === "UDYAM-PY-03-0000001", cloudInv.biz_udyam);
 check("pay-to", cloudInv.biz_pay === "UPI aswincloud@hdfcbank", cloudInv.biz_pay);
 check("no shop link, so no QR", !cloudInv.qr_url, cloudInv.qr_url);
 
@@ -201,6 +202,15 @@ check("a save that does not mention it leaves it alone",
   !businessPatch({ defaults: { discount: "5" } }).cols.includes("def_packaging"));
 check("clearing is a value, not an absence",
   businessPatch({ defaults: { packaging: "" } }).cols.includes("def_packaging"));
+
+console.log("\n— the Udyam number —");
+const withU = publicBusiness({ ...PRINTS, biz_udyam: "UDYAM-PY-03-0000002" });
+check("ships to the browser", withU.biz.bizUdyam === "UDYAM-PY-03-0000002");
+check("absent means empty", pub.biz.bizUdyam === "");
+check("a partial save leaves it alone", !businessPatch({ bizName: "x" }).cols.includes("biz_udyam"));
+check("writes its own column", businessPatch({ bizUdyam: "UDYAM-PY-03-0000002" }).cols.includes("biz_udyam"));
+check("clearing is a value", businessPatch({ bizUdyam: "" }).cols.includes("biz_udyam"));
+check("clamped to 40 chars", businessPatch({ bizUdyam: "U".repeat(80) }).vals[0].length === 40);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall pass");
 process.exit(failed ? 1 : 0);

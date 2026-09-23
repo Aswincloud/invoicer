@@ -22,7 +22,7 @@ import { payQrText } from "./upi.js";
 // Named to match the columns the renderers already read, so invoice-html.js and
 // invoice-pdf.js needed no changes to pick a business up.
 export const BIZ_COLUMNS = [
-  "biz_name", "biz_email", "biz_addr", "biz_phone", "biz_gst", "biz_pay", "biz_logo",
+  "biz_name", "biz_email", "biz_addr", "biz_phone", "biz_gst", "biz_udyam", "biz_pay", "biz_logo",
   "qr_url", "qr_caption", "biz_sign", "upi_vpa", "pay_qr", "biz_receipt_logo",
 ];
 
@@ -93,7 +93,7 @@ export function publicBusiness(b) {
     isDefault: !!b.is_default,
     biz: {
       bizName: b.biz_name || "", bizEmail: b.biz_email || "", bizAddr: b.biz_addr || "",
-      bizPhone: b.biz_phone || "", bizGst: b.biz_gst || "", bizPay: b.biz_pay || "",
+      bizPhone: b.biz_phone || "", bizGst: b.biz_gst || "", bizUdyam: b.biz_udyam || "", bizPay: b.biz_pay || "",
       bizLogo: b.biz_logo || "",
       qrUrl: b.qr_url || "", qrCaption: b.qr_caption || "",
       bizSign: b.biz_sign || "",
@@ -132,7 +132,7 @@ export function publicBusiness(b) {
 
 const BIZ_FIELD_MAP = {
   bizName: "biz_name", bizEmail: "biz_email", bizAddr: "biz_addr",
-  bizPhone: "biz_phone", bizGst: "biz_gst", bizPay: "biz_pay",
+  bizPhone: "biz_phone", bizGst: "biz_gst", bizUdyam: "biz_udyam", bizPay: "biz_pay",
   bizLogo: "biz_logo", qrUrl: "qr_url", qrCaption: "qr_caption",
   bizSign: "biz_sign", upiVpa: "upi_vpa", payQr: "pay_qr",
   receiptLogo: "biz_receipt_logo",
@@ -147,7 +147,7 @@ const DEFAULTS_MAP = {
 
 // Ceilings on the two that carry image data, so one oversized upload cannot
 // bloat every row that joins against this table.
-const LIMITS = { bizLogo: 200000, bizSign: 200000, qrUrl: 2000, qrCaption: 120, upiVpa: 120, payQr: 1200, receiptLogo: 200000 };
+const LIMITS = { bizLogo: 200000, bizSign: 200000, qrUrl: 2000, qrCaption: 120, upiVpa: 120, payQr: 1200, bizUdyam: 40, receiptLogo: 200000 };
 
 const clamp = (key, value) => {
   const s = String(value ?? "");
