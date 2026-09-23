@@ -562,7 +562,7 @@ export function renderInvoiceEmail(inv, items, opts = {}) {
    </td>
    <td valign="top" align="right">
      <div style="text-transform:uppercase;font-size:9.5px;letter-spacing:1.4px;color:${pay.kind === "paid" ? GREEN : SOFT};font-weight:700">${esc(pay.label)}</div>
-     <span style="color:${SOFT}">${pay.lines.map(esc).join("<br>")}${pay.lines.length && inv.biz_gst ? "<br>" : ""}${inv.biz_gst ? "GSTIN: " + esc(inv.biz_gst) : ""}</span>
+     <span style="color:${SOFT}">${pay.lines.map(esc).join("<br>")}${pay.lines.length && inv.biz_gst ? "<br>" : ""}${inv.biz_gst ? "GSTIN: " + esc(inv.biz_gst) : ""}${(pay.lines.length || inv.biz_gst) && inv.biz_udyam ? "<br>" : ""}${inv.biz_udyam ? "Udyam Reg. No.: " + esc(inv.biz_udyam) : ""}</span>
    </td></tr>
   </table>
   <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;border-collapse:collapse">

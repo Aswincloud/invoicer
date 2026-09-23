@@ -1,0 +1,13 @@
+-- The business's Udyam registration number, beside its GSTIN.
+--
+-- Aswin trades as a sole proprietorship with no GSTIN, so until now no document
+-- he sends carries any government registration at all. The Udyam number is the
+-- one identifier he holds. Printed on the letterhead where the GSTIN would go,
+-- and on the pay page's trust block, it answers "is this a real business?" for a
+-- customer looking at an unfamiliar link - and it is what makes the MSMED Act's
+-- 45-day payment rule apply to a corporate buyer, which only bites when the
+-- number is actually on the invoice.
+--
+-- Per business, like every other letterhead field. It is NOT a tax id: no change
+-- to tax mode, Bill of Supply wording or the GST inference.
+ALTER TABLE businesses ADD COLUMN biz_udyam TEXT DEFAULT '';
