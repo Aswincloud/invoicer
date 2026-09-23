@@ -19,6 +19,7 @@ import {
 } from "./pay.js";
 import { sharePdf } from "./pay.js";
 import { waConfigured, toE164, prettyE164, buildTemplateMessage, sendTemplate, canSendWhatsApp, confirmedParams } from "./wa.js";
+import { maySend } from "./access.js";
 import {
   CARRIERS, carrierName, isCarrier, normalizeAwb, trackUrl,
   shippedParams, deliveredParams, buildShippedMessage, buildDeliveredMessage, previewText,
@@ -194,6 +195,9 @@ function shipmentInput(inv, src) {
 }
 
 async function whatsappPreview(env, user, id, url) {
+  // The preview reveals nothing beyond the caller's own invoice, but a 403 here
+  // keeps the modal honest for an account that could never press Send.
+  if (!maySend(env, user.email)) return bad("this account cannot send messages", 403);
   const kind = String(url.searchParams.get("kind") || "invoice");
   if (!WA_KINDS.has(kind)) return bad("unknown kind");
   const r = await loadInvoice(env, user, id);
@@ -240,6 +244,7 @@ async function whatsappPreview(env, user, id, url) {
 }
 
 async function whatsappSend(env, user, id, b) {
+  if (!maySend(env, user.email)) return bad("this account cannot send messages", 403);
   const kind = String((b && b.kind) || "invoice");
   if (!WA_KINDS.has(kind)) return bad("unknown kind");
   if (kind === "invoice") return whatsappInvoice(env, user, id, b);
@@ -313,7 +318,9 @@ async function publicUser(env, u) {
     biz: active ? active.biz : {},
     defaults: active ? active.defaults : {},
     // What this deployment can do, so the client shows only buttons that work.
-    features: { whatsapp: waConfigured(env) },
+    // whatsapp/email: whether THIS account may send them, not merely whether
+    // the deployment can. The buttons follow this; the server enforces it too.
+    features: { whatsapp: waConfigured(env) && maySend(env, u.email), email: maySend(env, u.email) },
   };
 }
 
@@ -327,6 +334,7 @@ async function publicUser(env, u) {
    `b.to` overrides the stored number for a one-off send; either way the number
    used is normalised and refused if ambiguous - see toE164. */
 async function whatsappInvoice(env, user, id, b) {
+  if (!maySend(env, user.email)) return bad("this account cannot send messages", 403);
   if (!waConfigured(env)) return bad("WhatsApp sending is not set up on this deployment.", 503);
   const r = await loadInvoice(env, user, id);
   if (!r) return bad("not found", 404);
@@ -784,6 +792,9 @@ async function deleteInvoice(env, user, id) {
 }
 
 async function emailInvoice(env, user, id, b) {
+  // Same allow-list as print and WhatsApp. Emails go out under the deployment's
+  // Resend domain and cost per message, so "signed in" is not enough.
+  if (!maySend(env, user.email)) return bad("this account cannot send messages", 403);
   const r = await loadInvoice(env, user, id);
   if (!r) return bad("not found", 404);
   const to = (b.to || r.inv.client_email || "").trim();

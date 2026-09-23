@@ -2242,7 +2242,10 @@ async function refreshMe(){
   if(on && ME.email){ try{ localStorage.setItem(LOGIN_EMAIL_KEY, ME.email.toLowerCase()); }catch(_){} }
   $("who").textContent = on ? ME.email : "";
   $("btnAuth").textContent = on ? "Sign out" : "Sign in";
-  $("btnSave").hidden = !on; $("btnEmail").hidden = !on;
+  $("btnSave").hidden = !on;
+  // Sending is allow-listed per account on the server (src/access.js); the
+  // button follows so a non-owner never sees an action that would 403.
+  $("btnEmail").hidden = !(on && ME.features && ME.features.email);
   // Only when the server can actually send one - the button is gated on the
   // secrets being set, the same way printing is.
   $("waWrap").hidden = !(on && ME.features && ME.features.whatsapp);

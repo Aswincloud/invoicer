@@ -14,6 +14,7 @@
 // who finds it could otherwise print anything they liked on Aswin's printer,
 // which is at best a paper-waster and at worst someone printing a fake receipt.
 
+import { maySend } from "./access.js";
 import { json, bad, hmacHex } from "./lib.js";
 
 // Measured over three days of real jobs: a successful print takes 16.3–24.1s,
@@ -74,13 +75,9 @@ async function sendToRelay(env, raw) {
 //
 // Defaults to INVOICE_OWNER_EMAIL, which is already the "whose business is
 // this" var, so a single-user deploy needs no extra configuration.
-function mayPrint(env, email) {
-  const who = String(email || "").trim().toLowerCase();
-  if (!who) return false;
-  const list = String(env.PRINT_ALLOWED_EMAILS || env.INVOICE_OWNER_EMAIL || "")
-    .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  return list.includes(who);
-}
+// The same rule as every other outward action - see src/access.js. Kept under
+// this name for the callers below; PRINT_ALLOWED_EMAILS still honoured.
+const mayPrint = maySend;
 
 export async function printReceipt(env, user, b) {
   // Kill switch first, so a disabled feature does no work and reaches nothing.
