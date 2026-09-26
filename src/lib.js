@@ -130,3 +130,13 @@ export async function sendEmail(env, { to, subject, html, text, fromName, attach
 }
 
 export const isEmail = (s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s || "");
+
+// A configured base URL with any trailing slashes removed, so `${base}/i/...`
+// never doubles the slash. A loop rather than /\/+$/: CodeQL flags that regex
+// as polynomial on a string of many slashes (js/polynomial-redos), and the same
+// pattern sat in five files. Config strings are short, so the loop is a few steps.
+export function baseUrl(value, fallback = "") {
+  let out = String(value || fallback || "");
+  while (out.endsWith("/")) out = out.slice(0, -1);
+  return out;
+}

@@ -1,8 +1,7 @@
 // Invoicer Worker — static assets (via ASSETS binding) + /api/* backend.
 import {
   json, bad, uid, randToken, now, sign, unsign, parseCookies, cookie,
-  sendEmail, isEmail,
-} from "./lib.js";
+  sendEmail, isEmail, baseUrl } from "./lib.js";
 import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
          signAttachment, payQrAttachment } from "./invoice-html.js";
 import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
@@ -370,7 +369,7 @@ async function whatsappInvoice(env, user, id, b) {
     await env.DB.prepare("UPDATE invoices SET share_token=?, updated_at=? WHERE id=?")
       .bind(token, now(), id).run();
   }
-  const pdfUrl = `${String(env.APP_BASE_URL || "").replace(/\/+$/, "")}/i/${token}.pdf`;
+  const pdfUrl = `${baseUrl(env.APP_BASE_URL)}/i/${token}.pdf`;
 
   const msg = buildPaidMessage(env, { to, inv: r.inv, pdfUrl, what: r.items?.[0]?.description });
   const res = await sendTemplate(env, msg);
