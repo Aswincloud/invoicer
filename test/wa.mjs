@@ -6,7 +6,8 @@
 // the wrong order read as nonsense and go out anyway, because Meta only checks
 // the count. So both are pinned without touching Meta.
 
-import { toE164, prettyE164, buildTemplateMessage, confirmedParams, waConfigured } from "../src/wa.js";
+import { toE164, prettyE164, buildTemplateMessage, confirmedParams, waConfigured,
+         templateKindFor, rupeesText, receiptParams, buildReceiptMessage, buildPaidMessage } from "../src/wa.js";
 
 let failed = 0;
 const check = (label, cond, detail = "") => {
@@ -83,6 +84,28 @@ check("a header is always present - omitting it is the bug Meta rejected",
   u.template.components.some((c) => c.type === "header" && c.parameters[0].type === "document"));
 check("NO button anywhere", !u.template.components.some((c) => c.type === "button"));
 check("no leftover pay-token field", !/payToken/i.test(JSON.stringify(u)));
+
+console.log("\n— payment_received: the pay-link receipt, five params, chosen by source —");
+check("a pay-link invoice gets the receipt", templateKindFor({ source: "paylink" }) === "receipt");
+check("a shop invoice gets the confirmation", templateKindFor({ source: "shop" }) === "confirmed");
+check("a hand-made invoice gets the confirmation", templateKindFor({}) === "confirmed" && templateKindFor(null) === "confirmed");
+check("₹250 from the captured paise", rupeesText({ rzp_amount: 25000, total: 999 }) === "₹250", rupeesText({ rzp_amount: 25000, total: 999 }));
+check("falls back to the stored total", rupeesText({ total: 1234.5 }) === "₹1,234.50", rupeesText({ total: 1234.5 }));
+check("Indian grouping", rupeesText({ rzp_amount: 1250000 }) === "₹12,500", rupeesText({ rzp_amount: 1250000 }));
+const RINV = { number: "PL-2026-0007", status: "PAID", source: "paylink", currency: "₹", total: 250, rzp_amount: 25000, client_name: "Raagul", biz_name: "AswinCloud" };
+check("params in the template's order: name, amount, what, receipt, business",
+  JSON.stringify(receiptParams(RINV, "Custom trophy")) === JSON.stringify(["Raagul", "₹250", "Custom trophy", "PL-2026-0007", "AswinCloud"]),
+  JSON.stringify(receiptParams(RINV, "Custom trophy")));
+check("blanks fall back rather than sending empty params",
+  JSON.stringify(receiptParams({ number: "X", total: 1 }, "")) === JSON.stringify(["there", "₹1", "your order", "X", "us"]),
+  JSON.stringify(receiptParams({ number: "X", total: 1 }, "")));
+const rc = buildReceiptMessage(ENV, { to: "919876543210", inv: RINV, pdfUrl: "https://x.test/i/abc.pdf", what: "Custom trophy" });
+check("template name payment_received", rc.template.name === "payment_received", rc.template.name);
+check("DOCUMENT header named after the receipt", rc.template.components[0].type === "header" && rc.template.components[0].parameters[0].document.filename === "PL-2026-0007.pdf");
+check("five body params", rc.template.components[1].parameters.length === 5);
+check("name from the environment", buildReceiptMessage({ ...ENV, WA_TEMPLATE_RECEIPT: "my_receipt" }, { to: "1", inv: RINV, pdfUrl: "u" }).template.name === "my_receipt");
+check("buildPaidMessage picks the receipt for a pay-link invoice", buildPaidMessage(ENV, { to: "1", inv: RINV, pdfUrl: "u", what: "x" }).template.name === "payment_received");
+check("and the confirmation for anything else", buildPaidMessage(ENV, { to: "1", inv: INV, pdfUrl: "u" }).template.name === "order_confirmed_new");
 
 console.log("\n— template name and language come from the environment —");
 const custom = buildTemplateMessage({ ...ENV, WA_TEMPLATE_CONFIRMED: "my_receipt", WA_TEMPLATE_LANG: "en_GB" }, ARGS);

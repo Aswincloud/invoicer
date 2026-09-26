@@ -33,7 +33,10 @@ import { isPayLinkOrder, invoiceFromPaidOrder } from "./paylink.js";
 import {
   createOrder, paymentsConfigured, publicKeyId,
   verifyCallbackSignature, verifyWebhookSignature,
+  listOrders, orderPayments,
 } from "./razorpay.js";
+import { sendPaidConfirmation } from "./ingest.js";
+import { prettyE164 } from "./wa.js";
 
 // randToken(16) renders as 32 hex characters. Validated before it reaches SQL so
 // a malformed link is a cheap 404 rather than a query.
@@ -557,13 +560,18 @@ async function handleOrderPaid(env, ctx, evt, eventId) {
     // A pay-me form payment. No invoice existed until this moment, by design:
     // the row is created here, PAID, from the order's notes and Razorpay's own
     // amount - see src/paylink.js. Then it gets the same receipts as any other.
-    inv = await invoiceFromPaidOrder(env, rzpOrder, payment);
-    if (!inv) return;
+    const made = await invoiceFromPaidOrder(env, rzpOrder, payment);
+    if (!made?.inv) return;
+    inv = made.inv;
     if (eventId) {
       await env.DB.prepare("UPDATE webhook_events SET invoice_id=? WHERE event_id=?")
         .bind(inv.id, eventId).run();
     }
-    const send = notifyPaid(env, inv, payment);
+    // Only an invoice THIS event raised is notified. An existing one means a
+    // second event id, or the owner's reconcile, got there first and has already
+    // sent the receipts; sending again would be the double-receipt bug.
+    if (!made.created) { console.log("order.paid for a pay-link invoice already raised", inv.id); return; }
+    const send = notifyPaid(env, inv, payment, { what: rzpOrder.notes?.what });
     if (ctx?.waitUntil) ctx.waitUntil(send); else await send;
     return;
   }
@@ -602,12 +610,17 @@ async function handleOrderPaid(env, ctx, evt, eventId) {
   if (ctx?.waitUntil) ctx.waitUntil(send); else await send;
 }
 
-async function notifyPaid(env, inv, payment) {
+async function notifyPaid(env, inv, payment, { what = "" } = {}) {
   const bizName = (inv.biz_name || "Invoicer").trim();
   const cur = inv.currency || PAYABLE_CURRENCY;
-  const amount = `${cur} ${(Number(payment.amount || 0) / 100).toFixed(2)}`;
+  // The invoice's own figure first. `payment` may be empty — reconcile could not
+  // find a captured payment, or the webhook shape lacked it — and a receipt that
+  // reads "₹0.00" is worse than no receipt.
+  const paise = Number(inv.rzp_amount) || Number(payment?.amount) || Math.round(Number(inv.total || 0) * 100);
+  const amount = `${cur} ${(paise / 100).toFixed(2)}`;
   const num = inv.number || inv.id;
-  const ref = payment.id ? ` Payment reference ${payment.id}.` : "";
+  const payId = payment?.id || inv.rzp_payment_id || "";
+  const ref = payId ? ` Payment reference ${payId}.` : "";
 
   const tasks = [];
 
@@ -626,17 +639,45 @@ async function notifyPaid(env, inv, payment) {
   }
 
   if (inv.owner_email) {
+    // Everything the owner needs to act on it, in the mail itself: who, how to
+    // reach them, what for, where to send it, how much, which payment. Until
+    // 2026-09-26 this said only "<name> paid <amount>", and the owner had to open
+    // the dashboard — or, for a /pay payment, the Razorpay order notes — to learn
+    // what had actually been bought and for whom.
+    const base = String(env.APP_BASE_URL || "").replace(/\/+$/, "");
+    const link = inv.share_token ? `${base}/i/${inv.share_token}` : "";
+    const rows = [
+      ["Customer", inv.client_name || "—"],
+      ["Mobile", inv.client_phone ? prettyE164(inv.client_phone) : "—"],
+      ["Email", inv.client_email || "—"],
+      ["Paid for", what || "—"],
+      ["Deliver to", inv.client_addr || "—"],
+      ["Amount", amount],
+      ["Receipt", num],
+      ["Payment ref", payId || "—"],
+    ];
     tasks.push(sendEmail(env, {
       to: inv.owner_email,
       fromName: "Invoicer",
-      subject: `Invoice ${num} paid — ${amount}`,
-      text: `${inv.client_name || "A client"} paid invoice ${num}. Amount ${amount}.${ref}`,
-      html: `<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px">
-        <h2 style="color:#166534;margin:0 0 12px">Invoice ${esc(num)} paid</h2>
-        <p><b>${esc(inv.client_name || "A client")}</b> paid <b>${esc(amount)}</b>.</p>
-        ${payment.id ? `<p style="color:#6b7280;font-size:12px">Payment reference ${esc(payment.id)}</p>` : ""}
-        </div>`,
+      subject: `${inv.source === "paylink" ? "Payment received" : `Invoice ${num} paid`} — ${amount} from ${inv.client_name || "a client"}`,
+      text: rows.map(([k, v]) => `${k}: ${v}`).join("\n") + (link ? `\n\nReceipt: ${link}` : ""),
+      html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px">
+        <h2 style="color:#166534;margin:0 0 12px">${esc(inv.source === "paylink" ? "Payment received" : `Invoice ${num} paid`)}</h2>
+        <table style="border-collapse:collapse;font-size:14px">` +
+        rows.map(([k, v]) => `<tr><td style="padding:4px 12px 4px 0;color:#6b7280;white-space:nowrap">${esc(k)}</td><td style="padding:4px 0">${esc(String(v))}</td></tr>`).join("") +
+        `</table>${link ? `<p style="margin-top:14px"><a href="${esc(link)}">Open the receipt</a></p>` : ""}</div>`,
     }));
+  }
+
+  // WhatsApp, with the receipt PDF attached, when the customer gave a mobile.
+  // The same approved template the shop path uses: a pay-link payment IS an
+  // order for something to be made and sent — the form asks what and where —
+  // so "your order PL-2026-0007 has been confirmed, shipping news will follow"
+  // is the right message, and no second template is needed.
+  let whatsapp = "skipped";
+  if (inv.client_phone && !inv.wa_message_id) {
+    tasks.push(sendPaidConfirmation(env, { id: inv.id, inv, label: inv.number || inv.id, what: what || undefined })
+      .then((r) => { whatsapp = r; return { ok: r !== "failed", error: r }; }));
   }
 
   const results = await Promise.allSettled(tasks);
@@ -645,6 +686,56 @@ async function notifyPaid(env, inv, payment) {
       console.error("paid notification failed", inv.id, r.reason || r.value?.error);
     }
   });
+  return { whatsapp };
+}
+
+// ── POST /api/paylink/reconcile (session-gated, owner only) ─────────────────
+//
+// "Did Razorpay take money I have no invoice for?" The pay-link design creates
+// the invoice from the order.paid WEBHOOK and nowhere else — so a webhook that
+// never arrives (not configured for this Worker, a signing-secret mismatch, a
+// delivery Razorpay gave up on) means a customer who paid, saw "payment
+// received", and got no receipt, no email, no WhatsApp, and no row here. That
+// happened on 2026-09-26. This is the recovery: ask Razorpay for its recent
+// orders, and for every PAID pay-link order without an invoice, do exactly what
+// the webhook would have done — invoiceFromPaidOrder, then notifyPaid.
+//
+// Idempotent for the same reason the webhook is: source_ref (the Razorpay order
+// id) is UNIQUE, and the pre-check skips anything already invoiced. Owner only,
+// because it writes into the owner's books; the session gate has already
+// authenticated, this checks WHO.
+export async function reconcilePayLinks(env, user) {
+  const ownerEmail = String(env.INVOICE_OWNER_EMAIL || "").trim().toLowerCase();
+  if (!ownerEmail || String(user?.email || "").trim().toLowerCase() !== ownerEmail) {
+    return bad("forbidden", 403);
+  }
+  if (!paymentsConfigured(env)) return bad("Razorpay is not configured.", 503);
+
+  const listed = await listOrders(env, { count: 50 });
+  if (!listed.ok) return json({ error: `Razorpay refused: ${listed.error || listed.status}` }, 502);
+
+  let checked = 0, known = 0;
+  const created = [];
+  for (const order of listed.orders) {
+    if (!isPayLinkOrder(order) || order.status !== "paid") continue;
+    checked++;
+    const existing = await env.DB.prepare("SELECT id FROM invoices WHERE source_ref=?").bind(order.id).first();
+    if (existing) { known++; continue; }
+
+    const pays = await orderPayments(env, order.id);
+    const payment = (pays.ok ? pays.payments : []).find((p) => p.status === "captured") || {};
+    const made = await invoiceFromPaidOrder(env, order, payment);
+    if (!made?.inv) continue;
+    // A webhook won the race between our pre-check and the insert: it has sent
+    // the receipts, so this run has nothing to send. Counted as known.
+    if (!made.created) { known++; continue; }
+    const inv = made.inv;
+    // Awaited, not waitUntil: the owner pressed a button and wants the answer.
+    const notes = await notifyPaid(env, inv, payment, { what: order.notes?.what });
+    created.push({ number: inv.number, total: inv.total, ref: order.receipt || "",
+                   whatsapp: notes.whatsapp, email: inv.client_email ? "sent" : "no address" });
+  }
+  return json({ ok: true, checked, known, created });
 }
 
 // ── POST /api/invoices/:id/share (session-gated) ─────────────────────────────

@@ -34,6 +34,23 @@ import { defaultBusiness } from "./business.js";
 import { esc } from "./invoice-html.js";
 
 export const PAYLINK_SOURCE = "paylink";
+
+/* Which of the owner's businesses /pay bills as. PAYLINK_BUSINESS names one by
+ * biz_name (case-insensitive); unset, or not found, means the default business.
+ * So the generic pay-me page can bill as AswinCloud while the shop's orders bill
+ * as Aswin3DPrints, from the same account — the header on the receipt PDF and
+ * the {{5}} in the WhatsApp both come from this row. */
+export async function paylinkBusiness(env, userId) {
+  const want = String(env.PAYLINK_BUSINESS || "").trim();
+  if (want) {
+    const row = await env.DB.prepare(
+      "SELECT * FROM businesses WHERE user_id=? AND lower(biz_name)=lower(?) LIMIT 1"
+    ).bind(userId, want).first();
+    if (row) return row;
+    console.error("paylink: PAYLINK_BUSINESS not found on this account, using the default", want);
+  }
+  return defaultBusiness(env, userId);
+}
 const NOTE_KEY = "invoicer_paylink";       // marks an order as ours to turn into an invoice
 
 const minRupees = (env) => Math.max(1, Number(env.PAYLINK_MIN || 10));
@@ -110,7 +127,7 @@ export async function startPayLink(request, env, body) {
   const ownerEmail = String(env.INVOICE_OWNER_EMAIL || "").trim().toLowerCase();
   const user = ownerEmail
     ? await env.DB.prepare("SELECT id FROM users WHERE lower(email)=?").bind(ownerEmail).first() : null;
-  const biz = user ? await defaultBusiness(env, user.id) : null;
+  const biz = user ? await paylinkBusiness(env, user.id) : null;
   if (!user || !biz) {
     console.error("paylink: owner or default business not configured");
     return json({ error: "Online payment is not available right now." }, 503);
@@ -150,7 +167,10 @@ export const isPayLinkOrder = (rzpOrder) =>
 
 /* Called from handleOrderPaid when order.paid arrives for a pay-link order.
  * Creates the PAID invoice from the order's notes and Razorpay's own amount.
- * Returns the invoice row (joined the way notifyPaid wants) or null.
+ * Returns { inv, created } — the joined row notifyPaid wants, and whether THIS
+ * call made it. An existing row (a redelivery, or reconcile and the webhook
+ * racing) comes back with created:false so the caller sends nothing twice. Null
+ * when the owner or business is not configured or the amount is zero.
  *
  * Idempotent two ways: webhook_events has already dropped a redelivered event
  * id, and source_ref = the Razorpay order id is UNIQUE, so two different event
@@ -162,14 +182,14 @@ export async function invoiceFromPaidOrder(env, rzpOrder, payment) {
   const user = ownerEmail
     ? await env.DB.prepare("SELECT * FROM users WHERE lower(email)=?").bind(ownerEmail).first() : null;
   if (!user) { console.error("paylink webhook: owner not configured"); return null; }
-  const biz = await defaultBusiness(env, user.id);
+  const biz = await paylinkBusiness(env, user.id);
   if (!biz) { console.error("paylink webhook: no default business"); return null; }
 
   const existing = await env.DB.prepare(
     `SELECT i.*, u.email AS owner_email, b.biz_name FROM invoices i
        JOIN users u ON u.id = i.user_id LEFT JOIN businesses b ON b.id = i.business_id
       WHERE i.source_ref = ?`).bind(rzpOrder.id).first();
-  if (existing) return existing;
+  if (existing) return { inv: existing, created: false };
 
   // Razorpay's word on the amount, in rupees. amount_paid is what was actually
   // captured; the order amount is the fallback for a webhook shape without it.
@@ -209,18 +229,20 @@ export async function invoiceFromPaidOrder(env, rzpOrder, payment) {
     ).bind(uid(), id, 0, what, 1, total).run();
   } catch (e) {
     if (/UNIQUE|constraint/i.test(String(e?.message || e))) {
-      return env.DB.prepare(
+      const won = await env.DB.prepare(
         `SELECT i.*, u.email AS owner_email, b.biz_name FROM invoices i
            JOIN users u ON u.id = i.user_id LEFT JOIN businesses b ON b.id = i.business_id
           WHERE i.source_ref = ?`).bind(rzpOrder.id).first();
+      return won ? { inv: won, created: false } : null;
     }
     throw e;
   }
   console.log(JSON.stringify({ msg: "paylink invoice created", number, total, order: rzpOrder.id }));
-  return env.DB.prepare(
+  const inv = await env.DB.prepare(
     `SELECT i.*, u.email AS owner_email, b.biz_name FROM invoices i
        JOIN users u ON u.id = i.user_id LEFT JOIN businesses b ON b.id = i.business_id
       WHERE i.id = ?`).bind(id).first();
+  return inv ? { inv, created: true } : null;
 }
 
 /* GET /pay - the page. Server-rendered, no framework, same visual language as
@@ -229,7 +251,7 @@ export async function payLinkPage(env) {
   const ownerEmail = String(env.INVOICE_OWNER_EMAIL || "").trim().toLowerCase();
   const user = ownerEmail
     ? await env.DB.prepare("SELECT id FROM users WHERE lower(email)=?").bind(ownerEmail).first() : null;
-  const biz = user ? await defaultBusiness(env, user.id) : null;
+  const biz = user ? await paylinkBusiness(env, user.id) : null;
   const bizName = (biz && biz.biz_name) || "us";
   const enabled = paylinkEnabled(env) && !!biz;
   const site = env.TURNSTILE_SITE_KEY || "";

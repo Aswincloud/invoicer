@@ -154,6 +154,17 @@ a **second** webhook alongside the shop's; Razorpay supports several, each with
 its own secret, and the shop's is unaffected. Invoicer receives the shop's
 events too and ignores any order it does not own.
 
+**If the webhook never arrives, the money moved and nothing here knows.** The
+pay-me form (`/pay`) creates its invoice *only* from `order.paid`, so a webhook
+that is not configured for this Worker, signed with a different secret, or given
+up on by Razorpay leaves a customer who paid, saw "payment received", and got no
+receipt, no email and no WhatsApp — with no row to show for it. That happened on
+2026-09-26. **Check missed payments** in *My Invoices* (`POST
+/api/paylink/reconcile`, owner only) asks Razorpay for its recent orders and, for
+every paid pay-link order with no invoice, does exactly what the webhook would
+have: raises the PAID invoice, emails the receipt, sends the WhatsApp. Idempotent
+on the Razorpay order id, so pressing it twice raises nothing twice.
+
 Set `PAY_ENABLED = "false"` to stop taking payments — links still open and
 invoices still render, only the Pay button goes away. Razorpay settles in INR,
 so the button appears on `₹` invoices only.
@@ -196,6 +207,26 @@ shop's courier is free text: a ShipTrack carrier gets a live Track button,
 anything else is named as typed and the button opens ShipTrack's unknown-carrier
 page (`other/<awb>`) rather than a broken link — a Meta URL button's prefix is
 fixed on the template, so it can only ever open ShipTrack.
+
+**Pay-link payments get a receipt, not an order confirmation.** A `/pay`
+payment is often not an order at all — consulting, a website, a repair — so
+"your order has been confirmed, shipping news will follow" would be wrong. When
+the webhook raises the PAID invoice, `notifyPaid` sends **`payment_received`**
+(UTILITY, created 2026-09-26 on the WABA over the API): the receipt PDF as the
+DOCUMENT header, and *"Hi {{1}}, we've received your payment of {{2}} for
+{{3}}. Your receipt {{4}} is attached. Thank you for choosing {{5}} — we
+appreciate your business."* Which template a PAID invoice gets is decided by
+`templateKindFor()` in `src/wa.js` from where the invoice came from, and the
+webhook, the shop ingest and the dashboard's WhatsApp button all go through it,
+so they cannot disagree. `WA_TEMPLATE_RECEIPT` renames it. One shared
+`sendPaidConfirmation()` (`src/ingest.js`) does the sending for both paths.
+
+`/pay` bills as **`PAYLINK_BUSINESS`** (by business name; `AswinCloud` in
+production) rather than the account's default business, so the receipt PDF's
+header and the message's {{5}} say AswinCloud while the shop keeps billing as
+Aswin3DPrints. The owner's "payment received" email carries everything needed
+to act on it — name, mobile, email, what it was for, delivery address, amount,
+receipt number, payment reference, and a link to the receipt.
 
 
 For a customer who paid directly there is no shop order anywhere: **the invoice

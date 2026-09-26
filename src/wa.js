@@ -34,6 +34,7 @@ export const WA_ENV = {
   token:     "WA_ACCESS_TOKEN",
   version:   "WA_API_VERSION",       // default below
   tplPaid:   "WA_TEMPLATE_CONFIRMED", // default "order_confirmed_new"
+  tplReceipt:"WA_TEMPLATE_RECEIPT",   // default "payment_received" — pay-link payments
   lang:      "WA_TEMPLATE_LANG",     // default "en"
 };
 
@@ -98,6 +99,68 @@ export function confirmedParams(inv) {
     String(inv.number || ""),
     String(inv.biz_name || "").trim() || "us",
   ];
+}
+
+/* Which template a PAID invoice gets. Shop orders are orders: "confirmed,
+ * shipping news will follow" is true of them. A /pay payment is often not an
+ * order at all — consulting, a website, a repair — so it gets a plain receipt:
+ *
+ *   payment_received   DOCUMENT header (the receipt PDF) + five body params:
+ *     Hi {{1}}, we've received your payment of {{2}} for {{3}}. Your receipt
+ *     {{4}} is attached. Thank you for choosing {{5}} — we appreciate your
+ *     business.                                   (created 2026-09-26, UTILITY)
+ *
+ * Decided by where the invoice came from, so the webhook, the shop ingest and
+ * the dashboard button cannot disagree about which message a row gets. */
+export function templateKindFor(inv) {
+  return String(inv && inv.source || "") === "paylink" ? "receipt" : "confirmed";
+}
+
+/* "₹250", or "₹1,234.50" when there are paise. From the invoice's own amount —
+ * rzp_amount (paise, what Razorpay captured) first, the stored total second —
+ * never from a payment lookup that may have failed. */
+export function rupeesText(inv) {
+  const paise = Number(inv && inv.rzp_amount) || Math.round(Number(inv && inv.total || 0) * 100);
+  const r = paise / 100;
+  const cur = (inv && inv.currency) || "₹";
+  return cur + (Number.isInteger(r)
+    ? r.toLocaleString("en-IN")
+    : r.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+}
+
+/* payment_received's body params, in ITS order: {{1}} customer, {{2}} amount,
+ * {{3}} what it was for, {{4}} receipt number, {{5}} business. */
+export function receiptParams(inv, what) {
+  return [
+    String(inv.client_name || "").trim() || "there",
+    rupeesText(inv),
+    String(what || "").trim() || "your order",
+    String(inv.number || ""),
+    String(inv.biz_name || "").trim() || "us",
+  ];
+}
+
+export function buildReceiptMessage(env, { to, inv, pdfUrl, what }) {
+  const name = env[WA_ENV.tplReceipt] || "payment_received";
+  const safeNum = String(inv.number || "receipt").replace(/[^A-Za-z0-9._-]/g, "-");
+  return {
+    messaging_product: "whatsapp",
+    to,
+    type: "template",
+    template: { name, language: { code: env[WA_ENV.lang] || "en" }, components: [
+      { type: "header",
+        parameters: [{ type: "document", document: { link: pdfUrl, filename: `${safeNum}.pdf` } }] },
+      { type: "body", parameters: receiptParams(inv, what).map((text) => ({ type: "text", text })) },
+    ] },
+  };
+}
+
+/* The one entry point for "this PAID invoice's WhatsApp": picks the template by
+ * templateKindFor(). `what` is the first line item's description, for receipts. */
+export function buildPaidMessage(env, args) {
+  return templateKindFor(args.inv) === "receipt"
+    ? buildReceiptMessage(env, args)
+    : buildTemplateMessage(env, args);
 }
 
 /* The request body for one invoice. Pure, so it can be tested without a network.

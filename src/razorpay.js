@@ -69,6 +69,25 @@ export async function fetchPayment(env, paymentId) {
   return r.ok ? { ok: true, payment: body } : { ok: false, status: r.status, body };
 }
 
+// ── reading back ──────────────────────────────────────────────────
+// For reconciliation (reconcilePayLinks in pay.js): which orders Razorpay holds
+// and which payment settled each. Read-only. Razorpay pages with `count` ≤ 100.
+export async function listOrders(env, { count = 25 } = {}) {
+  const n = Math.min(100, Math.max(1, count | 0));
+  const r = await fetch(`${API}/orders?count=${n}`, { headers: { Authorization: authHeader(env) } });
+  const body = await r.json().catch(() => ({}));
+  return r.ok ? { ok: true, orders: body.items || [] }
+              : { ok: false, status: r.status, error: body?.error?.description || "" };
+}
+
+export async function orderPayments(env, orderId) {
+  const r = await fetch(`${API}/orders/${encodeURIComponent(orderId)}/payments`,
+                        { headers: { Authorization: authHeader(env) } });
+  const body = await r.json().catch(() => ({}));
+  return r.ok ? { ok: true, payments: body.items || [] }
+              : { ok: false, status: r.status, error: body?.error?.description || "" };
+}
+
 // ── signatures ────────────────────────────────────────────────────
 // TWO DIFFERENT SECRETS, and mixing them up is the classic Razorpay bug:
 //
