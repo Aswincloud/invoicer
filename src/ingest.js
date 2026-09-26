@@ -23,7 +23,7 @@
 // own: HMAC-SHA256 over the raw body, plus a timestamp replay window. Without
 // that it is an open "email anyone an invoice from Aswin's business" endpoint.
 
-import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex, randToken } from "./lib.js";
+import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex, randToken, baseUrl } from "./lib.js";
 import { waConfigured, toE164, buildPaidMessage, templateKindFor, sendTemplate } from "./wa.js";
 import { shopCourier, normalizeAwb, buildShippedMessage, buildDeliveredMessage } from "./shipment.js";
 import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
@@ -290,7 +290,7 @@ export async function sendPaidConfirmation(env, { id, inv, label, what }) {
     "UPDATE invoices SET share_token=COALESCE(share_token, ?), updated_at=? WHERE id=?"
   ).bind(token, now(), id).run();
   const row = await env.DB.prepare("SELECT share_token FROM invoices WHERE id=?").bind(id).first();
-  const pdfUrl = `${String(env.APP_BASE_URL || "").replace(/\/+$/, "")}/i/${row?.share_token || token}.pdf`;
+  const pdfUrl = `${baseUrl(env.APP_BASE_URL)}/i/${row?.share_token || token}.pdf`;
 
   // A receipt says what was paid for: the first line item, unless the caller
   // already knows (the webhook has it in the order's notes).

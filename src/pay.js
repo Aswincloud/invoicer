@@ -25,7 +25,7 @@
 // the feature — so the token is the only thing standing in for a session, and it
 // is never derived from anything the owner exposes elsewhere.
 
-import { json, bad, now, randToken, sendEmail } from "./lib.js";
+import { json, bad, now, randToken, sendEmail, baseUrl } from "./lib.js";
 import { computeTotals, renderInvoiceEmail, esc, fmtDate } from "./invoice-html.js";
 import { renderInvoicePdf } from "./invoice-pdf.js";
 import { BIZ_SELECT, BIZ_JOIN } from "./business.js";
@@ -644,7 +644,7 @@ async function notifyPaid(env, inv, payment, { what = "" } = {}) {
     // 2026-09-26 this said only "<name> paid <amount>", and the owner had to open
     // the dashboard — or, for a /pay payment, the Razorpay order notes — to learn
     // what had actually been bought and for whom.
-    const base = String(env.APP_BASE_URL || "").replace(/\/+$/, "");
+    const base = baseUrl(env.APP_BASE_URL);
     const link = inv.share_token ? `${base}/i/${inv.share_token}` : "";
     const rows = [
       ["Customer", inv.client_name || "—"],
@@ -765,7 +765,6 @@ export async function shareInvoice(env, user, id, url) {
 // The practical consequence is that links copied from `wrangler dev` point at
 // production — correct for sharing, surprising while testing locally.
 export function shareUrl(env, token, url) {
-  const base = String(env.APP_BASE_URL || "").replace(/\/+$/, "") ||
-    (url ? new URL(url).origin : "");
+  const base = baseUrl(env.APP_BASE_URL) || (url ? new URL(url).origin : "");
   return `${base}/i/${token}`;
 }

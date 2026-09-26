@@ -22,7 +22,7 @@
  * endpoint cannot be pointed at another user's invoices however it is called.
  */
 
-import { json, bad, now, hmacHex, timingSafeEqualHex } from "./lib.js";
+import { json, bad, now, hmacHex, timingSafeEqualHex, baseUrl } from "./lib.js";
 import { WA_ENV, toE164, waConfigured, sendTemplate } from "./wa.js";
 
 /* ShipTrack's carriers. Ids are what its API and /track/ links take; names are
@@ -74,8 +74,7 @@ export function normalizeAwb(raw) {
   return s;
 }
 
-const shiptrackBase = (env) =>
-  String(env.SHIPTRACK_BASE_URL || "https://shiptrack.aswincloud.com").replace(/\/+$/, "");
+const shiptrackBase = (env) => baseUrl(env.SHIPTRACK_BASE_URL, "https://shiptrack.aswincloud.com");
 
 /* The link a customer can open. */
 export const trackUrl = (env, carrier, awb) =>
