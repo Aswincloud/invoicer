@@ -16,7 +16,7 @@ import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
 } from "./pay.js";
-import { sharePdf, reconcilePayLinks } from "./pay.js";
+import { sharePdf, reconcilePayLinks, sweepPayLinks } from "./pay.js";
 import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor } from "./wa.js";
 import { maySend } from "./access.js";
 import { payLinkPage, startPayLink } from "./paylink.js";
@@ -36,6 +36,9 @@ export default {
   // the customer on WhatsApp. Never throws — see checkDeliveries.
   async scheduled(_event, env, ctx) {
     ctx.waitUntil(checkDeliveries(env).catch((e) => console.error("checkDeliveries crashed", String(e?.message || e))));
+    // Also raise any /pay payment whose Razorpay webhook never arrived. See
+    // sweepPayLinks in src/pay.js; it never throws.
+    ctx.waitUntil(sweepPayLinks(env));
   },
 
   // `ctx` is threaded through for the Razorpay webhook: Razorpay times out at

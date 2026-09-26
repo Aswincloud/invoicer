@@ -29,7 +29,7 @@ import { json, bad, now, randToken, sendEmail, baseUrl } from "./lib.js";
 import { computeTotals, renderInvoiceEmail, esc, fmtDate } from "./invoice-html.js";
 import { renderInvoicePdf } from "./invoice-pdf.js";
 import { BIZ_SELECT, BIZ_JOIN } from "./business.js";
-import { isPayLinkOrder, invoiceFromPaidOrder } from "./paylink.js";
+import { isPayLinkOrder, invoiceFromPaidOrder, paylinkEnabled } from "./paylink.js";
 import {
   createOrder, paymentsConfigured, publicKeyId,
   verifyCallbackSignature, verifyWebhookSignature,
@@ -711,8 +711,17 @@ export async function reconcilePayLinks(env, user) {
   }
   if (!paymentsConfigured(env)) return bad("Razorpay is not configured.", 503);
 
+  const r = await reconcilePayLinkOrders(env);
+  if (!r.ok) return json({ error: r.error }, 502);
+  return json(r);
+}
+
+// The work behind the button, shared with the half-hourly cron (see
+// sweepPayLinks). Returns a plain summary rather than a Response so both callers
+// can shape it: { ok, checked, known, created } or { ok: false, error }.
+export async function reconcilePayLinkOrders(env) {
   const listed = await listOrders(env, { count: 50 });
-  if (!listed.ok) return json({ error: `Razorpay refused: ${listed.error || listed.status}` }, 502);
+  if (!listed.ok) return { ok: false, error: `Razorpay refused: ${listed.error || listed.status}` };
 
   let checked = 0, known = 0;
   const created = [];
@@ -730,12 +739,31 @@ export async function reconcilePayLinks(env, user) {
     // the receipts, so this run has nothing to send. Counted as known.
     if (!made.created) { known++; continue; }
     const inv = made.inv;
-    // Awaited, not waitUntil: the owner pressed a button and wants the answer.
+    // Awaited, not waitUntil: the owner pressed a button and wants the answer,
+    // and the cron's waitUntil needs the promise to include the sends.
     const notes = await notifyPaid(env, inv, payment, { what: order.notes?.what });
     created.push({ number: inv.number, total: inv.total, ref: order.receipt || "",
                    whatsapp: notes.whatsapp, email: inv.client_email ? "sent" : "no address" });
   }
-  return json({ ok: true, checked, known, created });
+  return { ok: true, checked, known, created };
+}
+
+// Cron entry. A Razorpay webhook that never arrives (it happened on 26 Sep 2026,
+// for a real payment) otherwise leaves a paid customer with no invoice and
+// nobody emailed, silently, until someone notices. Every tick, raise whatever
+// the webhook missed. Nothing to do when pay links or Razorpay are off. Never
+// throws: the other cron job in the same tick must not be taken down with it.
+export async function sweepPayLinks(env) {
+  if (!paylinkEnabled(env) || !paymentsConfigured(env)) return { ok: true, skipped: true };
+  try {
+    const r = await reconcilePayLinkOrders(env);
+    if (!r.ok) console.error("paylink sweep: " + r.error);
+    else if (r.created.length) console.log("paylink sweep raised missed payments", JSON.stringify(r.created));
+    return r;
+  } catch (e) {
+    console.error("paylink sweep crashed", String(e?.message || e));
+    return { ok: false, error: String(e?.message || e) };
+  }
 }
 
 // ── POST /api/invoices/:id/share (session-gated) ─────────────────────────────
