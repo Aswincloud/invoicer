@@ -572,7 +572,7 @@ function solveFromTarget(){
   // user can't act on.
   const fractional = Math.abs(target - Math.round(target)) >= 0.005;
   const why = $("roundOff").checked && fractional
-    ? " — round off is on, so the total lands on a whole " + (($("currency").value || "unit"))
+    ? " — round off is on, so the total lands on a whole " + esc($("currency").value || "unit")
     // Only rounding can explain a sub-paisa gap; anything larger is a real
     // mismatch and shouldn't be excused as rounding.
     : (off < 0.02 ? " — rates round to paise" : "");
