@@ -2603,32 +2603,6 @@ async function openInvoices(){
 }
 function closeInvoices(){ $("invModal").hidden = true; }
 
-// "Did Razorpay take money I have no invoice for?" — a pay-link payment whose
-// webhook never arrived. The server creates the missing invoice(s) and sends the
-// receipts; this shows what it found and refreshes the list.
-$("invReconcile")?.addEventListener("click", async () => {
-  const btn = $("invReconcile"), box = $("invList");
-  const label = btn.textContent;
-  btn.disabled = true; btn.textContent = "Checking…";
-  const say = (text) => box.insertAdjacentHTML("afterbegin", `<div class="inv-empty" role="status">${esc(text)}</div>`);
-  try{
-    const r = await api("/paylink/reconcile", { method: "POST", body: "{}" });
-    const made = r.created || [];
-    if (made.length) {
-      const { invoices } = await api("/invoices");
-      renderInvoiceList(invoices || []);
-      say(`Recovered ${made.length} payment${made.length === 1 ? "" : "s"}: ` +
-          made.map((c) => `${c.number} ₹${c.total} (WhatsApp ${c.whatsapp}, email ${c.email})`).join("; "));
-    } else {
-      say(`Checked ${r.checked} paid pay-link order${r.checked === 1 ? "" : "s"} on Razorpay — all already invoiced.`);
-    }
-  }catch(e){
-    say("Couldn't check Razorpay: " + e.message);
-  }finally{
-    btn.disabled = false; btn.textContent = label;
-  }
-});
-
 function renderInvoiceList(list){
   const box = $("invList");
   if(!list.length){

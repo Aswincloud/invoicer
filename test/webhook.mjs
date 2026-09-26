@@ -7,11 +7,12 @@
 //   1. when the webhook DOES arrive, the invoice is raised PAID and the customer
 //      gets the receipt email AND the WhatsApp confirmation with the PDF — the
 //      WhatsApp step did not exist on this path before;
-//   2. reconcilePayLinks() asks Razorpay for its orders and raises whatever is
-//      missing, once, with the same receipts.
+//   2. reconcilePayLinkOrders(), run by the half-hourly cron (sweepPayLinks),
+//      asks Razorpay for its orders and raises whatever is missing, once, with
+//      the same receipts.
 //
 //   node test/webhook.mjs
-import { razorpayWebhook, reconcilePayLinks, sweepPayLinks, confirmPayLink } from "../src/pay.js";
+import { razorpayWebhook, reconcilePayLinkOrders, sweepPayLinks } from "../src/pay.js";
 import { sendPaidConfirmation } from "../src/ingest.js";
 import { hmacHex } from "../src/lib.js";
 
@@ -127,6 +128,9 @@ function envWith({ invoices = [], razorpayOrders = [], razorpayPayments = {} } =
 }
 const ctxOf = () => { const jobs = []; return { waitUntil: (p) => jobs.push(p), jobs }; };
 const read = async (r) => [r.status, await r.json()];
+// The cron's reconcile returns a plain summary; shape it like a response so the
+// sections below read the same way.
+const reconcile = async (env) => { const r = await reconcilePayLinkOrders(env); return [r.ok ? 200 : 502, r]; };
 
 async function webhook(env, evt, { eventId = "evt_1", secret = ENV.RAZORPAY_WEBHOOK_SECRET, signature = null } = {}) {
   const raw = JSON.stringify(evt);
@@ -219,7 +223,7 @@ section("reconcile: the missed payment is raised once, with the same receipts");
     razorpayOrders: [invoiced, missed, notOurs, unpaid],
     razorpayPayments: { order_missed: [PAYMENT("order_missed", "pay_missed")] },
   });
-  const [status, body] = await read(await reconcilePayLinks(env, OWNER));
+  const [status, body] = await reconcile(env);
   ok("200", status === 200, JSON.stringify(body));
   ok("two paid pay-link orders checked, one already known", body.checked === 2 && body.known === 1, JSON.stringify(body));
   ok("exactly one invoice created", body.created?.length === 1 && env.DB._db.invoices.length === 2, JSON.stringify(body.created));
@@ -232,7 +236,7 @@ section("reconcile: the missed payment is raised once, with the same receipts");
   ok("the shop's order and the unpaid one were left alone", !env.DB._db.invoices.some((i) => i.source_ref === "order_shop" || i.source_ref === "order_open"));
   ok("the receipt WhatsApp says what was paid for", env._wa[0]?.template?.components?.find((c) => c.type === "body")?.parameters?.[2]?.text === "Custom trophy");
   // Run it again: nothing new.
-  const [st2, b2] = await read(await reconcilePayLinks(env, OWNER));
+  const [st2, b2] = await reconcile(env);
   ok("a second run creates nothing", st2 === 200 && b2.created.length === 0 && b2.known === 2, JSON.stringify(b2));
   ok("and messages nobody", env._wa.length === 1 && env._sent.length === 2);
 }
@@ -241,7 +245,7 @@ section("reconcile: Razorpay's payment lookup failing never produces a ₹0 rece
 {
   const missed = ORDER("order_nopay", { amount_paid: 25000 });
   const env = envWith({ razorpayOrders: [missed], razorpayPayments: {} });   // no captured payment listed
-  const [status, body] = await read(await reconcilePayLinks(env, OWNER));
+  const [status, body] = await reconcile(env);
   ok("the invoice is still raised from the order's amount", status === 200 && body.created.length === 1 && env.DB._db.invoices[0]?.total === 250, JSON.stringify(body));
   const client = env._sent.find((m) => JSON.stringify(m.to).includes("raagul@"));
   ok("the customer's email says ₹250, not ₹0.00", client && client.text.includes("₹ 250.00") && !client.text.includes("₹ 0.00"), client?.text);
@@ -259,7 +263,7 @@ section("reconcile: a webhook winning the race means no second receipt");
     razorpayOrders: [ORDER("order_race")], razorpayPayments: { order_race: [PAYMENT("order_race")] },
   });
   env.DB._db.hideOnce = true;
-  const [status, body] = await read(await reconcilePayLinks(env, OWNER));
+  const [status, body] = await reconcile(env);
   ok("200, nothing created, counted as known", status === 200 && body.created.length === 0 && body.known === 1, JSON.stringify(body));
   ok("no email, no WhatsApp went out", env._sent.length === 0 && env._wa.length === 0, `${env._sent.length} ${env._wa.length}`);
   ok("still one invoice", env.DB._db.invoices.length === 1);
@@ -315,58 +319,6 @@ section("PAYLINK_BUSINESS unset falls back to the default business");
   ok("and the WhatsApp names it", env._wa[0]?.template?.components?.find((c) => c.type === "body")?.parameters?.[4]?.text === "AswinPrints");
 }
 
-section("confirm: the browser's signed checkout result raises the invoice in seconds");
-{
-  const order = ORDER("order_now", { receipt: "PL-NOW1", notes: { ...ORDER("x").notes, ref: "PL-NOW1", what: "Sticker sheet" } });
-  const env = envWith({ razorpayOrders: [order], razorpayPayments: { order_now: [PAYMENT("order_now", "pay_now")] } }, { PAY_ENABLED: "true" });
-  const sig = await hmacHex("order_now|pay_now", ENV.RAZORPAY_KEY_SECRET);
-  const ctx = ctxOf();
-  const [status, body] = await read(await confirmPayLink(env, { razorpay_order_id: "order_now", razorpay_payment_id: "pay_now", razorpay_signature: sig }, ctx));
-  await Promise.all(ctx.jobs);
-  ok("200 with the receipt number and a share link", status === 200 && body.ok === true && body.number === "PL-2026-0001" && /\/i\/\w{16,}$/.test(body.link || ""), JSON.stringify(body));
-  const made = env.DB._db.invoices[0];
-  ok("one PAID invoice, Razorpay's amount, the captured payment on it", env.DB._db.invoices.length === 1 && made.status === "PAID" && made.total === 250 && made.rzp_payment_id === "pay_now", JSON.stringify(made));
-  ok("order AND payment were read back from Razorpay before writing", env._rzp.some((u) => u.endsWith("/orders/order_now")) && env._rzp.some((u) => u.endsWith("/payments/pay_now")), env._rzp.join(" "));
-  ok("owner + customer emailed and WhatsApp sent, behind the response (waitUntil)", ctx.jobs.length === 1 && env._sent.length === 2 && env._wa.length === 1, `${env._sent.length} ${env._wa.length}`);
-  ok("the receipt WhatsApp says what was paid for", env._wa[0]?.template?.components?.find((c) => c.type === "body")?.parameters?.[2]?.text === "Sticker sheet");
-  // The webhook lands a moment later, then the customer double-clicks: nothing more goes out.
-  await webhook(env, PAID_EVENT(order, PAYMENT("order_now", "pay_now")), { eventId: "evt_late" });
-  ok("the late webhook finds the row and sends nothing", env.DB._db.invoices.length === 1 && env._sent.length === 2 && env._wa.length === 1);
-  const [st2, b2] = await read(await confirmPayLink(env, { razorpay_order_id: "order_now", razorpay_payment_id: "pay_now", razorpay_signature: sig }, ctxOf()));
-  ok("a repeated confirm returns the same receipt and sends nothing", st2 === 200 && b2.number === "PL-2026-0001" && env._sent.length === 2, JSON.stringify(b2));
-  const [st3, b3] = await read(await reconcilePayLinks(env, OWNER));
-  ok("the sweep then finds it known", st3 === 200 && b3.known === 1 && b3.created.length === 0, JSON.stringify(b3));
-}
-
-section("confirm: nothing is written without Razorpay's word");
-{
-  const order = ORDER("order_c2"), shop = ORDER("order_shop3", { notes: { source: "shop" } });
-  const attempted = ORDER("order_c3", { status: "attempted", amount_paid: 0 });
-  const env = envWith({ razorpayOrders: [order, shop, attempted], razorpayPayments: {
-    order_c2: [PAYMENT("order_c2", "pay_c2")], order_shop3: [PAYMENT("order_shop3", "pay_s3")],
-    order_c3: [{ ...PAYMENT("order_c3", "pay_c3"), status: "authorized" }] } }, { PAY_ENABLED: "true" });
-  const sigFor = (o, p) => hmacHex(`${o}|${p}`, ENV.RAZORPAY_KEY_SECRET);
-  const go = async (o, p, sig) => read(await confirmPayLink(env, { razorpay_order_id: o, razorpay_payment_id: p, razorpay_signature: sig }, ctxOf()));
-  let [st, body] = await go("order_c2", "pay_c2", "deadbeef".repeat(8));
-  ok("forged signature: 400, Razorpay never asked, nothing written", st === 400 && env._rzp.length === 0 && env.DB._db.invoices.length === 0, `${st} ${env._rzp.length}`);
-  [st] = await read(await confirmPayLink(env, {}, ctxOf()));
-  ok("empty body: 400", st === 400);
-  [st] = await go("order_shop3", "pay_s3", await sigFor("order_shop3", "pay_s3"));
-  ok("a valid signature for an order that is not a pay-link order: 400, nothing written", st === 400 && env.DB._db.invoices.length === 0, String(st));
-  [st, body] = await go("order_c3", "pay_c3", await sigFor("order_c3", "pay_c3"));
-  ok("authorised but not captured: 202 pending, nothing written, nothing sent", st === 202 && body.pending === true && env.DB._db.invoices.length === 0 && env._sent.length === 0, `${st} ${JSON.stringify(body)}`);
-  [st, body] = await go("order_c2", "pay_s3", await sigFor("order_c2", "pay_s3"));
-  ok("a payment that belongs to a different order: 202 pending, nothing written", st === 202 && env.DB._db.invoices.length === 0, String(st));
-  [st, body] = await go("order_c2", "pay_none", await sigFor("order_c2", "pay_none"));
-  ok("a payment id Razorpay does not know: 202 pending, nothing written", st === 202 && env.DB._db.invoices.length === 0, String(st));
-  const off = envWith({}, { PAYLINK_ENABLED: "false", PAY_ENABLED: "true" });
-  [st] = await read(await confirmPayLink(off, { razorpay_order_id: "order_c2", razorpay_payment_id: "pay_c2", razorpay_signature: await sigFor("order_c2", "pay_c2") }, ctxOf()));
-  ok("pay links switched off: 503", st === 503, String(st));
-  const realFetch = globalThis.fetch; globalThis.fetch = async () => { throw new Error("network down"); };
-  let outage; try { [st, body] = await read(await confirmPayLink(env, { razorpay_order_id: "order_c2", razorpay_payment_id: "pay_c2", razorpay_signature: await sigFor("order_c2", "pay_c2") }, ctxOf())); } catch (e) { outage = e; } finally { globalThis.fetch = realFetch; }
-  ok("Razorpay unreachable: 502 and the customer is told the receipt will follow", !outage && st === 502 && /follow/.test(body.error || ""), outage ? String(outage) : `${st} ${JSON.stringify(body)}`);
-}
-
 section("cron sweep: the missed payment is raised with nobody signed in");
 {
   const missed = ORDER("order_cron", { receipt: "PL-CR01", notes: { ...ORDER("x").notes, ref: "PL-CR01", what: "Nameplate" } });
@@ -391,15 +343,6 @@ section("cron sweep: off when pay links or Razorpay are off, and never throws");
   ok("a Razorpay outage is reported, not thrown", r.ok === false && /down|refused/i.test(r.error || ""), JSON.stringify(r));
 }
 
-section("reconcile: owner only");
-{
-  const env = envWith({ razorpayOrders: [ORDER("order_F")], razorpayPayments: { order_F: [PAYMENT("order_F")] } });
-  const [status] = await read(await reconcilePayLinks(env, { id: "u-2", email: "someone@else.com" }));
-  ok("another signed-in user is refused", status === 403, String(status));
-  ok("and Razorpay was not even asked", env._rzp.length === 0);
-  const [st2] = await read(await reconcilePayLinks(envWith({}, { RAZORPAY_KEY_ID: "" }), OWNER));
-  ok("no Razorpay keys → 503", st2 === 503, String(st2));
-}
 
 console.log(`\n  webhook: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

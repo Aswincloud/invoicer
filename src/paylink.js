@@ -13,10 +13,8 @@
  * fill the database with garbage in seconds, and every row would sit in
  * "My Invoices" as if it were real. So the form does NOT create an invoice. It
  * creates a Razorpay ORDER with the form's fields attached as notes, and the
- * invoice is created from the PAID order, on Razorpay's word, by whichever of
- * three arrives first: confirmPayLink (the browser's signed checkout result,
- * read back from Razorpay's API), the order.paid webhook (handleOrderPaid), or
- * the half-hourly sweep (sweepPayLinks). All three are in pay.js.
+ * invoice is created by the WEBHOOK, from the paid order, in handleOrderPaid —
+ * or by the half-hourly sweep (sweepPayLinks) should a delivery never arrive.
  *
  * Consequences, all deliberate:
  *   - an abandoned form leaves nothing behind but an unpaid order on Razorpay's
@@ -335,16 +333,8 @@ ${site ? `<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" as
     var rzp=new Razorpay({key:o.keyId,order_id:o.orderId,amount:o.amount,currency:'INR',name:o.business||'${esc(bizName)}',
       description:f.what.value.slice(0,80),prefill:o.prefill,notes:{ref:o.ref},
       modal:{ondismiss:function(){reset();say('')}},
-      handler:function(resp){ btn.textContent='Paid ✓'; f.querySelectorAll('input,textarea').forEach(function(i){i.disabled=true});
-        var to=[f.phone.value&&'WhatsApp',f.email.value&&'email'].filter(Boolean).join(' and ');
-        say('Payment received — thank you!'+(to?' Your receipt is on its way by '+to+'.':''),'ok');
-        // Tell the server now, with Razorpay's signed result, so the receipt goes
-        // out this second instead of waiting on the webhook or the half-hourly sweep.
-        fetch('/api/pay/confirm',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({razorpay_order_id:resp.razorpay_order_id,razorpay_payment_id:resp.razorpay_payment_id,razorpay_signature:resp.razorpay_signature})})
-          .then(function(r){return r.json()}).then(function(c){ if(!c||!c.ok||!c.number) return;
-            say('Payment received — thank you! Receipt '+c.number+(to?' has been sent by '+to+'.':'.'),'ok');
-            if(c.link){ var a=document.createElement('a'); a.href=c.link; a.textContent='Open your receipt'; a.style.marginLeft='6px'; msg.appendChild(a); } })
-          .catch(function(){}); }});
+      handler:function(){ btn.textContent='Paid ✓'; var to=[f.phone.value&&'WhatsApp',f.email.value&&'email'].filter(Boolean).join(' and ');
+        say('Payment received — thank you!'+(to?' Your receipt is on its way by '+to+'.':''),'ok'); f.querySelectorAll('input,textarea').forEach(function(i){i.disabled=true}); }});
     rzp.on('payment.failed',function(e){ say((e&&e.error&&e.error.description)||'Payment failed. Please try again.','err'); reset(); });
     rzp.open(); btn.textContent=was;
   });
