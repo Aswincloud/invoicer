@@ -80,6 +80,13 @@ export async function listOrders(env, { count = 25 } = {}) {
               : { ok: false, status: r.status, error: body?.error?.description || "" };
 }
 
+export async function fetchOrder(env, orderId) {
+  const r = await fetch(`${API}/orders/${encodeURIComponent(orderId)}`, { headers: { Authorization: authHeader(env) } });
+  const body = await r.json().catch(() => ({}));
+  return r.ok ? { ok: true, order: body }
+              : { ok: false, status: r.status, error: body?.error?.description || "" };
+}
+
 export async function orderPayments(env, orderId) {
   const r = await fetch(`${API}/orders/${encodeURIComponent(orderId)}/payments`,
                         { headers: { Authorization: authHeader(env) } });
