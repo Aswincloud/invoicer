@@ -11,7 +11,7 @@
 //      missing, once, with the same receipts.
 //
 //   node test/webhook.mjs
-import { razorpayWebhook, reconcilePayLinks } from "../src/pay.js";
+import { razorpayWebhook, reconcilePayLinks, sweepPayLinks } from "../src/pay.js";
 import { sendPaidConfirmation } from "../src/ingest.js";
 import { hmacHex } from "../src/lib.js";
 
@@ -309,6 +309,30 @@ section("PAYLINK_BUSINESS unset falls back to the default business");
   await webhook(env, PAID_EVENT(ORDER("order_D2"), PAYMENT("order_D2")));
   ok("billed as the default business", env.DB._db.invoices[0]?.business_id === "b-1");
   ok("and the WhatsApp names it", env._wa[0]?.template?.components?.find((c) => c.type === "body")?.parameters?.[4]?.text === "AswinPrints");
+}
+
+section("cron sweep: the missed payment is raised with nobody signed in");
+{
+  const missed = ORDER("order_cron", { receipt: "PL-CR01", notes: { ...ORDER("x").notes, ref: "PL-CR01", what: "Nameplate" } });
+  const env = envWith({ razorpayOrders: [missed, ORDER("order_shop2", { notes: { source: "shop" } })],
+                        razorpayPayments: { order_cron: [PAYMENT("order_cron", "pay_cron")] } }, { PAYLINK_ENABLED: "true" });
+  const r = await sweepPayLinks(env);
+  ok("one invoice raised, from the cron, with no user", r.ok && r.created?.length === 1 && env.DB._db.invoices.length === 1, JSON.stringify(r));
+  ok("owner and customer emailed, customer WhatsApped", env._sent.length === 2 && env._wa.length === 1, `${env._sent.length} ${env._wa.length}`);
+  const again = await sweepPayLinks(env);
+  ok("the next tick finds it known and sends nothing more", again.known === 1 && again.created.length === 0 && env._sent.length === 2);
+}
+
+section("cron sweep: off when pay links or Razorpay are off, and never throws");
+{
+  const off = await sweepPayLinks(envWith({}, { PAYLINK_ENABLED: "false" }));
+  ok("pay links disabled: skipped, Razorpay never asked", off.skipped === true);
+  const noRzp = await sweepPayLinks(envWith({}, { PAYLINK_ENABLED: "true", RAZORPAY_KEY_ID: "" }));
+  ok("Razorpay unconfigured: skipped", noRzp.skipped === true);
+  const broken = envWith({}, { PAYLINK_ENABLED: "true" });
+  const realFetch = globalThis.fetch; globalThis.fetch = async () => { throw new Error("network down"); };
+  const r = await sweepPayLinks(broken); globalThis.fetch = realFetch;
+  ok("a Razorpay outage is reported, not thrown", r.ok === false && /down|refused/i.test(r.error || ""), JSON.stringify(r));
 }
 
 section("reconcile: owner only");
