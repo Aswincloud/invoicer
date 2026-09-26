@@ -54,6 +54,15 @@ PRINT_RELAY_URL = "https://print.aswincloud.com/print"
 # opens and the invoice still renders — only the Pay button goes away.
 PAY_ENABLED = "true"
 
+# The public "pay me" page at /pay: a stranger enters name, mobile, what for and
+# how much, and pays with Razorpay. Nothing is written until the webhook sees the
+# payment. Bounds in rupees; PAYLINK_ENABLED = "false" hides the form.
+PAYLINK_ENABLED = "true"
+PAYLINK_MIN = "10"
+PAYLINK_MAX = "50000"
+# TURNSTILE_SITE_KEY here (public) + TURNSTILE_SECRET as a secret turn on the
+# bot check on /pay. Both absent = form works with no check.
+
 # Secrets (NOT here — set once via API/dashboard, never committed):
 #   RESEND_API_KEY, AUTH_SIGNING_KEY
 #   SHOP_INGEST_SECRET — shared with the shop Worker; signs POST /api/ingest/order.
