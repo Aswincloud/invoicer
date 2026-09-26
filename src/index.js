@@ -18,7 +18,7 @@ import {
   shareInvoice, shareUrl,
 } from "./pay.js";
 import { sharePdf, reconcilePayLinks } from "./pay.js";
-import { waConfigured, toE164, prettyE164, buildTemplateMessage, sendTemplate, canSendWhatsApp, confirmedParams } from "./wa.js";
+import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor } from "./wa.js";
 import { maySend } from "./access.js";
 import { payLinkPage, startPayLink } from "./paylink.js";
 import {
@@ -237,6 +237,7 @@ async function whatsappPreview(env, user, id, url) {
 
   const params = kind === "shipped" ? shippedParams(inv, courier, awb)
                : kind === "delivered" ? deliveredParams(inv)
+               : templateKindFor(inv) === "receipt" ? receiptParams(inv, r.items?.[0]?.description)
                : confirmedParams(inv);
 
   return json({
@@ -371,7 +372,7 @@ async function whatsappInvoice(env, user, id, b) {
   }
   const pdfUrl = `${String(env.APP_BASE_URL || "").replace(/\/+$/, "")}/i/${token}.pdf`;
 
-  const msg = buildTemplateMessage(env, { to, inv: r.inv, pdfUrl });
+  const msg = buildPaidMessage(env, { to, inv: r.inv, pdfUrl, what: r.items?.[0]?.description });
   const res = await sendTemplate(env, msg);
   if (!res.ok) {
     console.error("whatsapp send failed", r.inv.number, res.status, res.error);

@@ -58,6 +58,11 @@ PAY_ENABLED = "true"
 # how much, and pays with Razorpay. Nothing is written until the webhook sees the
 # payment. Bounds in rupees; PAYLINK_ENABLED = "false" hides the form.
 PAYLINK_ENABLED = "true"
+# /pay bills as this business (by name); the shop's orders keep the default.
+PAYLINK_BUSINESS = "AswinCloud"
+# The template a /pay payment's WhatsApp uses — a plain receipt, not the shop's
+# "order confirmed". Created 2026-09-26 on the WABA; see src/wa.js.
+WA_TEMPLATE_RECEIPT = "payment_received"
 PAYLINK_MIN = "10"
 PAYLINK_MAX = "50000"
 # TURNSTILE_SITE_KEY here (public) + TURNSTILE_SECRET as a secret turn on the

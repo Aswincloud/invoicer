@@ -24,7 +24,7 @@
 // that it is an open "email anyone an invoice from Aswin's business" endpoint.
 
 import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex, randToken } from "./lib.js";
-import { waConfigured, toE164, buildTemplateMessage, sendTemplate } from "./wa.js";
+import { waConfigured, toE164, buildPaidMessage, templateKindFor, sendTemplate } from "./wa.js";
 import { shopCourier, normalizeAwb, buildShippedMessage, buildDeliveredMessage } from "./shipment.js";
 import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
          signAttachment, payQrAttachment } from "./invoice-html.js";
@@ -277,7 +277,7 @@ async function sendShopConfirmation(env, { id, inv, rendered, receipt }) {
 // `inv` carries client_phone (E.164 or ""), client_name, number and biz_name —
 // the joined row both callers already hold. Returns "sent" | "failed" |
 // "skipped" | "already_sent"; never throws, never fails the caller.
-export async function sendPaidConfirmation(env, { id, inv, label }) {
+export async function sendPaidConfirmation(env, { id, inv, label, what }) {
   if (!waConfigured(env)) return "skipped";
   const to = inv.client_phone;                 // already E.164 or "" (buildInvoice / invoiceFromPaidOrder)
   if (!to) return "skipped";
@@ -292,7 +292,15 @@ export async function sendPaidConfirmation(env, { id, inv, label }) {
   const row = await env.DB.prepare("SELECT share_token FROM invoices WHERE id=?").bind(id).first();
   const pdfUrl = `${String(env.APP_BASE_URL || "").replace(/\/+$/, "")}/i/${row?.share_token || token}.pdf`;
 
-  const res = await sendTemplate(env, buildTemplateMessage(env, { to, inv, pdfUrl }));
+  // A receipt says what was paid for: the first line item, unless the caller
+  // already knows (the webhook has it in the order's notes).
+  let about = what;
+  if (about == null && templateKindFor(inv) === "receipt") {
+    const li = await env.DB.prepare(
+      "SELECT description FROM line_items WHERE invoice_id=? ORDER BY pos LIMIT 1").bind(id).first();
+    about = li?.description || "";
+  }
+  const res = await sendTemplate(env, buildPaidMessage(env, { to, inv, pdfUrl, what: about }));
   if (!res.ok) {
     console.error("whatsapp confirmation failed", label, res.status, res.error);
     return "failed";

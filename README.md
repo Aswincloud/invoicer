@@ -208,12 +208,25 @@ anything else is named as typed and the button opens ShipTrack's unknown-carrier
 page (`other/<awb>`) rather than a broken link — a Meta URL button's prefix is
 fixed on the template, so it can only ever open ShipTrack.
 
-**Pay-link payments are messaged too.** A `/pay` payment is an order for
-something to be made and sent — the form asks what and where — so when its
-webhook raises the PAID invoice, `notifyPaid` sends the same
-`order_confirmed_new` with the receipt PDF, alongside the receipt email. One
-shared `sendPaidConfirmation()` (`src/ingest.js`) serves both the shop path and
-this one, so a WhatsApp change is made once. No second template was needed.
+**Pay-link payments get a receipt, not an order confirmation.** A `/pay`
+payment is often not an order at all — consulting, a website, a repair — so
+"your order has been confirmed, shipping news will follow" would be wrong. When
+the webhook raises the PAID invoice, `notifyPaid` sends **`payment_received`**
+(UTILITY, created 2026-09-26 on the WABA over the API): the receipt PDF as the
+DOCUMENT header, and *"Hi {{1}}, we've received your payment of {{2}} for
+{{3}}. Your receipt {{4}} is attached. Thank you for choosing {{5}} — we
+appreciate your business."* Which template a PAID invoice gets is decided by
+`templateKindFor()` in `src/wa.js` from where the invoice came from, and the
+webhook, the shop ingest and the dashboard's WhatsApp button all go through it,
+so they cannot disagree. `WA_TEMPLATE_RECEIPT` renames it. One shared
+`sendPaidConfirmation()` (`src/ingest.js`) does the sending for both paths.
+
+`/pay` bills as **`PAYLINK_BUSINESS`** (by business name; `AswinCloud` in
+production) rather than the account's default business, so the receipt PDF's
+header and the message's {{5}} say AswinCloud while the shop keeps billing as
+Aswin3DPrints. The owner's "payment received" email carries everything needed
+to act on it — name, mobile, email, what it was for, delivery address, amount,
+receipt number, payment reference, and a link to the receipt.
 
 
 For a customer who paid directly there is no shop order anywhere: **the invoice
