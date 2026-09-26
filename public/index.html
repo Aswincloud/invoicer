@@ -362,7 +362,14 @@
         <h3 id="invTitle">My Invoices</h3>
         <p class="sub">Saved to your account. Open one to edit, re-download, or email it.</p>
       </div>
-      <button class="close" id="invClose" aria-label="Close">×</button>
+      <div class="inv-head-actions">
+        <!-- A pay-link payment becomes an invoice only when Razorpay's webhook
+             arrives. If it did not, this asks Razorpay directly and makes the
+             invoice(s) it finds, receipts and all. Owner only. -->
+        <button class="btn ghost" id="invReconcile" type="button"
+                title="Ask Razorpay for pay-link payments that never became an invoice">Check missed payments</button>
+        <button class="close" id="invClose" aria-label="Close">×</button>
+      </div>
     </div>
     <div id="invList" class="inv-list"><!-- rows injected by app.js --></div>
   </div>

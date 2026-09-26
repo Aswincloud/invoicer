@@ -154,6 +154,17 @@ a **second** webhook alongside the shop's; Razorpay supports several, each with
 its own secret, and the shop's is unaffected. Invoicer receives the shop's
 events too and ignores any order it does not own.
 
+**If the webhook never arrives, the money moved and nothing here knows.** The
+pay-me form (`/pay`) creates its invoice *only* from `order.paid`, so a webhook
+that is not configured for this Worker, signed with a different secret, or given
+up on by Razorpay leaves a customer who paid, saw "payment received", and got no
+receipt, no email and no WhatsApp — with no row to show for it. That happened on
+2026-09-26. **Check missed payments** in *My Invoices* (`POST
+/api/paylink/reconcile`, owner only) asks Razorpay for its recent orders and, for
+every paid pay-link order with no invoice, does exactly what the webhook would
+have: raises the PAID invoice, emails the receipt, sends the WhatsApp. Idempotent
+on the Razorpay order id, so pressing it twice raises nothing twice.
+
 Set `PAY_ENABLED = "false"` to stop taking payments — links still open and
 invoices still render, only the Pay button goes away. Razorpay settles in INR,
 so the button appears on `₹` invoices only.
@@ -196,6 +207,13 @@ shop's courier is free text: a ShipTrack carrier gets a live Track button,
 anything else is named as typed and the button opens ShipTrack's unknown-carrier
 page (`other/<awb>`) rather than a broken link — a Meta URL button's prefix is
 fixed on the template, so it can only ever open ShipTrack.
+
+**Pay-link payments are messaged too.** A `/pay` payment is an order for
+something to be made and sent — the form asks what and where — so when its
+webhook raises the PAID invoice, `notifyPaid` sends the same
+`order_confirmed_new` with the receipt PDF, alongside the receipt email. One
+shared `sendPaidConfirmation()` (`src/ingest.js`) serves both the shop path and
+this one, so a WhatsApp change is made once. No second template was needed.
 
 
 For a customer who paid directly there is no shop order anywhere: **the invoice

@@ -266,9 +266,22 @@ export async function ingestOrder(request, env) {
 // Idempotent under Razorpay redelivery for free: both duplicate branches above
 // return before this runs, so a redelivered webhook cannot send a second one.
 async function sendShopConfirmation(env, { id, inv, rendered, receipt }) {
+  return sendPaidConfirmation(env, { id, inv: { ...rendered, client_phone: inv.client_phone }, label: receipt });
+}
+
+// One PAID invoice's WhatsApp confirmation, for every path that settles an
+// invoice without a human pressing the dashboard button: the shop's ingest above
+// and the pay-link webhook (notifyPaid in src/pay.js). Until 2026-09-26 the
+// pay-link path had no WhatsApp step at all, despite its header saying it did.
+//
+// `inv` carries client_phone (E.164 or ""), client_name, number and biz_name —
+// the joined row both callers already hold. Returns "sent" | "failed" |
+// "skipped" | "already_sent"; never throws, never fails the caller.
+export async function sendPaidConfirmation(env, { id, inv, label }) {
   if (!waConfigured(env)) return "skipped";
-  const to = inv.client_phone;                 // already E.164 or "" (buildInvoice)
+  const to = inv.client_phone;                 // already E.164 or "" (buildInvoice / invoiceFromPaidOrder)
   if (!to) return "skipped";
+  if (inv.wa_message_id) return "already_sent";
 
   // Meta fetches the PDF from /i/<token>.pdf — the pay page's share token. Minted
   // here on first use and kept, exactly as whatsappInvoice() does in index.js.
@@ -279,9 +292,9 @@ async function sendShopConfirmation(env, { id, inv, rendered, receipt }) {
   const row = await env.DB.prepare("SELECT share_token FROM invoices WHERE id=?").bind(id).first();
   const pdfUrl = `${String(env.APP_BASE_URL || "").replace(/\/+$/, "")}/i/${row?.share_token || token}.pdf`;
 
-  const res = await sendTemplate(env, buildTemplateMessage(env, { to, inv: rendered, pdfUrl }));
+  const res = await sendTemplate(env, buildTemplateMessage(env, { to, inv, pdfUrl }));
   if (!res.ok) {
-    console.error("shop whatsapp confirmation failed", receipt, res.status, res.error);
+    console.error("whatsapp confirmation failed", label, res.status, res.error);
     return "failed";
   }
   await env.DB.prepare(

@@ -33,7 +33,9 @@ import { isPayLinkOrder, invoiceFromPaidOrder } from "./paylink.js";
 import {
   createOrder, paymentsConfigured, publicKeyId,
   verifyCallbackSignature, verifyWebhookSignature,
+  listOrders, orderPayments,
 } from "./razorpay.js";
+import { sendPaidConfirmation } from "./ingest.js";
 
 // randToken(16) renders as 32 hex characters. Validated before it reaches SQL so
 // a malformed link is a cheap 404 rather than a query.
@@ -639,12 +641,69 @@ async function notifyPaid(env, inv, payment) {
     }));
   }
 
+  // WhatsApp, with the receipt PDF attached, when the customer gave a mobile.
+  // The same approved template the shop path uses: a pay-link payment IS an
+  // order for something to be made and sent — the form asks what and where —
+  // so "your order PL-2026-0007 has been confirmed, shipping news will follow"
+  // is the right message, and no second template is needed.
+  let whatsapp = "skipped";
+  if (inv.client_phone && !inv.wa_message_id) {
+    tasks.push(sendPaidConfirmation(env, { id: inv.id, inv, label: inv.number || inv.id })
+      .then((r) => { whatsapp = r; return { ok: r !== "failed", error: r }; }));
+  }
+
   const results = await Promise.allSettled(tasks);
   results.forEach((r) => {
     if (r.status === "rejected" || r.value?.ok === false) {
       console.error("paid notification failed", inv.id, r.reason || r.value?.error);
     }
   });
+  return { whatsapp };
+}
+
+// ── POST /api/paylink/reconcile (session-gated, owner only) ─────────────────
+//
+// "Did Razorpay take money I have no invoice for?" The pay-link design creates
+// the invoice from the order.paid WEBHOOK and nowhere else — so a webhook that
+// never arrives (not configured for this Worker, a signing-secret mismatch, a
+// delivery Razorpay gave up on) means a customer who paid, saw "payment
+// received", and got no receipt, no email, no WhatsApp, and no row here. That
+// happened on 2026-09-26. This is the recovery: ask Razorpay for its recent
+// orders, and for every PAID pay-link order without an invoice, do exactly what
+// the webhook would have done — invoiceFromPaidOrder, then notifyPaid.
+//
+// Idempotent for the same reason the webhook is: source_ref (the Razorpay order
+// id) is UNIQUE, and the pre-check skips anything already invoiced. Owner only,
+// because it writes into the owner's books; the session gate has already
+// authenticated, this checks WHO.
+export async function reconcilePayLinks(env, user) {
+  const ownerEmail = String(env.INVOICE_OWNER_EMAIL || "").trim().toLowerCase();
+  if (!ownerEmail || String(user?.email || "").trim().toLowerCase() !== ownerEmail) {
+    return bad("forbidden", 403);
+  }
+  if (!paymentsConfigured(env)) return bad("Razorpay is not configured.", 503);
+
+  const listed = await listOrders(env, { count: 50 });
+  if (!listed.ok) return json({ error: `Razorpay refused: ${listed.error || listed.status}` }, 502);
+
+  let checked = 0, known = 0;
+  const created = [];
+  for (const order of listed.orders) {
+    if (!isPayLinkOrder(order) || order.status !== "paid") continue;
+    checked++;
+    const existing = await env.DB.prepare("SELECT id FROM invoices WHERE source_ref=?").bind(order.id).first();
+    if (existing) { known++; continue; }
+
+    const pays = await orderPayments(env, order.id);
+    const payment = (pays.ok ? pays.payments : []).find((p) => p.status === "captured") || {};
+    const inv = await invoiceFromPaidOrder(env, order, payment);
+    if (!inv) continue;
+    // Awaited, not waitUntil: the owner pressed a button and wants the answer.
+    const notes = await notifyPaid(env, inv, payment);
+    created.push({ number: inv.number, total: inv.total, ref: order.receipt || "",
+                   whatsapp: notes.whatsapp, email: inv.client_email ? "sent" : "no address" });
+  }
+  return json({ ok: true, checked, known, created });
 }
 
 // ── POST /api/invoices/:id/share (session-gated) ─────────────────────────────

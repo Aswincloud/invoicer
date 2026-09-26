@@ -17,7 +17,7 @@ import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
 } from "./pay.js";
-import { sharePdf } from "./pay.js";
+import { sharePdf, reconcilePayLinks } from "./pay.js";
 import { waConfigured, toE164, prettyE164, buildTemplateMessage, sendTemplate, canSendWhatsApp, confirmedParams } from "./wa.js";
 import { maySend } from "./access.js";
 import { payLinkPage, startPayLink } from "./paylink.js";
@@ -161,6 +161,9 @@ async function api(request, env, url, ctx) {
   }
   if (p === "/api/invoices" && m === "GET")  return listInvoices(env, user);
   if (p === "/api/invoices" && m === "POST") return createInvoice(env, user, body);
+  // Owner only (checked inside): recover pay-link payments whose webhook never
+  // arrived. See reconcilePayLinks in src/pay.js.
+  if (p === "/api/paylink/reconcile" && m === "POST") return reconcilePayLinks(env, user);
   if (p === "/api/print"    && m === "POST") return printReceipt(env, user, body);
 
   // Above the /:id route below, or "next-number" is parsed as an invoice id.

@@ -321,6 +321,7 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
 .modal .msg{font-size:12px;margin-top:10px;min-height:16px}
 .modal .msg.ok{color:var(--primary)} .modal .msg.err{color:var(--danger)}
 .modal-head{display:flex;justify-content:space-between;align-items:start}
+.inv-head-actions{display:flex;align-items:start;gap:8px}
 .modal-head .close{background:none;border:none;color:var(--muted);font-size:22px;
   cursor:pointer;line-height:1}
 .modal-head .close:hover{color:var(--ink)}
