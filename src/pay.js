@@ -700,7 +700,7 @@ async function notifyPaid(env, inv, payment, { what = "" } = {}) {
   // WhatsApp, with the receipt PDF attached, when the customer gave a mobile.
   // The same approved template the shop path uses: a pay-link payment IS an
   // order for something to be made and sent — the form asks what and where —
-  // so "your order PL-2026-0007 has been confirmed, shipping news will follow"
+  // so "your order INV-AC-2026-5732 has been confirmed, shipping news will follow"
   // is the right message, and no second template is needed.
   let whatsapp = "skipped";
   if (inv.client_phone && !inv.wa_message_id) {

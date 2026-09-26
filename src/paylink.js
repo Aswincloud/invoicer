@@ -3,7 +3,8 @@
  * For the customer who asks on Instagram "how do I pay you?". Until now the
  * answer was "GPay me", which leaves no record. This page takes four fields -
  * name, mobile, what for, how much - and hands off to Razorpay. What lands in
- * Aswin's account is an ordinary PAID invoice, numbered PL-<year>-<n>, with the
+ * Aswin's account is an ordinary PAID invoice, numbered like every other one on
+ * the account (INV-AC-<year>-<nnnn>, drawn from numbering.js), with the
  * same receipt email, owner email and WhatsApp confirmation as any other.
  *
  * ── The design rule: nothing is stored until the money has moved ────────────
@@ -32,6 +33,7 @@ import { json, bad, uid, now, randToken } from "./lib.js";
 import { createOrder, publicKeyId, paymentsConfigured } from "./razorpay.js";
 import { toE164 } from "./wa.js";
 import { defaultBusiness } from "./business.js";
+import { freeInvoiceNumber } from "./numbering.js";
 import { esc } from "./invoice-html.js";
 
 export const PAYLINK_SOURCE = "paylink";
@@ -200,45 +202,53 @@ export async function invoiceFromPaidOrder(env, rzpOrder, payment) {
 
   const paidAt = Number(payment?.created_at) ? Number(payment.created_at) * 1000 : now();
   const d = new Date(paidAt);
-  const year = d.getFullYear();
-  // PL-<year>-<serial>: sequential per year, read from the table under the
-  // same UNIQUE-index race protection the shop path relies on.
-  const last = await env.DB.prepare(
-    "SELECT number FROM invoices WHERE user_id=? AND number LIKE ? ORDER BY number DESC LIMIT 1"
-  ).bind(user.id, `PL-${year}-%`).first();
-  const serial = last ? (parseInt(String(last.number).split("-").pop(), 10) || 0) + 1 : 1;
-  const number = `PL-${year}-${String(serial).padStart(4, "0")}`;
+  // Numbered like every other invoice on the account — the business's prefix
+  // and a random unused 4-digit serial from the pool the dashboard draws from —
+  // so a receipt born from a payment reads INV-AC-2026-5732, not PL-2026-0004.
+  // (Sequential PL- numbers were dropped on 26 Sep 2026: they told the customer
+  // how many people had paid, and the sweep now finds a missed payment by asking
+  // Razorpay rather than by spotting a gap in the series.)
+  const prefix = biz.def_prefix || (await defaultBusiness(env, user.id))?.def_prefix || "";
 
   const id = uid(); const t = now();
   const what = String(notes.what || "").trim().slice(0, 160) || "Payment";
-  try {
-    await env.DB.prepare(
-      `INSERT INTO invoices (id,user_id,business_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
-         discount_pct,shipping,shipping_mode,round_off,show_pay_qr,status,notes,client_name,client_email,
-         client_phone,client_addr,client_gst,total,paid_at,rzp_order_id,rzp_amount,rzp_payment_id,
-         share_token,source,source_ref,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).bind(
-      id, user.id, biz.id, number, d.toISOString().slice(0, 10), "", "₹", "none", 0,
-      0, 0, "", 0, 0, "PAID", "Paid online via the pay link.",
-      String(notes.name || "").slice(0, 80), String(notes.email || "").slice(0, 120),
-      toE164(notes.phone) || "", String(notes.address || "").slice(0, 250), "", total, paidAt, rzpOrder.id, paise, payment?.id || null,
-      randToken(16), PAYLINK_SOURCE, rzpOrder.id, t, t,
-    ).run();
-    await env.DB.prepare(
-      "INSERT INTO line_items (id,invoice_id,pos,description,qty,rate) VALUES (?,?,?,?,?,?)"
-    ).bind(uid(), id, 0, what, 1, total).run();
-  } catch (e) {
-    if (/UNIQUE|constraint/i.test(String(e?.message || e))) {
+  // Two UNIQUE indexes can reject the insert: source_ref (someone else raised
+  // this order between our pre-check and now — theirs stands, we send nothing)
+  // and (user, number) (two invoices drew the same random serial in the same
+  // instant — draw again). Three draws is far more than the odds need.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const number = await freeInvoiceNumber(env, user.id, prefix);
+    if (!number) { console.error("paylink: no free invoice number this year", prefix); return null; }
+    try {
+      await env.DB.prepare(
+        `INSERT INTO invoices (id,user_id,business_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
+           discount_pct,shipping,shipping_mode,round_off,show_pay_qr,status,notes,client_name,client_email,
+           client_phone,client_addr,client_gst,total,paid_at,rzp_order_id,rzp_amount,rzp_payment_id,
+           share_token,source,source_ref,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      ).bind(
+        id, user.id, biz.id, number, d.toISOString().slice(0, 10), "", "₹", "none", 0,
+        0, 0, "", 0, 0, "PAID", "Paid online via the pay link.",
+        String(notes.name || "").slice(0, 80), String(notes.email || "").slice(0, 120),
+        toE164(notes.phone) || "", String(notes.address || "").slice(0, 250), "", total, paidAt, rzpOrder.id, paise, payment?.id || null,
+        randToken(16), PAYLINK_SOURCE, rzpOrder.id, t, t,
+      ).run();
+      await env.DB.prepare(
+        "INSERT INTO line_items (id,invoice_id,pos,description,qty,rate) VALUES (?,?,?,?,?,?)"
+      ).bind(uid(), id, 0, what, 1, total).run();
+    } catch (e) {
+      if (!/UNIQUE|constraint/i.test(String(e?.message || e))) throw e;
       const won = await env.DB.prepare(
         `SELECT i.*, u.email AS owner_email, b.biz_name FROM invoices i
            JOIN users u ON u.id = i.user_id LEFT JOIN businesses b ON b.id = i.business_id
           WHERE i.source_ref = ?`).bind(rzpOrder.id).first();
-      return won ? { inv: won, created: false } : null;
+      if (won) return { inv: won, created: false };
+      console.warn("paylink: invoice number collided, drawing again", number);
+      continue;
     }
-    throw e;
+    console.log(JSON.stringify({ msg: "paylink invoice created", number, total, order: rzpOrder.id }));
+    break;
   }
-  console.log(JSON.stringify({ msg: "paylink invoice created", number, total, order: rzpOrder.id }));
   const inv = await env.DB.prepare(
     `SELECT i.*, u.email AS owner_email, b.biz_name FROM invoices i
        JOIN users u ON u.id = i.user_id LEFT JOIN businesses b ON b.id = i.business_id
