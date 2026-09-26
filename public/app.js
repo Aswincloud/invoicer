@@ -322,13 +322,24 @@ const ALL_FIELDS = [...BIZ_FIELDS,"clName","clEmail","clPhone","clAddr","clGst",
 // ── money helpers ────────────────────────────────────────────────
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
 function fmt(n){
-  // Indian grouping for ₹, western otherwise — purely presentational.
-  const cur = $("currency").value;
+  // Indian grouping for ₹, western otherwise — purely presentational. The
+  // symbol is free text from the currency box and every fmt() result lands in
+  // innerHTML, so it is escaped here, once, rather than at fifteen call sites.
+  const cur = esc($("currency").value);
   const opts = {minimumFractionDigits:2, maximumFractionDigits:2};
   const loc = cur === "₹" ? "en-IN" : "en-US";
   return (cur ? cur + " " : "") + n.toLocaleString(loc, opts);
 }
 const esc = (s) => (s||"").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// A stored logo/signature becomes an <img src>. Only two shapes are allowed
+// through — an https URL, or a base64 image data URL rebuilt from its parts —
+// so nothing else that found its way into localStorage or a profile can.
+function safeImgSrc(u){
+  u = String(u||"");
+  if(/^https:\/\//i.test(u)){ try{ return new URL(u).href; }catch(e){ return ""; } }
+  const m = u.match(/^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,([A-Za-z0-9+/=\s]+)$/i);
+  return m ? "data:image/" + m[1].toLowerCase() + ";base64," + m[2].replace(/\s+/g,"") : "";
+}
 
 // ── line items ───────────────────────────────────────────────────
 function itemRow(desc="",qty="1",rate=""){
@@ -679,7 +690,7 @@ function render(){
   ${(t.disc||t.shipping||t.packaging)&&t.taxRows.length?`<tr><td>Taxable value</td><td class="r">${fmt(t.taxable)}</td></tr>`:""}
   ${taxHtml}
   ${showRound(t)?`<tr><td>Round off</td><td class="r">${t.round<0?"– ":"+ "}${fmt(Math.abs(t.round))}</td></tr>`:""}
-  <tr class="grand"><td>Total ${cur?`(${cur})`:""}</td><td class="r">${fmt(t.total)}</td></tr>
+  <tr class="grand"><td>Total ${cur?`(${esc(cur)})`:""}</td><td class="r">${fmt(t.total)}</td></tr>
 </table></div>
 
 ${words?`<div class="pwords"><div class="lbl">Amount in words</div><p>${esc(words)}</p></div>`:""}
@@ -802,7 +813,8 @@ function syncLogoUI(){
    ["setLogoPreview","setLogoPlaceholder","setLogoClear"]].forEach(([pv,ph,cl])=>{
     const img=$(pv); if(!img) return;
     const place=$(ph), clr=$(cl);
-    if(BIZ_LOGO){ img.src=BIZ_LOGO; img.hidden=false; place.hidden=true; clr.hidden=false; }
+    const src = safeImgSrc(BIZ_LOGO);
+    if(src){ img.src=src; img.hidden=false; place.hidden=true; clr.hidden=false; }
     else { img.hidden=true; place.hidden=false; clr.hidden=true; }
   });
 }
@@ -1193,7 +1205,7 @@ function loadBiz(){
   try{
     const d = JSON.parse(localStorage.getItem(BIZ_KEY)||"{}");
     BIZ_FIELDS.forEach(f => { if(d[f]!=null) $(f).value = d[f]; });
-    if(typeof d.bizLogo==="string") BIZ_LOGO = d.bizLogo;
+    if(typeof d.bizLogo==="string") BIZ_LOGO = safeImgSrc(d.bizLogo);
     if(typeof d.qrUrl==="string") $("bizQrUrl").value = d.qrUrl;
     if(typeof d.qrCaption==="string") $("bizQrCaption").value = d.qrCaption;
     if(typeof d.bizSign==="string") BIZ_SIGN = d.bizSign;
@@ -1270,7 +1282,7 @@ function applyBiz(id){
   ACTIVE_BIZ = id;
 
   BIZ_FIELDS.forEach(f => { $(f).value = b.biz[f] || ""; });
-  BIZ_LOGO = b.biz.bizLogo || "";
+  BIZ_LOGO = safeImgSrc(b.biz.bizLogo);
   BIZ_SIGN = b.biz.bizSign || "";
   RECEIPT_LOGO = b.biz.receiptLogo || "";
   $("bizQrUrl").value = b.biz.qrUrl || "";
@@ -2272,7 +2284,7 @@ async function refreshMe(){
     // An account with no businesses should not exist after migration 0010, but
     // falling back to the flat profile beats blanking somebody's letterhead.
     BIZ_FIELDS.forEach(f=>{ if(ME.biz[f]) $(f).value=ME.biz[f]; });
-    if(typeof ME.biz.bizLogo==="string" && ME.biz.bizLogo) BIZ_LOGO=ME.biz.bizLogo;
+    if(typeof ME.biz.bizLogo==="string" && ME.biz.bizLogo) BIZ_LOGO=safeImgSrc(ME.biz.bizLogo);
     if(typeof ME.biz.bizSign==="string") BIZ_SIGN=ME.biz.bizSign;
     saveBiz(); syncLogoUI(); syncSignUI();
     applyDefaults(ME.defaults);

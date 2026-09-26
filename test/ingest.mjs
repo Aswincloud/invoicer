@@ -194,13 +194,14 @@ function envWith(opts = {}, over = {}) {
   const env = { ...ENV, ...over, DB: makeDB(opts), _sent: sent, _wa: wa };
   globalThis.fetch = async (url, init) => {
     const u = String(url);
-    if (u.includes("resend.com")) {
+    const host = new URL(u).hostname;
+    if (host === "api.resend.com") {
       sent.push(JSON.parse(init.body));
       return new Response(JSON.stringify({ id: "email-" + sent.length }), { status: 200 });
     }
     // Meta's Cloud API. Captures the exact template payload; a test can make it
     // refuse by setting env._waFail to Meta's error message.
-    if (u.includes("graph.facebook.com")) {
+    if (host === "graph.facebook.com") {
       const body = JSON.parse(init.body);
       wa.push({ url: u, body, auth: init.headers?.Authorization || "" });
       if (env._waFail) {

@@ -106,7 +106,7 @@ check("shop link came through", printsInv.qr_url === "https://3d-prints.aswinclo
 const printsHtml = renderInvoiceEmail(printsInv, ITEMS, { qrSrc: "cid:orderqr@invoicer" });
 check("email shows the order block", printsHtml.includes("Order online"));
 check("email shows the caption", printsHtml.includes("Scan for more prints"));
-check("email links the shop", printsHtml.includes("https://3d-prints.aswincloud.com"));
+check("email links the shop", /href="https:\/\/3d-prints\.aswincloud\.com"/.test(printsHtml));
 check("email references the CID image", printsHtml.includes("cid:orderqr@invoicer"));
 
 const qr = qrAttachment(printsInv);
