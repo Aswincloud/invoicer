@@ -285,7 +285,7 @@ export async function payLinkPage(env) {
   .opt{font-weight:400;color:#7a857a}
   button{width:100%;margin-top:18px;font:inherit;font-weight:700;font-size:16px;padding:14px;border:0;border-radius:11px;background:#2f8f5b;color:#fff;cursor:pointer}
   button:disabled{opacity:.6;cursor:default}
-  .msg{min-height:20px;margin-top:10px;font-size:14px;color:#5f6b5c}.msg.err{color:#b42318}.msg.ok{color:#166534}
+  .msg{min-height:20px;margin-top:10px;font-size:14px;color:#5f6b5c}.msg.err{color:#b42318}.msg.ok{color:#166534}.msg a.receipt{display:inline-block;margin-top:6px;color:#166534;font-weight:600}
   .secure{display:flex;gap:10px;align-items:center;margin-top:16px;font-size:12px;color:#7a857a}
   .secure img{height:18px}
   .fine{margin-top:16px;font-size:12px;color:#7a857a;text-align:center}
@@ -333,8 +333,17 @@ ${site ? `<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" as
     var rzp=new Razorpay({key:o.keyId,order_id:o.orderId,amount:o.amount,currency:'INR',name:o.business||'${esc(bizName)}',
       description:f.what.value.slice(0,80),prefill:o.prefill,notes:{ref:o.ref},
       modal:{ondismiss:function(){reset();say('')}},
-      handler:function(){ btn.textContent='Paid ✓'; var to=[f.phone.value&&'WhatsApp',f.email.value&&'email'].filter(Boolean).join(' and ');
-        say('Payment received — thank you!'+(to?' Your receipt is on its way by '+to+'.':''),'ok'); f.querySelectorAll('input,textarea').forEach(function(i){i.disabled=true}); }});
+      handler:function(resp){ btn.textContent='Paid ✓'; f.querySelectorAll('input,textarea').forEach(function(i){i.disabled=true});
+        var to=[f.phone.value&&'WhatsApp',f.email.value&&'email'].filter(Boolean).join(' and ');
+        say('Payment received — thank you!'+(to?' Your receipt is on its way by '+to+'.':''),'ok');
+        // Razorpay's webhook raises the receipt a moment after this fires. Ask for
+        // its link a few times; if it is slow, the message above already covers it.
+        var q=JSON.stringify({razorpay_order_id:resp.razorpay_order_id,razorpay_payment_id:resp.razorpay_payment_id,razorpay_signature:resp.razorpay_signature}), tries=0;
+        (function look(){ fetch('/api/pay/receipt',{method:'POST',headers:{'content-type':'application/json'},body:q})
+          .then(function(r){return r.ok?r.json():null}).then(function(c){
+            if(c&&c.ready&&c.pdf){ var a=document.createElement('a'); a.href=c.pdf; a.className='receipt'; a.textContent='Download your receipt'+(c.number?' · '+c.number:''); msg.appendChild(document.createElement('br')); msg.appendChild(a); return; }
+            if(++tries<12) setTimeout(look,2500); })
+          .catch(function(){ if(++tries<12) setTimeout(look,2500); }); })(); }});
     rzp.on('payment.failed',function(e){ say((e&&e.error&&e.error.description)||'Payment failed. Please try again.','err'); reset(); });
     rzp.open(); btn.textContent=was;
   });

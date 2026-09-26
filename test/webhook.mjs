@@ -12,7 +12,7 @@
 //      the same receipts.
 //
 //   node test/webhook.mjs
-import { razorpayWebhook, reconcilePayLinkOrders, sweepPayLinks } from "../src/pay.js";
+import { razorpayWebhook, reconcilePayLinkOrders, sweepPayLinks, payLinkReceipt } from "../src/pay.js";
 import { sendPaidConfirmation } from "../src/ingest.js";
 import { hmacHex } from "../src/lib.js";
 
@@ -89,6 +89,9 @@ function makeDB({ invoices = [] } = {}) {
       db.invoices.push(row); return { meta: { changes: 1 } };
     }
     if (s.startsWith("INSERT INTO line_items")) { db.line_items.push({ id: a[0], invoice_id: a[1], pos: a[2], description: a[3], qty: a[4], rate: a[5] }); return { meta: { changes: 1 } }; }
+    if (s.startsWith("SELECT number, share_token FROM invoices WHERE source_ref=? AND source=?")) {
+      const i = db.invoices.find((x) => x.source_ref === a[0] && x.source === a[1]); return { first: i ? { number: i.number, share_token: i.share_token } : null };
+    }
     if (s.startsWith("SELECT id FROM invoices WHERE source_ref=?")) {
       // hideOnce: the pre-check misses a row that exists — the race where a
       // webhook lands between reconcile's check and its insert.
@@ -317,6 +320,26 @@ section("PAYLINK_BUSINESS unset falls back to the default business");
   await webhook(env, PAID_EVENT(ORDER("order_D2"), PAYMENT("order_D2")));
   ok("billed as the default business", env.DB._db.invoices[0]?.business_id === "b-1");
   ok("and the WhatsApp names it", env._wa[0]?.template?.components?.find((c) => c.type === "body")?.parameters?.[4]?.text === "AswinPrints");
+}
+
+section("receipt link: the page asks, read-only, with Razorpay's signed result");
+{
+  const env = envWith({ razorpayOrders: [ORDER("order_r1")], razorpayPayments: { order_r1: [PAYMENT("order_r1", "pay_r1")] } }, { PAY_ENABLED: "true" });
+  const sig = await hmacHex("order_r1|pay_r1", ENV.RAZORPAY_KEY_SECRET);
+  const ask = async (o, p, s) => read(await payLinkReceipt(env, { razorpay_order_id: o, razorpay_payment_id: p, razorpay_signature: s }));
+  let [st, body] = await ask("order_r1", "pay_r1", sig);
+  ok("before the webhook: 200 not ready, nothing written, Razorpay not called", st === 200 && body.ready === false && env.DB._db.invoices.length === 0 && env._rzp.length === 0, JSON.stringify(body));
+  await webhook(env, PAID_EVENT(ORDER("order_r1"), PAYMENT("order_r1", "pay_r1")), { eventId: "evt_r1" });
+  [st, body] = await ask("order_r1", "pay_r1", sig);
+  const tok = env.DB._db.invoices[0]?.share_token;
+  ok("after the webhook: ready, with the receipt number and its PDF link", st === 200 && body.ready === true && body.number === "PL-2026-0001" && !!tok && body.pdf === `${ENV.APP_BASE_URL}/i/${tok}.pdf` && body.link === `${ENV.APP_BASE_URL}/i/${tok}`, JSON.stringify(body));
+  ok("asking sent nothing more", env._sent.length === 2 && env._wa.length === 1 && env._rzp.length === 0);
+  [st] = await ask("order_r1", "pay_r1", "deadbeef".repeat(8)); ok("forged signature: 400", st === 400, String(st));
+  [st] = await ask("order_r1", "pay_other", await hmacHex("order_r1|pay_other", ENV.RAZORPAY_KEY_SECRET));
+  ok("a signature for another payment id is still Razorpay's word for this order: ready", st === 200);
+  [st] = await read(await payLinkReceipt(env, {})); ok("empty body: 400", st === 400, String(st));
+  [st] = await read(await payLinkReceipt(envWith({}, { PAY_ENABLED: "true", PAYLINK_ENABLED: "false" }), { razorpay_order_id: "order_r1", razorpay_payment_id: "pay_r1", razorpay_signature: sig }));
+  ok("pay links off: 503", st === 503, String(st));
 }
 
 section("cron sweep: the missed payment is raised with nobody signed in");

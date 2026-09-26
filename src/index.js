@@ -16,7 +16,7 @@ import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
 } from "./pay.js";
-import { sharePdf, sweepPayLinks } from "./pay.js";
+import { sharePdf, sweepPayLinks, payLinkReceipt } from "./pay.js";
 import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor } from "./wa.js";
 import { maySend } from "./access.js";
 import { payLinkPage, startPayLink } from "./paylink.js";
@@ -126,8 +126,10 @@ async function api(request, env, url, ctx) {
   // the amount is recomputed server-side regardless of what they send.
   // The pay-me form. Creates a Razorpay order and nothing else; the invoice is
   // born in the webhook when the order is paid (or in the half-hourly sweep,
-  // should a delivery never arrive).
+  // should a delivery never arrive). /receipt is the page asking, with Razorpay's
+  // signed checkout result, where that invoice's PDF is once the webhook made it.
   if (p === "/api/pay/start" && m === "POST") return startPayLink(request, env, body);
+  if (p === "/api/pay/receipt" && m === "POST") return payLinkReceipt(env, body);
 
   let pm;
   if ((pm = p.match(/^\/api\/pay\/([^/]+)\/order$/)) && m === "POST")
