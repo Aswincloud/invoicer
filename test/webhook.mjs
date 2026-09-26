@@ -315,7 +315,7 @@ section("cron sweep: the missed payment is raised with nobody signed in");
 {
   const missed = ORDER("order_cron", { receipt: "PL-CR01", notes: { ...ORDER("x").notes, ref: "PL-CR01", what: "Nameplate" } });
   const env = envWith({ razorpayOrders: [missed, ORDER("order_shop2", { notes: { source: "shop" } })],
-                        razorpayPayments: { order_cron: [PAYMENT("order_cron", "pay_cron")] } }, { PAYLINK_ENABLED: "true" });
+                        razorpayPayments: { order_cron: [PAYMENT("order_cron", "pay_cron")] } }, { PAY_ENABLED: "true" });
   const r = await sweepPayLinks(env);
   ok("one invoice raised, from the cron, with no user", r.ok && r.created?.length === 1 && env.DB._db.invoices.length === 1, JSON.stringify(r));
   ok("owner and customer emailed, customer WhatsApped", env._sent.length === 2 && env._wa.length === 1, `${env._sent.length} ${env._wa.length}`);
@@ -325,11 +325,11 @@ section("cron sweep: the missed payment is raised with nobody signed in");
 
 section("cron sweep: off when pay links or Razorpay are off, and never throws");
 {
-  const off = await sweepPayLinks(envWith({}, { PAYLINK_ENABLED: "false" }));
+  const off = await sweepPayLinks(envWith({}, { PAY_ENABLED: "true", PAYLINK_ENABLED: "false" }));
   ok("pay links disabled: skipped, Razorpay never asked", off.skipped === true);
-  const noRzp = await sweepPayLinks(envWith({}, { PAYLINK_ENABLED: "true", RAZORPAY_KEY_ID: "" }));
+  const noRzp = await sweepPayLinks(envWith({}, { PAY_ENABLED: "true", RAZORPAY_KEY_ID: "" }));
   ok("Razorpay unconfigured: skipped", noRzp.skipped === true);
-  const broken = envWith({}, { PAYLINK_ENABLED: "true" });
+  const broken = envWith({}, { PAY_ENABLED: "true" });
   const realFetch = globalThis.fetch; globalThis.fetch = async () => { throw new Error("network down"); };
   const r = await sweepPayLinks(broken); globalThis.fetch = realFetch;
   ok("a Razorpay outage is reported, not thrown", r.ok === false && /down|refused/i.test(r.error || ""), JSON.stringify(r));
