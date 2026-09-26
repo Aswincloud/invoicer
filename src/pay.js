@@ -12,14 +12,12 @@
 //
 // ── Who marks an invoice paid ────────────────────────────────────────────────
 //
-// Razorpay's word, and nothing else. For a shared invoice the checkout callback
-// is signature-verified and worth having — it tells the client instantly that
-// their money arrived — but it is delivered by the browser that just paid, so it
-// only records the payment id; the server-to-server order.paid event writes PAID.
-// For a /pay payment (confirmPayLink) the callback DOES raise the invoice, but
-// only after reading the order and payment back from Razorpay's API and finding
-// them paid and captured — the same authority the webhook carries, fetched
-// rather than delivered. The webhook and the half-hourly sweep remain behind it.
+// The WEBHOOK, and nothing else. The checkout callback is signature-verified and
+// worth having — it tells the client instantly that their money arrived — but it
+// is delivered by the browser that just paid, so it only records the payment id.
+// Razorpay's server-to-server order.paid event is the one that writes PAID.
+// A /pay invoice is likewise born from order.paid — or from the half-hourly
+// sweep (sweepPayLinks) should a delivery never arrive.
 //
 // ── Auth ─────────────────────────────────────────────────────────────────────
 //
@@ -38,8 +36,6 @@ import {
   createOrder, paymentsConfigured, publicKeyId,
   verifyCallbackSignature, verifyWebhookSignature,
   listOrders, orderPayments,
-  fetchOrder,
-  fetchPayment,
 } from "./razorpay.js";
 import { sendPaidConfirmation } from "./ingest.js";
 import { prettyE164 } from "./wa.js";
@@ -503,62 +499,6 @@ export async function verifyPayCallback(env, token, body) {
   return json({ ok: true, status: loaded.inv.status });
 }
 
-// ── POST /api/pay/confirm ────────────────────────────────────────────────────
-//
-// The /pay form's instant path. Razorpay Checkout hands the browser
-// {order_id, payment_id, signature} the moment a payment succeeds, and the page
-// posts them here. Unlike verifyPayCallback this raises the invoice — but not on
-// the browser's word. The signature (KEY_SECRET) proves the triple came from
-// Razorpay; then the order and the payment are read back from Razorpay's API and
-// must say paid and captured before anything is written.
-//
-// Three paths now lead to the one invoice, all idempotent on source_ref: this
-// one (seconds, needs the customer's browser to stay open a moment), the
-// order.paid webhook (seconds, when Razorpay delivers it — on 2026-09-26 it did
-// not), and the half-hourly sweep (never missed). Whichever writes the row sends
-// the receipts; the others find it and send nothing.
-export async function confirmPayLink(env, body, ctx) {
-  if (!paylinkEnabled(env)) return bad("Online payment is not available right now.", 503);
-  const orderId = String(body?.razorpay_order_id || "").slice(0, 100);
-  const paymentId = String(body?.razorpay_payment_id || "").slice(0, 100);
-  const signature = String(body?.razorpay_signature || "").slice(0, 200);
-  if (!orderId || !paymentId || !signature) return bad("missing payment details", 400);
-  if (!(await verifyCallbackSignature(env, { orderId, paymentId, signature }))) {
-    console.error("pay-link confirm signature mismatch", { orderId, paymentId });
-    return bad("payment could not be verified", 400);
-  }
-
-  let o, p;
-  try {
-    [o, p] = await Promise.all([fetchOrder(env, orderId), fetchPayment(env, paymentId)]);
-  } catch (e) {
-    o = { ok: false, status: 0, error: String(e?.message || e) };
-  }
-  if (!o.ok) {
-    // Nothing is lost: the webhook or the sweep raises it once Razorpay is back.
-    console.error("pay-link confirm: Razorpay read-back failed", o.status, o.error || "");
-    return json({ error: "Razorpay could not be reached; your receipt will follow shortly." }, 502);
-  }
-  const order = o.order;
-  if (!isPayLinkOrder(order)) return bad("payment could not be verified", 400);
-  const payment = p.ok && p.payment?.order_id === orderId ? p.payment : null;
-  // Authorised but not yet captured, or Razorpay still settling: not ours to
-  // decide. The webhook or the sweep finishes it once Razorpay says paid.
-  if (order.status !== "paid" || !payment || payment.status !== "captured") {
-    return json({ ok: false, pending: true }, 202);
-  }
-
-  const made = await invoiceFromPaidOrder(env, order, payment);
-  if (!made?.inv) return json({ ok: false, pending: true }, 202);
-  const inv = made.inv;
-  if (made.created) {
-    // The customer is looking at the page: answer now, send behind the response.
-    const sends = notifyPaid(env, inv, payment, { what: order.notes?.what });
-    if (ctx?.waitUntil) ctx.waitUntil(sends); else await sends;
-  }
-  return json({ ok: true, number: inv.number, link: inv.share_token ? shareUrl(env, inv.share_token) : "" });
-}
-
 // ── POST /api/webhook/razorpay ───────────────────────────────────────────────
 //
 // Called with the raw Request, before any body parsing: the HMAC covers the exact
@@ -751,36 +691,21 @@ async function notifyPaid(env, inv, payment, { what = "" } = {}) {
   return { whatsapp };
 }
 
-// ── POST /api/paylink/reconcile (session-gated, owner only) ─────────────────
+// ── Reconciliation: pay-link payments whose webhook never arrived ────────────
 //
-// "Did Razorpay take money I have no invoice for?" The pay-link design creates
-// the invoice from the order.paid WEBHOOK and nowhere else — so a webhook that
-// never arrives (not configured for this Worker, a signing-secret mismatch, a
-// delivery Razorpay gave up on) means a customer who paid, saw "payment
-// received", and got no receipt, no email, no WhatsApp, and no row here. That
-// happened on 2026-09-26. This is the recovery: ask Razorpay for its recent
-// orders, and for every PAID pay-link order without an invoice, do exactly what
-// the webhook would have done — invoiceFromPaidOrder, then notifyPaid.
+// "Did Razorpay take money I have no invoice for?" A /pay invoice is created
+// from the order.paid WEBHOOK — so a delivery that never arrives means a
+// customer who paid, saw "payment received", and got no receipt, no email, no
+// WhatsApp, and no row here. That happened from 23 to 26 Sep 2026: Cloudflare's
+// Bot Fight Mode challenged every request from Razorpay-Webhook/v1, so the
+// Worker never saw them. This asks Razorpay for its recent orders and, for every
+// PAID pay-link order without an invoice, does exactly what the webhook would
+// have done — invoiceFromPaidOrder, then notifyPaid.
 //
 // Idempotent for the same reason the webhook is: source_ref (the Razorpay order
-// id) is UNIQUE, and the pre-check skips anything already invoiced. Owner only,
-// because it writes into the owner's books; the session gate has already
-// authenticated, this checks WHO.
-export async function reconcilePayLinks(env, user) {
-  const ownerEmail = String(env.INVOICE_OWNER_EMAIL || "").trim().toLowerCase();
-  if (!ownerEmail || String(user?.email || "").trim().toLowerCase() !== ownerEmail) {
-    return bad("forbidden", 403);
-  }
-  if (!paymentsConfigured(env)) return bad("Razorpay is not configured.", 503);
-
-  const r = await reconcilePayLinkOrders(env);
-  if (!r.ok) return json({ error: r.error }, 502);
-  return json(r);
-}
-
-// The work behind the button, shared with the half-hourly cron (see
-// sweepPayLinks). Returns a plain summary rather than a Response so both callers
-// can shape it: { ok, checked, known, created } or { ok: false, error }.
+// id) is UNIQUE, and the pre-check skips anything already invoiced. Run only by
+// the half-hourly cron (sweepPayLinks): no button, nothing for anyone to
+// remember. Returns { ok, checked, known, created } or { ok: false, error }.
 export async function reconcilePayLinkOrders(env) {
   const listed = await listOrders(env, { count: 50 });
   if (!listed.ok) return { ok: false, error: `Razorpay refused: ${listed.error || listed.status}` };
@@ -801,8 +726,7 @@ export async function reconcilePayLinkOrders(env) {
     // the receipts, so this run has nothing to send. Counted as known.
     if (!made.created) { known++; continue; }
     const inv = made.inv;
-    // Awaited, not waitUntil: the owner pressed a button and wants the answer,
-    // and the cron's waitUntil needs the promise to include the sends.
+    // Awaited, not waitUntil: the cron's waitUntil must cover the sends too.
     const notes = await notifyPaid(env, inv, payment, { what: order.notes?.what });
     created.push({ number: inv.number, total: inv.total, ref: order.receipt || "",
                    whatsapp: notes.whatsapp, email: inv.client_email ? "sent" : "no address" });

@@ -16,7 +16,7 @@ import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
 } from "./pay.js";
-import { sharePdf, reconcilePayLinks, sweepPayLinks, confirmPayLink } from "./pay.js";
+import { sharePdf, sweepPayLinks } from "./pay.js";
 import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor } from "./wa.js";
 import { maySend } from "./access.js";
 import { payLinkPage, startPayLink } from "./paylink.js";
@@ -124,12 +124,10 @@ async function api(request, env, url, ctx) {
   // Above the session gate: the person paying an invoice is the client, who has
   // no account here. The share token in the path is what authorises them, and
   // the amount is recomputed server-side regardless of what they send.
-  // The pay-me form. /start creates a Razorpay order and nothing else. The
-  // invoice is born once Razorpay says the order is paid: from /confirm (the
-  // browser's signed checkout result, read back from Razorpay), from the
-  // order.paid webhook, or from the half-hourly sweep — whichever comes first.
+  // The pay-me form. Creates a Razorpay order and nothing else; the invoice is
+  // born in the webhook when the order is paid (or in the half-hourly sweep,
+  // should a delivery never arrive).
   if (p === "/api/pay/start" && m === "POST") return startPayLink(request, env, body);
-  if (p === "/api/pay/confirm" && m === "POST") return confirmPayLink(env, body, ctx);
 
   let pm;
   if ((pm = p.match(/^\/api\/pay\/([^/]+)\/order$/)) && m === "POST")
@@ -166,9 +164,6 @@ async function api(request, env, url, ctx) {
   }
   if (p === "/api/invoices" && m === "GET")  return listInvoices(env, user);
   if (p === "/api/invoices" && m === "POST") return createInvoice(env, user, body);
-  // Owner only (checked inside): recover pay-link payments whose webhook never
-  // arrived. See reconcilePayLinks in src/pay.js.
-  if (p === "/api/paylink/reconcile" && m === "POST") return reconcilePayLinks(env, user);
   if (p === "/api/print"    && m === "POST") return printReceipt(env, user, body);
 
   // Above the /:id route below, or "next-number" is parsed as an invoice id.

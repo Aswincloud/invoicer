@@ -70,20 +70,13 @@ export async function fetchPayment(env, paymentId) {
 }
 
 // ── reading back ──────────────────────────────────────────────────
-// For reconciliation (reconcilePayLinks in pay.js): which orders Razorpay holds
+// For reconciliation (reconcilePayLinkOrders in pay.js): which orders Razorpay holds
 // and which payment settled each. Read-only. Razorpay pages with `count` ≤ 100.
 export async function listOrders(env, { count = 25 } = {}) {
   const n = Math.min(100, Math.max(1, count | 0));
   const r = await fetch(`${API}/orders?count=${n}`, { headers: { Authorization: authHeader(env) } });
   const body = await r.json().catch(() => ({}));
   return r.ok ? { ok: true, orders: body.items || [] }
-              : { ok: false, status: r.status, error: body?.error?.description || "" };
-}
-
-export async function fetchOrder(env, orderId) {
-  const r = await fetch(`${API}/orders/${encodeURIComponent(orderId)}`, { headers: { Authorization: authHeader(env) } });
-  const body = await r.json().catch(() => ({}));
-  return r.ok ? { ok: true, order: body }
               : { ok: false, status: r.status, error: body?.error?.description || "" };
 }
 
