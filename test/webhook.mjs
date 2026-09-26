@@ -24,8 +24,8 @@ const ok = (name, cond, detail = "") => {
 const section = (s) => console.log(`\n${s}`);
 
 const OWNER = { id: "u-1", email: "aswin@example.com" };
-const BIZ = { id: "b-1", user_id: "u-1", is_default: 1, created_at: 1, biz_name: "AswinPrints", biz_email: "hi@example.com" };
-const CLOUD = { id: "b-2", user_id: "u-1", is_default: 0, created_at: 2, biz_name: "AswinCloud", biz_email: "hello@aswincloud.com" };
+const BIZ = { id: "b-1", user_id: "u-1", is_default: 1, created_at: 1, biz_name: "AswinPrints", biz_email: "hi@example.com", def_prefix: "INV-AP" };
+const CLOUD = { id: "b-2", user_id: "u-1", is_default: 0, created_at: 2, biz_name: "AswinCloud", biz_email: "hello@aswincloud.com", def_prefix: "INV-AC" };
 const ENV = {
   INVOICE_OWNER_EMAIL: OWNER.email, RAZORPAY_KEY_ID: "rzp_test_x", RAZORPAY_KEY_SECRET: "ks",
   RAZORPAY_WEBHOOK_SECRET: "whsec", RESEND_API_KEY: "re_test", MAIL_FROM: "billing@example.com",
@@ -77,15 +77,17 @@ function makeDB({ invoices = [] } = {}) {
       const li = db.line_items.filter((l) => l.invoice_id === a[0]).sort((x, y) => x.pos - y.pos)[0];
       return { first: li ? { description: li.description } : null };
     }
-    if (s.startsWith("SELECT number FROM invoices WHERE user_id=? AND number LIKE ?")) {
-      const re = new RegExp("^" + a[1].replace(/%/g, ".*") + "$");
-      const rows = db.invoices.filter((i) => i.user_id === a[0] && re.test(i.number)).sort((x, y) => y.number.localeCompare(x.number));
-      return { first: rows[0] || null };
+    if (s.startsWith("SELECT number FROM invoices WHERE user_id=? AND status <> 'VOID'")) {
+      // hideNumbersOnce: the draw misses a number that exists — the race where
+      // another insert took it between our read and our write.
+      if (db.hideNumbersOnce) { db.hideNumbersOnce = false; return { results: [] }; }
+      return { results: db.invoices.filter((i) => i.user_id === a[0] && i.status !== "VOID").map((i) => ({ number: i.number })) };
     }
     if (s.startsWith("INSERT INTO invoices (")) {
       const cols = s.slice(s.indexOf("(") + 1, s.indexOf(")")).split(",").map((c) => c.trim());
       const row = Object.fromEntries(cols.map((c, k) => [c, a[k]]));
       if (row.source_ref && db.invoices.some((i) => i.source_ref === row.source_ref)) throw new Error("UNIQUE constraint failed: invoices.source_ref");
+      if (db.invoices.some((i) => i.user_id === row.user_id && i.number === row.number)) throw new Error("UNIQUE constraint failed: invoices.user_id, invoices.number");
       db.invoices.push(row); return { meta: { changes: 1 } };
     }
     if (s.startsWith("INSERT INTO line_items")) { db.line_items.push({ id: a[0], invoice_id: a[1], pos: a[2], description: a[3], qty: a[4], rate: a[5] }); return { meta: { changes: 1 } }; }
@@ -154,7 +156,7 @@ section("order.paid for a pay-link order raises the invoice and sends BOTH recei
   ok("200", status === 200, String(status));
   const inv = env.DB._db.invoices[0];
   ok("one invoice, PAID, from the pay link", env.DB._db.invoices.length === 1 && inv.status === "PAID" && inv.source === "paylink", JSON.stringify(inv));
-  ok("numbered PL-<year>-0001", /^PL-\d{4}-0001$/.test(inv.number), inv.number);
+  ok("numbered like the account's other invoices: the business prefix, this year, a 4-digit serial", /^INV-AC-\d{4}-\d{4}$/.test(inv.number), inv.number);
   ok("amount is Razorpay's, in rupees", inv.total === 250, String(inv.total));
   ok("the mobile is stored E.164", inv.client_phone === "919876543210", inv.client_phone);
   ok("customer email + owner email", env._sent.length === 2 && env._sent.some((m) => /raagul@/.test(JSON.stringify(m.to))), JSON.stringify(env._sent.map((m) => m.to)));
@@ -231,11 +233,11 @@ section("reconcile: the missed payment is raised once, with the same receipts");
   ok("two paid pay-link orders checked, one already known", body.checked === 2 && body.known === 1, JSON.stringify(body));
   ok("exactly one invoice created", body.created?.length === 1 && env.DB._db.invoices.length === 2, JSON.stringify(body.created));
   const made = env.DB._db.invoices.find((i) => i.source_ref === "order_missed");
-  ok("it is the missed order, PAID, numbered next", made?.status === "PAID" && made?.number === "PL-2026-0002", JSON.stringify(made));
+  ok("it is the missed order, PAID, numbered in the INV-AC series, not clashing", made?.status === "PAID" && /^INV-AC-\d{4}-\d{4}$/.test(made?.number || "") && made.number !== "PL-2026-0001", JSON.stringify(made));
   ok("its line item is what the customer paid for", env.DB._db.line_items.find((l) => l.invoice_id === made?.id)?.description === "Custom trophy");
   ok("the captured payment's id is on it", made?.rzp_payment_id === "pay_missed", String(made?.rzp_payment_id));
   ok("the customer got the WhatsApp and the emails", env._wa.length === 1 && env._sent.length === 2, `${env._wa.length} ${env._sent.length}`);
-  ok("and the response says so", body.created[0].whatsapp === "sent" && body.created[0].number === "PL-2026-0002", JSON.stringify(body.created[0]));
+  ok("and the response says so", body.created[0].whatsapp === "sent" && body.created[0].number === made?.number, JSON.stringify(body.created[0]));
   ok("the shop's order and the unpaid one were left alone", !env.DB._db.invoices.some((i) => i.source_ref === "order_shop" || i.source_ref === "order_open"));
   ok("the receipt WhatsApp says what was paid for", env._wa[0]?.template?.components?.find((c) => c.type === "body")?.parameters?.[2]?.text === "Custom trophy");
   // Run it again: nothing new.
@@ -314,6 +316,21 @@ section("the dashboard path: a receipt learns what was paid for from the line it
      && env._wa[1]?.template?.name === "order_confirmed_new", env._wa[1]?.template?.name);
 }
 
+section("a serial collision at insert time draws again instead of failing");
+{
+  // Seed a taken number; make the draw's read miss it once (the race), and make
+  // Math.random land on that serial first. The unique index rejects the insert,
+  // the code draws again, and the second draw sees the real used set.
+  const env = envWith({ invoices: [{ id: "i-taken", user_id: "u-1", business_id: "b-2", number: "INV-AC-2026-1000", status: "PAID", source: "manual", source_ref: null }] });
+  env.DB._db.hideNumbersOnce = true;
+  const realRandom = Math.random; let calls = 0; Math.random = () => (calls++ === 0 ? 0 : 0.5);
+  try { await webhook(env, PAID_EVENT(ORDER("order_coll"), PAYMENT("order_coll", "pay_coll")), { eventId: "evt_coll" }); }
+  finally { Math.random = realRandom; }
+  const made = env.DB._db.invoices.find((i) => i.source_ref === "order_coll");
+  ok("the invoice was still raised, with a different number", !!made && made.number === "INV-AC-2026-5500", JSON.stringify(made?.number));
+  ok("receipts went out once", env._sent.length === 2 && env._wa.length === 1);
+}
+
 section("PAYLINK_BUSINESS unset falls back to the default business");
 {
   const env = envWith({}, { PAYLINK_BUSINESS: "" });
@@ -332,7 +349,7 @@ section("receipt link: the page asks, read-only, with Razorpay's signed result")
   await webhook(env, PAID_EVENT(ORDER("order_r1"), PAYMENT("order_r1", "pay_r1")), { eventId: "evt_r1" });
   [st, body] = await ask("order_r1", "pay_r1", sig);
   const tok = env.DB._db.invoices[0]?.share_token;
-  ok("after the webhook: ready, with the receipt number and its PDF link", st === 200 && body.ready === true && body.number === "PL-2026-0001" && !!tok && body.pdf === `${ENV.APP_BASE_URL}/i/${tok}.pdf` && body.link === `${ENV.APP_BASE_URL}/i/${tok}`, JSON.stringify(body));
+  ok("after the webhook: ready, with the receipt number and its PDF link", st === 200 && body.ready === true && body.number === env.DB._db.invoices[0].number && !!tok && body.pdf === `${ENV.APP_BASE_URL}/i/${tok}.pdf` && body.link === `${ENV.APP_BASE_URL}/i/${tok}`, JSON.stringify(body));
   ok("asking sent nothing more", env._sent.length === 2 && env._wa.length === 1 && env._rzp.length === 0);
   [st] = await ask("order_r1", "pay_r1", "deadbeef".repeat(8)); ok("forged signature: 400", st === 400, String(st));
   [st] = await ask("order_r1", "pay_other", await hmacHex("order_r1|pay_other", ENV.RAZORPAY_KEY_SECRET));

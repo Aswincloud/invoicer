@@ -17,6 +17,7 @@ import {
   shareInvoice, shareUrl,
 } from "./pay.js";
 import { sharePdf, sweepPayLinks, payLinkReceipt } from "./pay.js";
+import { freeInvoiceNumber } from "./numbering.js";
 import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor } from "./wa.js";
 import { maySend } from "./access.js";
 import { payLinkPage, startPayLink } from "./paylink.js";
@@ -748,40 +749,20 @@ async function updateInvoice(env, user, id, b) {
   return json({ ok: true, id, total, updated: true });
 }
 
-/* A random invoice number this user is not already using.
-
-   The format stays PREFIX-YEAR-<4 digits> — the alternative, sequential
-   numbering, tells a customer how many invoices you have issued. But 4 digits is
-   9000 slots, and picking blind gave a 43% chance of a collision within 100
-   invoices: production already has two entirely unrelated invoices sharing
-   INV-AC-2026-2257 (Rs 350 paid, and Rs 25,000 unpaid).
-
-   Checking here makes a collision unlikely; the unique index in migration 0009
-   makes it impossible. */
+/* A random invoice number this user is not already using — see numbering.js.
+   The prefix is a property of the business. An explicit ?prefix= wins — that is
+   the client telling us which business is filling the form — and the account's
+   default business is the fallback for a caller that sends none. */
 async function nextInvoiceNumber(env, user, url) {
-  // The prefix is a property of the business now. An explicit ?prefix= wins —
-  // that is the client telling us which business is filling the form — and the
-  // account's default business is the fallback for a caller that sends none.
   let asked = url.searchParams.get("prefix");
   if (!asked) {
     const biz = await defaultBusiness(env, user.id);
     asked = biz ? biz.def_prefix : "";
   }
-  const prefix = String(asked || "INV").replace(/[^\w-]/g, "").slice(0, 20) || "INV";
-  const year = new Date(now()).getUTCFullYear();
-
-  const { results } = await env.DB.prepare(
-    "SELECT number FROM invoices WHERE user_id=? AND status <> 'VOID'"
-  ).bind(user.id).all();
-  const used = new Set((results || []).map((r) => r.number));
-
-  for (let i = 0; i < 40; i++) {
-    const n = `${prefix}-${year}-${Math.floor(Math.random() * 9000) + 1000}`;
-    if (!used.has(n)) return json({ number: n });
-  }
+  const n = await freeInvoiceNumber(env, user.id, asked);
   // 40 blind misses means the 9000-number space is genuinely crowded for this
   // year. Say so rather than returning a number that will be rejected on save.
-  return bad("Could not find a free invoice number — too many used this year.", 409);
+  return n ? json({ number: n }) : bad("Could not find a free invoice number — too many used this year.", 409);
 }
 
 async function loadInvoice(env, user, id) {
