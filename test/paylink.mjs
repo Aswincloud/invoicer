@@ -5,7 +5,8 @@ import { validatePayForm, isPayLinkOrder, paylinkEnabled, PAYLINK_SOURCE } from 
 let failed = 0;
 const check = (l, c, d = "") => { console.log(`${c ? "PASS" : "FAIL"}  ${l}${d ? "   " + d : ""}`); if (!c) failed++; };
 const env = { PAYLINK_MIN: "10", PAYLINK_MAX: "50000" };
-const good = { name: "Priya R", phone: "98765 43210", what: "Custom keychain x2", amount: "350" };
+const good = { name: "Priya R", phone: "98765 43210", what: "Custom keychain x2", amount: "350",
+               address: "12, 2nd Cross, Anna Nagar\nPondicherry 605005" };
 
 console.log("— accepts what a person types —");
 let v = validatePayForm(env, good);
@@ -16,6 +17,11 @@ check("₹ and commas tolerated", validatePayForm(env, { ...good, amount: "₹1,
 check("decimals rounded to paise", validatePayForm(env, { ...good, amount: "99.995" }).amountPaise === 10000);
 check("optional email accepted", validatePayForm(env, { ...good, email: "p@example.com" }).email === "p@example.com");
 check("whitespace collapsed in name", validatePayForm(env, { ...good, name: "  Priya   R " }).name === "Priya R");
+check("address keeps its line breaks", validatePayForm(env, good).address === "12, 2nd Cross, Anna Nagar\nPondicherry 605005");
+check("address: CRLF, runs of spaces and blank lines normalised",
+  validatePayForm(env, { ...good, address: "  12,  Anna   Nagar  \r\n\r\n Pondicherry  605005 \n" }).address === "12, Anna Nagar\nPondicherry 605005",
+  JSON.stringify(validatePayForm(env, { ...good, address: "  12,  Anna   Nagar  \r\n\r\n Pondicherry  605005 \n" }).address));
+check("address clamped to Razorpay's note limit", validatePayForm(env, { ...good, address: "x".repeat(400) }).address.length === 250);
 
 console.log("\n— refuses what it must —");
 check("no name", !validatePayForm(env, { ...good, name: "" }).ok);
@@ -23,6 +29,9 @@ check("one-letter name", !validatePayForm(env, { ...good, name: "P" }).ok);
 check("bad phone", !validatePayForm(env, { ...good, phone: "12345" }).ok);
 check("no phone", !validatePayForm(env, { ...good, phone: "" }).ok);
 check("no 'what'", !validatePayForm(env, { ...good, what: "" }).ok);
+check("no address", !validatePayForm(env, { ...good, address: "" }).ok);
+check("address too short to be one", !validatePayForm(env, { ...good, address: "Chennai" }).ok);
+check("address error mentions the PIN code", /PIN/.test(validatePayForm(env, { ...good, address: "" }).error));
 check("zero amount", !validatePayForm(env, { ...good, amount: "0" }).ok);
 check("negative amount", !validatePayForm(env, { ...good, amount: "-50" }).ok);
 check("non-numeric amount", !validatePayForm(env, { ...good, amount: "fifty" }).ok);
