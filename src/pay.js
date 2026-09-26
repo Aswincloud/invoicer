@@ -31,7 +31,7 @@ import { json, bad, now, randToken, sendEmail, baseUrl } from "./lib.js";
 import { computeTotals, renderInvoiceEmail, esc, fmtDate } from "./invoice-html.js";
 import { renderInvoicePdf } from "./invoice-pdf.js";
 import { BIZ_SELECT, BIZ_JOIN } from "./business.js";
-import { isPayLinkOrder, invoiceFromPaidOrder, paylinkEnabled } from "./paylink.js";
+import { isPayLinkOrder, invoiceFromPaidOrder, paylinkEnabled, PAYLINK_SOURCE } from "./paylink.js";
 import {
   createOrder, paymentsConfigured, publicKeyId,
   verifyCallbackSignature, verifyWebhookSignature,
@@ -497,6 +497,32 @@ export async function verifyPayCallback(env, token, body) {
   ).bind(paymentId, now(), loaded.inv.id).run();
 
   return json({ ok: true, status: loaded.inv.status });
+}
+
+// ── POST /api/pay/receipt ────────────────────────────────────────────────────
+//
+// "Download your receipt" on the /pay page. The receipt is raised by the
+// order.paid webhook, so the browser that just paid does not know where it
+// lives; it holds Razorpay Checkout's {order_id, payment_id, signature} and asks
+// here. Read-only: the signature (KEY_SECRET) proves the asker is the payer, the
+// order id finds the invoice, and the answer is its link — or "not yet", which
+// the page polls for a few seconds. Nothing is written and Razorpay is not
+// called; a receipt that never shows up here still arrives by WhatsApp and email.
+export async function payLinkReceipt(env, body) {
+  if (!paylinkEnabled(env)) return bad("Online payment is not available right now.", 503);
+  const orderId = String(body?.razorpay_order_id || "").slice(0, 100);
+  const paymentId = String(body?.razorpay_payment_id || "").slice(0, 100);
+  const signature = String(body?.razorpay_signature || "").slice(0, 200);
+  if (!orderId || !paymentId || !signature) return bad("missing payment details", 400);
+  if (!(await verifyCallbackSignature(env, { orderId, paymentId, signature }))) {
+    return bad("payment could not be verified", 400);
+  }
+  const inv = await env.DB.prepare(
+    "SELECT number, share_token FROM invoices WHERE source_ref=? AND source=?"
+  ).bind(orderId, PAYLINK_SOURCE).first();
+  if (!inv?.share_token) return json({ ok: true, ready: false });
+  const link = shareUrl(env, inv.share_token);
+  return json({ ok: true, ready: true, number: inv.number, link, pdf: `${link}.pdf` });
 }
 
 // ── POST /api/webhook/razorpay ───────────────────────────────────────────────
