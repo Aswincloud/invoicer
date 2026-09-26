@@ -20,6 +20,7 @@ import {
 import { sharePdf } from "./pay.js";
 import { waConfigured, toE164, prettyE164, buildTemplateMessage, sendTemplate, canSendWhatsApp, confirmedParams } from "./wa.js";
 import { maySend } from "./access.js";
+import { payLinkPage, startPayLink } from "./paylink.js";
 import {
   CARRIERS, carrierName, isCarrier, normalizeAwb, trackUrl,
   shippedParams, deliveredParams, buildShippedMessage, buildDeliveredMessage, previewText,
@@ -50,6 +51,13 @@ export default {
 
     // Public invoice link. Above the assets fallback, which would 404 it — there
     // is no /i/<token> file, the page is rendered from the database.
+    // The public "pay me" page. No token: anyone with the link may open it, and
+    // nothing is written until Razorpay confirms a payment - see src/paylink.js.
+    if ((url.pathname === "/pay" || url.pathname === "/pay/") && request.method === "GET") {
+      try { return await payLinkPage(env); }
+      catch (e) { return bad("server error: " + (e?.message || e), 500); }
+    }
+
     const share = url.pathname.match(/^\/i\/([^/]+?)(\/logo|\.pdf)?\/?$/);
     if (share && request.method === "GET") {
       try {
@@ -114,6 +122,10 @@ async function api(request, env, url, ctx) {
   // Above the session gate: the person paying an invoice is the client, who has
   // no account here. The share token in the path is what authorises them, and
   // the amount is recomputed server-side regardless of what they send.
+  // The pay-me form. Creates a Razorpay order and nothing else; the invoice is
+  // born in the webhook when the order is paid.
+  if (p === "/api/pay/start" && m === "POST") return startPayLink(request, env, body);
+
   let pm;
   if ((pm = p.match(/^\/api\/pay\/([^/]+)\/order$/)) && m === "POST")
     return createPayOrder(env, pm[1]);

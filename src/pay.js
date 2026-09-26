@@ -29,6 +29,7 @@ import { json, bad, now, randToken, sendEmail } from "./lib.js";
 import { computeTotals, renderInvoiceEmail, esc, fmtDate } from "./invoice-html.js";
 import { renderInvoicePdf } from "./invoice-pdf.js";
 import { BIZ_SELECT, BIZ_JOIN } from "./business.js";
+import { isPayLinkOrder, invoiceFromPaidOrder } from "./paylink.js";
 import {
   createOrder, paymentsConfigured, publicKeyId,
   verifyCallbackSignature, verifyWebhookSignature,
@@ -545,12 +546,27 @@ async function handleOrderPaid(env, ctx, evt, eventId) {
   const rzpOrderId = rzpOrder.id || payment.order_id;
   if (!rzpOrderId) return;
 
-  const inv = await env.DB.prepare(
+  let inv = await env.DB.prepare(
     `SELECT i.*, u.email AS owner_email, b.biz_name
        FROM invoices i JOIN users u ON u.id = i.user_id
        ${BIZ_JOIN}
       WHERE i.rzp_order_id = ?`
   ).bind(rzpOrderId).first();
+
+  if (!inv && isPayLinkOrder(rzpOrder)) {
+    // A pay-me form payment. No invoice existed until this moment, by design:
+    // the row is created here, PAID, from the order's notes and Razorpay's own
+    // amount - see src/paylink.js. Then it gets the same receipts as any other.
+    inv = await invoiceFromPaidOrder(env, rzpOrder, payment);
+    if (!inv) return;
+    if (eventId) {
+      await env.DB.prepare("UPDATE webhook_events SET invoice_id=? WHERE event_id=?")
+        .bind(inv.id, eventId).run();
+    }
+    const send = notifyPaid(env, inv, payment);
+    if (ctx?.waitUntil) ctx.waitUntil(send); else await send;
+    return;
+  }
 
   if (!inv) {
     // Expected, not an error: this account's webhook also receives order.paid
