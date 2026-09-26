@@ -49,7 +49,11 @@ export const paylinkEnabled = (env) =>
 export function validatePayForm(env, b) {
   const name = String(b?.name ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
   const what = String(b?.what ?? "").trim().replace(/\s+/g, " ").slice(0, 160);
-  const phone = toE164(b?.phone);
+  // Optional fields fail closed on SHAPE, not presence: a blank phone is fine
+  // (they simply get no WhatsApp receipt), a mistyped one is refused rather than
+  // stored as something a later send would have to guess at.
+  const phoneRaw = String(b?.phone ?? "").trim();
+  const phone = phoneRaw ? toE164(phoneRaw) : "";
   const email = String(b?.email ?? "").trim().toLowerCase().slice(0, 120);
   // Where to send it. Line breaks kept - an address is typed on several lines
   // and prints that way on the invoice. Razorpay caps a single note at 256
@@ -59,9 +63,8 @@ export function validatePayForm(env, b) {
   const amountNum = Number(String(b?.amount ?? "").replace(/[₹,\s]/g, ""));
 
   if (name.length < 2) return { ok: false, error: "Please enter your name." };
-  if (!phone) return { ok: false, error: "Please enter a valid mobile number (e.g. 98765 43210)." };
-  if (what.length < 2) return { ok: false, error: "Please say what the payment is for." };
-  if (address.length < 8) return { ok: false, error: "Please enter your delivery address, including the PIN code." };
+  if (phoneRaw && !phone) return { ok: false, error: "That mobile number does not look right (e.g. 98765 43210)." };
+  if (address && address.length < 8) return { ok: false, error: "That address looks incomplete - please include the PIN code, or leave it blank." };
   if (!Number.isFinite(amountNum) || amountNum <= 0) return { ok: false, error: "Please enter the amount in rupees." };
   if (amountNum < minRupees(env)) return { ok: false, error: `The minimum is ₹${minRupees(env)}.` };
   if (amountNum > maxRupees(env)) return { ok: false, error: `The maximum here is ₹${maxRupees(env).toLocaleString("en-IN")}. For larger amounts please ask for an invoice.` };
@@ -186,7 +189,7 @@ export async function invoiceFromPaidOrder(env, rzpOrder, payment) {
   const number = `PL-${year}-${String(serial).padStart(4, "0")}`;
 
   const id = uid(); const t = now();
-  const what = String(notes.what || "Payment").slice(0, 160);
+  const what = String(notes.what || "").trim().slice(0, 160) || "Payment";
   try {
     await env.DB.prepare(
       `INSERT INTO invoices (id,user_id,business_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
@@ -256,6 +259,7 @@ export async function payLinkPage(env) {
   .amt{position:relative}.amt input{padding-left:30px;font-size:18px;font-weight:600}
   .amt::before{content:"₹";position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#5f6b5c;font-size:18px}
   .hint{font-size:12px;color:#7a857a;margin-top:4px}
+  .opt{font-weight:400;color:#7a857a}
   button{width:100%;margin-top:18px;font:inherit;font-weight:700;font-size:16px;padding:14px;border:0;border-radius:11px;background:#2f8f5b;color:#fff;cursor:pointer}
   button:disabled{opacity:.6;cursor:default}
   .msg{min-height:20px;margin-top:10px;font-size:14px;color:#5f6b5c}.msg.err{color:#b42318}.msg.ok{color:#166534}
@@ -267,14 +271,14 @@ export async function payLinkPage(env) {
 </style></head>
 <body><div class="wrap"><div class="card">
   <h1>Pay ${esc(bizName)}</h1>
-  <p class="sub">Enter what you're paying for, where to send it, and the amount. You'll get a receipt by WhatsApp${biz && biz.biz_email ? " and email" : ""}.</p>
+  <p class="sub">Just your name and the amount are needed. Add a mobile or email if you'd like a receipt.</p>
   ${enabled ? `
   <form id="f" novalidate>
     <label for="name">Your name</label><input id="name" name="name" autocomplete="name" maxlength="80" required>
-    <label for="phone">Mobile (WhatsApp)</label><input id="phone" name="phone" type="tel" autocomplete="tel" placeholder="98765 43210" maxlength="20" required>
-    <label for="email">Email <span style="font-weight:400;color:#7a857a">(optional, for the receipt)</span></label><input id="email" name="email" type="email" autocomplete="email" maxlength="120">
-    <label for="address">Delivery address</label><textarea id="address" name="address" rows="3" autocomplete="street-address" placeholder="House / street, area, city – PIN code" maxlength="250" required></textarea>
-    <label for="what">What is this payment for?</label><input id="what" name="what" placeholder="e.g. Custom keychain, 2 pcs" maxlength="160" required>
+    <label for="phone">Mobile <span class="opt">(optional - for your WhatsApp receipt)</span></label><input id="phone" name="phone" type="tel" autocomplete="tel" placeholder="98765 43210" maxlength="20">
+    <label for="email">Email <span class="opt">(optional - for the receipt)</span></label><input id="email" name="email" type="email" autocomplete="email" maxlength="120">
+    <label for="address">Delivery address <span class="opt">(optional - if something is being sent to you)</span></label><textarea id="address" name="address" rows="3" autocomplete="street-address" placeholder="House / street, area, city – PIN code" maxlength="250"></textarea>
+    <label for="what">What is this payment for? <span class="opt">(optional)</span></label><input id="what" name="what" placeholder="e.g. Custom keychain, 2 pcs" maxlength="160">
     <label for="amount">Amount</label><div class="amt"><input id="amount" name="amount" type="number" inputmode="decimal" min="${min}" max="${max}" step="1" placeholder="350" required></div>
     <div class="hint">Between ₹${min} and ₹${max.toLocaleString("en-IN")}. For larger amounts, ask ${esc(bizName)} for an invoice.</div>
     ${site ? `<div class="cf-turnstile" data-sitekey="${esc(site)}" data-size="flexible" style="margin-top:14px"></div>` : ""}
@@ -306,7 +310,8 @@ ${site ? `<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" as
     var rzp=new Razorpay({key:o.keyId,order_id:o.orderId,amount:o.amount,currency:'INR',name:o.business||'${esc(bizName)}',
       description:f.what.value.slice(0,80),prefill:o.prefill,notes:{ref:o.ref},
       modal:{ondismiss:function(){reset();say('')}},
-      handler:function(){ btn.textContent='Paid ✓'; say('Payment received — thank you! Your receipt is on its way to your WhatsApp.','ok'); f.querySelectorAll('input,textarea').forEach(function(i){i.disabled=true}); }});
+      handler:function(){ btn.textContent='Paid ✓'; var to=[f.phone.value&&'WhatsApp',f.email.value&&'email'].filter(Boolean).join(' and ');
+        say('Payment received — thank you!'+(to?' Your receipt is on its way by '+to+'.':''),'ok'); f.querySelectorAll('input,textarea').forEach(function(i){i.disabled=true}); }});
     rzp.on('payment.failed',function(e){ say((e&&e.error&&e.error.description)||'Payment failed. Please try again.','err'); reset(); });
     rzp.open(); btn.textContent=was;
   });
