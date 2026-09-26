@@ -93,3 +93,10 @@ PAYLINK_MAX = "50000"
 #                        dashboard when creating this Worker's webhook. Signs the
 #                        webhook body. Mixing it up with KEY_SECRET is the
 #                        classic Razorpay bug; see src/razorpay.js.
+
+# Retain Worker logs in the Cloudflare dashboard. Added the day a Razorpay
+# webhook silently never arrived: without this a missed delivery leaves no
+# trace on our side and cannot be told apart from one Razorpay never sent.
+[observability]
+enabled = true
+head_sampling_rate = 1
