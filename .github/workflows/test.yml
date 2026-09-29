@@ -1,0 +1,23 @@
+# Runs the test suites on every pull request, in the merge queue, and on master.
+# The "Tests" check is required by the master ruleset, so the merge queue cannot
+# merge a PR whose suites fail. Deploys are not done here: Workers Builds
+# deploys master on push (see README → Deploying).
+name: Tests
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [master]
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
