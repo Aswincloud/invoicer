@@ -215,9 +215,14 @@ function wireBackend(){
       $("waPreview").classList.toggle("pending", !p.canSend);
       $("waTrackLink").textContent = p.trackUrl ? "Customer's tracking link: "+p.trackUrl : "";
       const s = p.shipment || {};
-      const already = WA.kind === "invoice" ? s.wa_sent_at : WA.kind === "shipped" ? s.wa_shipped_at : s.wa_delivered_at;
+      // An unpaid invoice goes out as a payment request (Pay online / Pay by UPI
+      // buttons); its "already sent" is the request's own timestamp.
+      const already = WA.kind === "invoice" ? (p.request ? s.wa_request_at : s.wa_sent_at)
+                    : WA.kind === "shipped" ? s.wa_shipped_at : s.wa_delivered_at;
+      $("waTitle").textContent = p.request ? "Request payment on WhatsApp" : TITLES[WA.kind];
       $("waSub").textContent = already
         ? "Already sent "+new Date(already).toLocaleString("en-IN")+". Sending again will send it again."
+        : p.request ? "Unpaid, so this goes as a payment request: invoice PDF plus Pay online and Pay by UPI buttons."
         : (p.pdf ? "The invoice PDF is attached to the message." : "Nothing is sent until you confirm.");
       $("waMsg").textContent = p.canSend ? "" : p.why;
       $("waSend").disabled = !p.canSend;

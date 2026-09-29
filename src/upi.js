@@ -89,3 +89,23 @@ export function payeeFromPayload(text) {
   if (!m) return "";
   try { return decodeURIComponent(m[1]); } catch { return m[1]; }
 }
+
+/* A pay link for one amount, from the business's own UPI ID: the payee, the
+   amount in rupees with two decimals, and the invoice number as the note so the
+   owner can match it in the bank app. "" when the address is not a VPA. */
+export function upiAmountUri(vpa, payeeName, amountPaise, note) {
+  const base = upiPayUri(vpa, payeeName);
+  if (!base || !(amountPaise >= 100)) return "";
+  const am = (amountPaise / 100).toFixed(2);
+  const tn = encodeURIComponent(String(note || "").slice(0, 50));
+  return `${base}&am=${am}${tn ? `&tn=${tn}` : ""}`;
+}
+
+/* The same payment, addressed to specific apps. Android opens upi://pay with its
+   own chooser; iOS has no chooser, so the page offers these as buttons. Each app
+   takes the upi://pay query string verbatim under its own scheme. */
+export function upiAppLinks(uri) {
+  const q = String(uri || "").replace(/^upi:\/\/pay\?/i, "");
+  if (!q || q === uri) return null;
+  return { gpay: `tez://upi/pay?${q}`, phonepe: `phonepe://pay?${q}`, paytm: `paytmmp://pay?${q}` };
+}

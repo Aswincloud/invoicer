@@ -61,6 +61,40 @@ export async function createOrder(env, { amountPaise, receipt, notes }) {
   return { ok: true, order: body };
 }
 
+// ── UPI QR codes ──────────────────────────────────────────────────
+// A single-use UPI QR fixed to one invoice's amount (Razorpay "QR Codes"). The
+// string behind it (image_content, upi://pay?…) is what the Pay-by-UPI page
+// hands the phone, and a payment to it arrives as the qr_code.credited webhook.
+// Not every account has QR Codes enabled; a refusal comes back { ok:false } and
+// the caller falls back to the business's own UPI ID.
+export async function createUpiQr(env, { amountPaise, name, description, closeBy, notes }) {
+  if (!Number.isInteger(amountPaise) || amountPaise < 100) {
+    return { ok: false, status: 400, error: "Amount must be at least ₹1." };
+  }
+  const r = await fetch(`${API}/payments/qr_codes`, {
+    method: "POST",
+    headers: { Authorization: authHeader(env), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "upi_qr", usage: "single_use", fixed_amount: true,
+      payment_amount: amountPaise,
+      name: String(name || "Invoice").slice(0, 60),
+      description: String(description || "").slice(0, 120),
+      close_by: Math.floor(closeBy / 1000),
+      notes: notes || {},
+    }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) return { ok: false, status: r.status, error: body?.error?.description || "" };
+  return { ok: true, qr: body };
+}
+
+export async function closeUpiQr(env, qrId) {
+  const r = await fetch(`${API}/payments/qr_codes/${encodeURIComponent(qrId)}/close`, {
+    method: "POST", headers: { Authorization: authHeader(env) },
+  });
+  return { ok: r.ok, status: r.status };
+}
+
 // ── reading back ──────────────────────────────────────────────────
 // For reconciliation (reconcilePayLinkOrders in pay.js): which orders Razorpay holds
 // and which payment settled each. Read-only. Razorpay pages with `count` ≤ 100.

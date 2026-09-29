@@ -214,6 +214,30 @@ both ends. Set `PRINT_ENABLED = "false"` to turn the whole path off.
 
 ### WhatsApp messages and shipments
 
+**Unpaid invoices go out as a payment request.** *Send invoice* on an unpaid ₹
+invoice sends **`invoice_payment_request`** (UTILITY, created 2026-09-29): the
+invoice PDF, and two URL buttons — **Pay online** (`/i/<token>`, Razorpay
+Checkout) and **Pay by UPI** (`/u/<token>`). Recorded in `wa_request_*`, apart
+from `wa_message_id`, so the paid confirmation still goes out automatically when
+the invoice is settled.
+
+`/u/<token>` hands the phone a `upi://pay` link — Android opens its UPI app
+chooser at once, iOS gets Google Pay / PhonePe / Paytm buttons, and a QR is shown
+for everything else. The link is, in order of preference:
+
+1. a **Razorpay single-use UPI QR** fixed to the invoice amount (`rzp_qr_*`,
+   migration 0021), minted on first open and reused while the amount matches and
+   it has more than 30 minutes left. Payment arrives as the **`qr_code.credited`**
+   webhook, which marks the invoice PAID (`paid_via='upi_qr'`) and sends the
+   receipts. **Subscribe the Razorpay webhook to `qr_code.credited`** and have QR
+   Codes enabled on the account, or this step is skipped;
+2. the business's **own UPI ID** (`upi_vpa`) with the amount and invoice number
+   filled in. Nothing can observe a direct transfer, so these are marked paid by
+   hand. `UPI_QR_ENABLED = "false"` forces this mode.
+
+A card payment closes the invoice's QR, and a UPI credit on an already-paid
+invoice is not applied: the owner is emailed "Paid twice — refund one".
+
 **Shop orders are messaged automatically.** Every paid order at
 3d-prints.aswincloud.com already arrives here as an invoice (`POST
 /api/ingest/order`); the ingest now stores the customer's mobile and, when

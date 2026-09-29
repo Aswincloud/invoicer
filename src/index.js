@@ -16,9 +16,9 @@ import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
 } from "./pay.js";
-import { sharePdf, sweepPayLinks, payLinkReceipt } from "./pay.js";
+import { sharePdf, sweepPayLinks, payLinkReceipt, upiPage } from "./pay.js";
 import { freeInvoiceNumber } from "./numbering.js";
-import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor } from "./wa.js";
+import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor, canRequestPayment, requestParams, buildPaymentRequestMessage } from "./wa.js";
 import { maySend } from "./access.js";
 import { payLinkPage, startPayLink } from "./paylink.js";
 import {
@@ -58,6 +58,14 @@ export default {
     // nothing is written until Razorpay confirms a payment - see src/paylink.js.
     if ((url.pathname === "/pay" || url.pathname === "/pay/") && request.method === "GET") {
       try { return await payLinkPage(env); }
+      catch (e) { return bad("server error: " + (e?.message || e), 500); }
+    }
+
+    // Pay by UPI: the second button on a WhatsApp payment request. Same token as
+    // /i/<token>; see upiPage in src/pay.js.
+    const upi = url.pathname.match(/^\/u\/([0-9a-f]{32})\/?$/);
+    if (upi && request.method === "GET") {
+      try { return await upiPage(env, upi[1], request); }
       catch (e) { return bad("server error: " + (e?.message || e), 500); }
     }
 
@@ -228,7 +236,11 @@ async function whatsappPreview(env, user, id, url) {
   });
 
   let canSend = waConfigured(env), why = canSend ? "" : "WhatsApp sending is not set up on this deployment.";
-  const gate = canSendWhatsApp(inv);
+  // An unpaid invoice's "Send invoice" is a payment request with Pay online and
+  // Pay by UPI buttons; a paid one keeps its confirmation or receipt.
+  const totalPaise = Math.round(Number(computeTotals(inv, r.items).total || 0) * 100);
+  const isRequest = kind === "invoice" && String(inv.status || "").toUpperCase() !== "PAID";
+  const gate = isRequest ? canRequestPayment(inv, totalPaise) : canSendWhatsApp(inv);
   if (canSend && !gate.ok) { canSend = false; why = gate.why; }
   if (canSend && !to) { canSend = false; why = "Add the customer's mobile number to the invoice first."; }
   if (canSend && kind === "shipped" && (!isCarrier(courier) || !awb)) {
@@ -238,7 +250,9 @@ async function whatsappPreview(env, user, id, url) {
     canSend = false; why = "Mark it shipped first, so the customer has had the tracking details.";
   }
 
-  const params = kind === "shipped" ? shippedParams(inv, courier, awb)
+  const tokenUrl = (p) => inv.share_token ? `${baseUrl(env.APP_BASE_URL)}/${p}/${inv.share_token}` : `(link made on send)`;
+  const params = isRequest ? requestParams(inv, totalPaise)
+               : kind === "shipped" ? shippedParams(inv, courier, awb)
                : kind === "delivered" ? deliveredParams(inv)
                : templateKindFor(inv) === "receipt" ? receiptParams(inv, r.items?.[0]?.description)
                : confirmedParams(inv);
@@ -246,7 +260,11 @@ async function whatsappPreview(env, user, id, url) {
   return json({
     kind, canSend, why,
     to: to ? prettyE164(to) : "", toRaw: to,
-    text: previewText(kind, params, { buttonUrl: kind === "shipped" ? trackUrl(env, courier, awb) : "" }),
+    text: previewText(isRequest ? "request" : kind, params, {
+      buttonUrl: kind === "shipped" ? trackUrl(env, courier, awb) : "",
+      buttonUrls: isRequest ? [tokenUrl("i"), tokenUrl("u")] : [],
+    }),
+    request: isRequest,
     // The invoice message carries the PDF as its document header.
     pdf: kind === "invoice",
     carriers: CARRIERS,
@@ -258,6 +276,7 @@ async function whatsappPreview(env, user, id, url) {
       track_status: inv.track_status || "", track_checked_at: inv.track_checked_at || null,
       wa_sent_at: inv.wa_sent_at || null, wa_shipped_at: inv.wa_shipped_at || null,
       wa_delivered_at: inv.wa_delivered_at || null,
+      wa_request_at: inv.wa_request_at || null,
     },
   });
 }
@@ -348,7 +367,9 @@ async function publicUser(env, u) {
    Load with the issuing business attached, then hand Meta the confirmation
    template with the customer, order number and business as its body params.
    The template has no document header, so unlike emailInvoice nothing is
-   fetched from /i/<token>.pdf. PAID only - see canSendWhatsApp.
+   fetched from /i/<token>.pdf. A PAID invoice gets its confirmation or receipt
+   (canSendWhatsApp); an unpaid one goes out as a payment request with Pay
+   online and Pay by UPI buttons (canRequestPayment).
 
    `b.to` overrides the stored number for a one-off send; either way the number
    used is normalised and refused if ambiguous - see toE164. */
@@ -358,7 +379,9 @@ async function whatsappInvoice(env, user, id, b) {
   const r = await loadInvoice(env, user, id);
   if (!r) return bad("not found", 404);
 
-  const gate = canSendWhatsApp(r.inv);
+  const totalPaise = Math.round(Number(computeTotals(r.inv, r.items).total || 0) * 100);
+  const isRequest = String(r.inv.status || "").toUpperCase() !== "PAID";
+  const gate = isRequest ? canRequestPayment(r.inv, totalPaise) : canSendWhatsApp(r.inv);
   if (!gate.ok) return bad(gate.why, 409);
 
   const to = toE164(b && b.to ? b.to : r.inv.client_phone);
@@ -375,11 +398,24 @@ async function whatsappInvoice(env, user, id, b) {
   }
   const pdfUrl = `${baseUrl(env.APP_BASE_URL)}/i/${token}.pdf`;
 
-  const msg = buildPaidMessage(env, { to, inv: r.inv, pdfUrl, what: r.items?.[0]?.description });
+  const msg = isRequest
+    ? buildPaymentRequestMessage(env, { to, inv: r.inv, pdfUrl, token, totalPaise })
+    : buildPaidMessage(env, { to, inv: r.inv, pdfUrl, what: r.items?.[0]?.description });
   const res = await sendTemplate(env, msg);
   if (!res.ok) {
     console.error("whatsapp send failed", r.inv.number, res.status, res.error);
     return bad("WhatsApp failed: " + res.error, 502);
+  }
+  if (isRequest) {
+    // Recorded apart from wa_message_id: that column means "the paid
+    // confirmation went out", and setting it here would stop the receipt being
+    // sent automatically when this invoice is paid.
+    await env.DB.prepare(
+      `UPDATE invoices SET wa_request_message_id=?, wa_request_at=?, updated_at=?,
+         client_phone = CASE WHEN client_phone='' OR client_phone IS NULL THEN ? ELSE client_phone END
+       WHERE id=?`
+    ).bind(res.id, now(), now(), to, id).run();
+    return json({ ok: true, id: res.id, to: prettyE164(to), request: true });
   }
   // Record the send - and, when the row had no number, the number it went to.
   // A paid invoice cannot be edited through the normal path (that lock is

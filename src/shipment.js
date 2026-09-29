@@ -230,6 +230,12 @@ const TEMPLATE_TEXT = {
           "We’ll let you know once your order has been shipped.\n" +
           "Thank you for shopping with us! ❤️",
   },
+  request: {
+    header: "📄 (invoice PDF attached)",
+    body: "Hi {{1}}, your invoice {{2}} for {{3}} from {{4}} is ready. The invoice is attached. " +
+          "You can pay online, or directly from any UPI app, using the buttons below.",
+    buttons: ["Pay online", "Pay by UPI"],
+  },
   shipped: {
     body: "Hi {{1}}, good news! 🎉\n" +
           "Your order {{2}} from {{3}} has been shipped via {{4}}.\n" +
@@ -244,11 +250,12 @@ const TEMPLATE_TEXT = {
   },
 };
 
-export function previewText(kind, params, { buttonUrl = "" } = {}) {
+export function previewText(kind, params, { buttonUrl = "", buttonUrls = [] } = {}) {
   const t = TEMPLATE_TEXT[kind];
   if (!t) return "";
   const body = t.body.replace(/\{\{(\d+)\}\}/g, (_, n) => String(params[Number(n) - 1] ?? ""));
   const head = t.header ? `${t.header}\n\n` : "";
+  if (t.buttons) return `${head}${body}\n\n` + t.buttons.map((b, i) => `[ ${b} ] → ${buttonUrls[i] || ""}`).join("\n");
   return t.button ? `${head}${body}\n\n[ ${t.button} ] → ${buttonUrl}` : `${head}${body}`;
 }
 
