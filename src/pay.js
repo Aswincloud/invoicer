@@ -35,8 +35,10 @@ import { isPayLinkOrder, invoiceFromPaidOrder, paylinkEnabled, PAYLINK_SOURCE } 
 import {
   createOrder, paymentsConfigured, publicKeyId,
   verifyCallbackSignature, verifyWebhookSignature,
-  listOrders, orderPayments,
+  listOrders, orderPayments, createUpiQr, closeUpiQr,
 } from "./razorpay.js";
+import { upiAmountUri, upiAppLinks } from "./upi.js";
+import { qrMatrix, qrPngBase64 } from "./qr.js";
 import { sendPaidConfirmation } from "./ingest.js";
 import { prettyE164 } from "./wa.js";
 
@@ -561,6 +563,8 @@ export async function razorpayWebhook(request, env, ctx) {
 
   if (eventType === "order.paid") {
     await handleOrderPaid(env, ctx, evt, eventId);
+  } else if (eventType === "qr_code.credited") {
+    await handleQrCredited(env, ctx, evt, eventId);
   } else if (eventType === "payment.failed") {
     const p = evt?.payload?.payment?.entity || {};
     console.warn("payment failed", p.order_id, p.error_description || "");
@@ -615,7 +619,15 @@ async function handleOrderPaid(env, ctx, evt, eventId) {
   // Already settled — a second event id for the same order (or a manual status
   // change that beat the webhook) must not re-send the receipt.
   if (String(inv.status || "").toUpperCase() === "PAID") {
-    console.log("order.paid for an invoice already marked paid", inv.id);
+    // The same payment reported again (a second event id for this order) is
+    // expected and silent. A DIFFERENT payment is money taken twice — card after
+    // a UPI settlement, or after the owner marked it paid by hand — and is
+    // reported, the same as UPI-after-card is.
+    if (payment.id && payment.id !== inv.rzp_payment_id) {
+      await alertUnexpectedPayment(env, ctx, inv, payment, "card/Checkout");
+    } else {
+      console.log("order.paid for an invoice already marked paid", inv.id);
+    }
     return;
   }
 
@@ -623,7 +635,7 @@ async function handleOrderPaid(env, ctx, evt, eventId) {
 
   await env.DB.prepare(
     `UPDATE invoices SET status='PAID', paid_at=?, rzp_payment_id=COALESCE(rzp_payment_id,?),
-            updated_at=? WHERE id=?`
+            paid_via=COALESCE(paid_via,'checkout'), updated_at=? WHERE id=?`
   ).bind(paidAt, payment.id || null, now(), inv.id).run();
 
   if (eventId) {
@@ -631,11 +643,218 @@ async function handleOrderPaid(env, ctx, evt, eventId) {
       .bind(inv.id, eventId).run();
   }
 
+  // Paid by card/Checkout: close the invoice's UPI QR, if one was minted, so the
+  // customer cannot pay the same invoice a second time from the UPI button.
+  if (inv.rzp_qr_id) {
+    const closing = closeUpiQr(env, inv.rzp_qr_id).catch(() => null);
+    if (ctx?.waitUntil) ctx.waitUntil(closing);
+  }
+
   // Emails are best-effort and must not hold up the response. The invoice is
   // already PAID in the database at this point — that is the record; a bounced
   // email is a nuisance, a webhook timeout is a retry storm.
   const send = notifyPaid(env, inv, payment);
   if (ctx?.waitUntil) ctx.waitUntil(send); else await send;
+}
+
+// Money arrived for an invoice that cannot take it — already paid another way,
+// or cancelled. Never applied; the owner is told, with both payment ids, so one
+// can be refunded from the Razorpay dashboard. Shared by both webhook paths so
+// neither order of events (card then UPI, UPI then card) goes unreported.
+async function alertUnexpectedPayment(env, ctx, inv, payment, how) {
+  const got = Number(payment?.amount) || 0;
+  const cancelled = String(inv.status || "").toUpperCase() === "VOID";
+  console.error(`${how} payment on an invoice that is ${cancelled ? "cancelled" : "already paid"}`, inv.number, payment?.id);
+  if (!inv.owner_email) return;
+  const job = sendEmail(env, {
+    to: inv.owner_email, fromName: "Invoicer",
+    subject: cancelled ? `Payment on cancelled invoice ${inv.number} — refund it`
+                       : `Paid twice: ${inv.number} — refund one payment`,
+    text: (cancelled
+      ? `Invoice ${inv.number} is cancelled, but a ${how} payment of ₹${(got / 100).toFixed(2)} (${payment?.id || "?"}) arrived for it.`
+      : `Invoice ${inv.number} was already paid (${inv.rzp_payment_id || "marked paid by hand"}), and a ${how} payment of ` +
+        `₹${(got / 100).toFixed(2)} (${payment?.id || "?"}) has now arrived as well.`) +
+      ` It has not been applied. Refund it from the Razorpay dashboard if it is a duplicate.`,
+  }).catch(() => null);
+  if (ctx?.waitUntil) ctx.waitUntil(job); else await job;
+}
+
+// ── qr_code.credited: a Pay-by-UPI payment ──────────────────────────────────
+//
+// The QR is single-use and fixed to the invoice's amount, so a credit is the
+// invoice being paid. Found by rzp_qr_id, never by anything in the payload the
+// payer could influence. A credit on an invoice ALREADY paid (the customer paid
+// by card and then by UPI before the QR closed) is real money received twice:
+// the invoice is left as it is and the owner is told to refund one.
+async function handleQrCredited(env, ctx, evt, eventId) {
+  const qr = evt?.payload?.qr_code?.entity || {};
+  const payment = evt?.payload?.payment?.entity || {};
+  if (!qr.id) return;
+  const inv = await env.DB.prepare(
+    `SELECT i.*, u.email AS owner_email, b.biz_name
+       FROM invoices i JOIN users u ON u.id = i.user_id
+       ${BIZ_JOIN}
+      WHERE i.rzp_qr_id = ?`
+  ).bind(qr.id).first();
+  if (!inv) { console.log("qr_code.credited for a QR Invoicer does not own", qr.id); return; }
+
+  if (eventId) {
+    await env.DB.prepare("UPDATE webhook_events SET invoice_id=? WHERE event_id=?").bind(inv.id, eventId).run();
+  }
+
+  const got = Number(payment.amount) || 0;
+  // The same payment reported again under another event id: already applied.
+  if (payment.id && payment.id === inv.rzp_payment_id) {
+    console.log("qr_code.credited for a payment already applied", inv.number, payment.id);
+    return;
+  }
+  const st = String(inv.status || "").toUpperCase();
+  if (st === "PAID" || st === "VOID") { await alertUnexpectedPayment(env, ctx, inv, payment, "UPI"); return; }
+  // Fixed-amount QR: anything else is not this invoice's payment. Recorded in
+  // the log, not applied.
+  if (inv.rzp_qr_amount && got && got !== Number(inv.rzp_qr_amount)) {
+    console.error("UPI QR credited with an unexpected amount", inv.number, got, inv.rzp_qr_amount);
+    return;
+  }
+
+  const paidAt = Number(payment.created_at) ? Number(payment.created_at) * 1000 : now();
+  const upd = await env.DB.prepare(
+    `UPDATE invoices SET status='PAID', paid_at=?, rzp_payment_id=COALESCE(rzp_payment_id,?),
+            rzp_amount=COALESCE(?, rzp_amount), paid_via='upi_qr', updated_at=?
+      WHERE id=? AND status NOT IN ('PAID','VOID')`
+  ).bind(paidAt, payment.id || null, got || null, now(), inv.id).run();
+  if (!upd.meta?.changes) return;            // another event got there first
+  const send = notifyPaid(env, { ...inv, status: "PAID", rzp_amount: got || inv.rzp_amount }, payment);
+  if (ctx?.waitUntil) ctx.waitUntil(send); else await send;
+}
+
+// What the Pay-by-UPI page opens: a Razorpay single-use QR for this exact
+// amount when the account allows it (auto-confirmed by the webhook), else the
+// business's own UPI ID with the amount and invoice number filled in (settled
+// by hand — no webhook can see a direct UPI transfer). Reuses a live QR for the
+// same amount, so re-opening the page, or a link-preview fetch, mints nothing.
+const QR_LIFETIME_MS = 14 * 24 * 60 * 60 * 1000;
+const QR_MIN_LEFT_MS = 15 * 60 * 1000;
+const QR_ASSUMED_MS = 2 * 60 * 60 * 1000;
+
+export async function upiTarget(env, inv, totalPaise) {
+  const useQr = String(env.UPI_QR_ENABLED ?? "true").toLowerCase() !== "false" && paymentsConfigured(env);
+  if (useQr) {
+    if (inv.rzp_qr_upi && Number(inv.rzp_qr_amount) === totalPaise &&
+        Number(inv.rzp_qr_close_by) > now() + QR_MIN_LEFT_MS) {
+      return { mode: "razorpay", uri: inv.rzp_qr_upi };
+    }
+    const closeBy = now() + QR_LIFETIME_MS;
+    const made = await createUpiQr(env, {
+      amountPaise: totalPaise, name: inv.biz_name || "Invoice",
+      description: `Invoice ${inv.number || ""}`.trim(), closeBy,
+      notes: { invoicer_invoice: inv.id, number: String(inv.number || "") },
+    });
+    const uri = made.ok ? String(made.qr.image_content || "") : "";
+    // Razorpay's close_by is the truth: it may shorten what was asked for (a
+    // single-use QR's lifetime is capped). Without it in the response, assume
+    // the shortest plausible life, so a dead QR is never handed out as live.
+    const closeByReal = made.ok && Number(made.qr.close_by) > 0
+      ? Math.min(closeBy, Number(made.qr.close_by) * 1000)
+      : now() + QR_ASSUMED_MS;
+    if (made.ok && /^upi:\/\/pay\?/i.test(uri)) {
+      // An older QR for a different amount is closed so only one can be paid.
+      if (inv.rzp_qr_id) closeUpiQr(env, inv.rzp_qr_id).catch(() => null);
+      await env.DB.prepare(
+        `UPDATE invoices SET rzp_qr_id=?, rzp_qr_upi=?, rzp_qr_amount=?, rzp_qr_close_by=?, updated_at=? WHERE id=?`
+      ).bind(made.qr.id, uri, totalPaise, closeByReal, now(), inv.id).run();
+      return { mode: "razorpay", uri };
+    }
+    console.warn("razorpay UPI QR unavailable, falling back to the business UPI ID", made.status, made.error || "no upi string");
+  }
+  const direct = upiAmountUri(inv.upi_vpa, inv.biz_name, totalPaise, inv.number);
+  if (direct) return { mode: "direct", uri: direct };
+  return { mode: null, uri: "" };
+}
+
+// ── GET /u/:token — Pay by UPI ──────────────────────────────────────────────
+export async function upiPage(env, token, request) {
+  const loaded = await loadByToken(env, token);
+  if (!loaded) return notFoundPage();
+  const { inv, items } = loaded;
+  const total = computeTotals(inv, items).total;
+  const totalPaise = paise(total);
+  const bizName = (inv.biz_name || "Invoicer").trim();
+  const st = String(inv.status || "").toUpperCase();
+  const amountLabel = `₹${Number(total).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  let main;
+  let target = { mode: null, uri: "" };
+  if (st === "PAID") {
+    main = `<div class="banner paid">Invoice ${esc(inv.number || "")} is paid${inv.paid_at ? ` (${fmtDate(inv.paid_at)})` : ""}. Thank you.</div>`;
+  } else if (st === "VOID") {
+    main = `<div class="banner void">This invoice has been cancelled. No payment is due.</div>`;
+  } else if ((inv.currency || PAYABLE_CURRENCY) !== PAYABLE_CURRENCY || totalPaise < 100) {
+    main = `<p class="note">UPI payment is not available for this invoice.</p>`;
+  } else {
+    target = await upiTarget(env, inv, totalPaise);
+    if (!target.uri) {
+      main = `<p class="note">UPI payment is not set up for ${esc(bizName)}. <a href="${esc(shareUrl(env, token))}">Pay online instead</a>.</p>`;
+    } else {
+      const apps = upiAppLinks(target.uri);
+      const png = qrPngBase64(qrMatrix(target.uri), 6);
+      const manual = target.mode === "direct"
+        ? `<p class="note">After paying, the invoice is marked paid once ${esc(bizName)} confirms the transfer.</p>` : "";
+      main = `
+      <div class="amt">${esc(amountLabel)}</div>
+      <div class="sub">Invoice ${esc(inv.number || "")} · ${esc(bizName)}</div>
+      <a class="pay" id="open" href="${esc(target.uri)}">Pay with a UPI app</a>
+      ${apps ? `<div class="apps">
+        <a href="${esc(apps.gpay)}">Google Pay</a><a href="${esc(apps.phonepe)}">PhonePe</a><a href="${esc(apps.paytm)}">Paytm</a>
+      </div>` : ""}
+      ${png ? `<div class="qr"><img alt="UPI QR code for ${esc(amountLabel)}" src="data:image/png;base64,${png}" width="220" height="220">
+        <div class="note">Or scan this with any UPI app.</div></div>` : ""}
+      ${manual}
+      <p class="note"><a href="${esc(shareUrl(env, token))}">View the invoice, or pay by card</a></p>`;
+    }
+  }
+
+  // Android: open the app chooser straight away. Everywhere else (iOS has no
+  // chooser, desktop has no UPI) the page waits for a tap.
+  const ua = String(request?.headers?.get("user-agent") || "");
+  const auto = target.uri && /Android/i.test(ua)
+    ? `<script>setTimeout(function(){ location.href = ${jsonForScript(target.uri)}; }, 300);</script>` : "";
+
+  const html = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Pay by UPI — ${esc(bizName)}</title>
+<meta property="og:title" content="Pay ${esc(bizName)} by UPI">
+<meta property="og:description" content="Invoice ${esc(inv.number || "")}">
+<style>
+  :root { color-scheme: light dark; }
+  body { margin:0; background:#f4f4f5; color:#18181b; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
+  .sheet { max-width:420px; margin:0 auto; padding:28px 16px 48px; text-align:center; }
+  .amt { font-size:34px; font-weight:800; margin-top:6px; }
+  .sub { color:#52525b; font-size:14px; margin:4px 0 20px; }
+  .pay { display:block; padding:15px 20px; font-size:16px; font-weight:700; color:#fff; background:#4f46e5;
+         border-radius:11px; text-decoration:none; }
+  .apps { display:flex; gap:8px; margin-top:10px; }
+  .apps a { flex:1; padding:11px 6px; border:1px solid #d4d4d8; border-radius:10px; color:#18181b;
+            text-decoration:none; font-size:13px; font-weight:600; background:#fff; }
+  .qr { margin-top:22px; } .qr img { background:#fff; border-radius:10px; padding:8px; }
+  .note { color:#71717a; font-size:13px; line-height:1.55; margin-top:14px; }
+  .note a { color:#4f46e5; font-weight:600; }
+  .banner { padding:14px 16px; border-radius:11px; font-weight:700; }
+  .banner.paid { background:#dcfce7; color:#166534; } .banner.void { background:#fee2e2; color:#991b1b; }
+  @media (prefers-color-scheme: dark) {
+    body { background:#18181b; color:#fafafa; } .sub, .note { color:#a1a1aa; }
+    .apps a { background:#27272a; color:#fafafa; border-color:#3f3f46; } .note a { color:#a5b4fc; }
+  }
+</style>
+</head><body><div class="sheet">${main}</div>${auto}</body></html>`;
+  return new Response(html, { status: 200, headers: {
+    "content-type": "text/html; charset=utf-8",
+    "x-robots-tag": "noindex, nofollow, noarchive",
+    "cache-control": "no-store",
+  } });
 }
 
 async function notifyPaid(env, inv, payment, { what = "" } = {}) {
