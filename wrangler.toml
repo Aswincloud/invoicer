@@ -65,8 +65,13 @@ PAYLINK_BUSINESS = "AswinCloud"
 WA_TEMPLATE_RECEIPT = "payment_received"
 PAYLINK_MIN = "10"
 PAYLINK_MAX = "50000"
-# TURNSTILE_SITE_KEY here (public) + TURNSTILE_SECRET as a secret turn on the
-# bot check on /pay. Both absent = form works with no check.
+# The /pay bot check is ON in production since 29 Sep 2026: TURNSTILE_SITE_KEY
+# and TURNSTILE_SECRET are both bound as Worker secrets (the site key is public
+# by nature, but keeping it out of this file means `wrangler dev` has neither,
+# so the local form stays widget-free and the harness's "no widget" check holds).
+# Both absent = form works with no check. Widget: "invoicer /pay form", managed
+# mode, domain invoicer.aswincloud.com. Beside it, a zone rate-limit rule caps
+# POSTs to /api/pay/* at 10 per 10 s per IP.
 
 # Secrets (NOT here — set once via API/dashboard, never committed):
 #   RESEND_API_KEY, AUTH_SIGNING_KEY
