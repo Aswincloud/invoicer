@@ -619,7 +619,15 @@ async function handleOrderPaid(env, ctx, evt, eventId) {
   // Already settled — a second event id for the same order (or a manual status
   // change that beat the webhook) must not re-send the receipt.
   if (String(inv.status || "").toUpperCase() === "PAID") {
-    console.log("order.paid for an invoice already marked paid", inv.id);
+    // The same payment reported again (a second event id for this order) is
+    // expected and silent. A DIFFERENT payment is money taken twice — card after
+    // a UPI settlement, or after the owner marked it paid by hand — and is
+    // reported, the same as UPI-after-card is.
+    if (payment.id && payment.id !== inv.rzp_payment_id) {
+      await alertUnexpectedPayment(env, ctx, inv, payment, "card/Checkout");
+    } else {
+      console.log("order.paid for an invoice already marked paid", inv.id);
+    }
     return;
   }
 
@@ -647,6 +655,28 @@ async function handleOrderPaid(env, ctx, evt, eventId) {
   // email is a nuisance, a webhook timeout is a retry storm.
   const send = notifyPaid(env, inv, payment);
   if (ctx?.waitUntil) ctx.waitUntil(send); else await send;
+}
+
+// Money arrived for an invoice that cannot take it — already paid another way,
+// or cancelled. Never applied; the owner is told, with both payment ids, so one
+// can be refunded from the Razorpay dashboard. Shared by both webhook paths so
+// neither order of events (card then UPI, UPI then card) goes unreported.
+async function alertUnexpectedPayment(env, ctx, inv, payment, how) {
+  const got = Number(payment?.amount) || 0;
+  const cancelled = String(inv.status || "").toUpperCase() === "VOID";
+  console.error(`${how} payment on an invoice that is ${cancelled ? "cancelled" : "already paid"}`, inv.number, payment?.id);
+  if (!inv.owner_email) return;
+  const job = sendEmail(env, {
+    to: inv.owner_email, fromName: "Invoicer",
+    subject: cancelled ? `Payment on cancelled invoice ${inv.number} — refund it`
+                       : `Paid twice: ${inv.number} — refund one payment`,
+    text: (cancelled
+      ? `Invoice ${inv.number} is cancelled, but a ${how} payment of ₹${(got / 100).toFixed(2)} (${payment?.id || "?"}) arrived for it.`
+      : `Invoice ${inv.number} was already paid (${inv.rzp_payment_id || "marked paid by hand"}), and a ${how} payment of ` +
+        `₹${(got / 100).toFixed(2)} (${payment?.id || "?"}) has now arrived as well.`) +
+      ` It has not been applied. Refund it from the Razorpay dashboard if it is a duplicate.`,
+  }).catch(() => null);
+  if (ctx?.waitUntil) ctx.waitUntil(job); else await job;
 }
 
 // ── qr_code.credited: a Pay-by-UPI payment ──────────────────────────────────
@@ -678,23 +708,8 @@ async function handleQrCredited(env, ctx, evt, eventId) {
     console.log("qr_code.credited for a payment already applied", inv.number, payment.id);
     return;
   }
-  if (String(inv.status || "").toUpperCase() === "PAID") {
-    console.error("UPI QR credited on an invoice already paid", inv.number, payment.id);
-    if (inv.owner_email) {
-      const job = sendEmail(env, {
-        to: inv.owner_email, fromName: "Invoicer",
-        subject: `Paid twice: ${inv.number} — refund one payment`,
-        text: `Invoice ${inv.number} was already paid (${inv.rzp_payment_id || "earlier payment"}), ` +
-              `and a UPI payment of ₹${(got / 100).toFixed(2)} (${payment.id || "?"}) has now arrived as well. ` +
-              `Refund one of them from the Razorpay dashboard.`,
-      }).catch(() => null);
-      if (ctx?.waitUntil) ctx.waitUntil(job); else await job;
-    }
-    return;
-  }
-  if (String(inv.status || "").toUpperCase() === "VOID") {
-    console.error("UPI QR credited on a cancelled invoice", inv.number, payment.id);
-  }
+  const st = String(inv.status || "").toUpperCase();
+  if (st === "PAID" || st === "VOID") { await alertUnexpectedPayment(env, ctx, inv, payment, "UPI"); return; }
   // Fixed-amount QR: anything else is not this invoice's payment. Recorded in
   // the log, not applied.
   if (inv.rzp_qr_amount && got && got !== Number(inv.rzp_qr_amount)) {
@@ -706,7 +721,7 @@ async function handleQrCredited(env, ctx, evt, eventId) {
   const upd = await env.DB.prepare(
     `UPDATE invoices SET status='PAID', paid_at=?, rzp_payment_id=COALESCE(rzp_payment_id,?),
             rzp_amount=COALESCE(?, rzp_amount), paid_via='upi_qr', updated_at=?
-      WHERE id=? AND status <> 'PAID'`
+      WHERE id=? AND status NOT IN ('PAID','VOID')`
   ).bind(paidAt, payment.id || null, got || null, now(), inv.id).run();
   if (!upd.meta?.changes) return;            // another event got there first
   const send = notifyPaid(env, { ...inv, status: "PAID", rzp_amount: got || inv.rzp_amount }, payment);
@@ -719,7 +734,8 @@ async function handleQrCredited(env, ctx, evt, eventId) {
 // by hand — no webhook can see a direct UPI transfer). Reuses a live QR for the
 // same amount, so re-opening the page, or a link-preview fetch, mints nothing.
 const QR_LIFETIME_MS = 14 * 24 * 60 * 60 * 1000;
-const QR_MIN_LEFT_MS = 30 * 60 * 1000;
+const QR_MIN_LEFT_MS = 15 * 60 * 1000;
+const QR_ASSUMED_MS = 2 * 60 * 60 * 1000;
 
 export async function upiTarget(env, inv, totalPaise) {
   const useQr = String(env.UPI_QR_ENABLED ?? "true").toLowerCase() !== "false" && paymentsConfigured(env);
@@ -735,12 +751,18 @@ export async function upiTarget(env, inv, totalPaise) {
       notes: { invoicer_invoice: inv.id, number: String(inv.number || "") },
     });
     const uri = made.ok ? String(made.qr.image_content || "") : "";
+    // Razorpay's close_by is the truth: it may shorten what was asked for (a
+    // single-use QR's lifetime is capped). Without it in the response, assume
+    // the shortest plausible life, so a dead QR is never handed out as live.
+    const closeByReal = made.ok && Number(made.qr.close_by) > 0
+      ? Math.min(closeBy, Number(made.qr.close_by) * 1000)
+      : now() + QR_ASSUMED_MS;
     if (made.ok && /^upi:\/\/pay\?/i.test(uri)) {
       // An older QR for a different amount is closed so only one can be paid.
       if (inv.rzp_qr_id) closeUpiQr(env, inv.rzp_qr_id).catch(() => null);
       await env.DB.prepare(
         `UPDATE invoices SET rzp_qr_id=?, rzp_qr_upi=?, rzp_qr_amount=?, rzp_qr_close_by=?, updated_at=? WHERE id=?`
-      ).bind(made.qr.id, uri, totalPaise, closeBy, now(), inv.id).run();
+      ).bind(made.qr.id, uri, totalPaise, closeByReal, now(), inv.id).run();
       return { mode: "razorpay", uri };
     }
     console.warn("razorpay UPI QR unavailable, falling back to the business UPI ID", made.status, made.error || "no upi string");

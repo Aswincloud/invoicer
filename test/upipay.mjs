@@ -86,7 +86,10 @@ function envWith(inv, { qrRefused = false, over = {} } = {}) {
       if (qrRefused) return new Response(JSON.stringify({ error: { description: "QR code feature is not enabled for this merchant" } }), { status: 400 });
       n++;
       const b = JSON.parse(init.body);
-      return new Response(JSON.stringify({ id: `qr_${n}`, entity: "qr_code", status: "active",
+      // Razorpay caps a single-use QR's life; the fake clamps to two hours the way
+      // the real API is reported to, and returns the clamped close_by.
+      const clamped = Math.min(b.close_by, Math.floor(Date.now() / 1000) + 2 * 3600);
+      return new Response(JSON.stringify({ id: `qr_${n}`, entity: "qr_code", status: "active", close_by: clamped,
         image_content: `upi://pay?ver=01&mode=15&pa=rpy.qr${n}@icici&pn=AswinCloud&tr=RZPqr${n}&am=${(b.payment_amount / 100).toFixed(2)}&cu=INR` }), { status: 200 });
     }
     const close = u.pathname.match(/^\/v1\/payments\/qr_codes\/([^/]+)\/close$/);
@@ -133,6 +136,7 @@ section("/u/: Razorpay QR for the exact amount, minted once");
   ok("tagged with the invoice id", req.notes?.invoicer_invoice === "i-1");
   const inv = env.DB._db.invoices[0];
   ok("stored on the invoice", inv.rzp_qr_id === "qr_1" && inv.rzp_qr_amount === 125000 && /^upi:\/\/pay\?/.test(inv.rzp_qr_upi));
+  ok("with Razorpay's clamped expiry, not the 14 days asked for", inv.rzp_qr_close_by <= Date.now() + 2 * 3600 * 1000 + 5000, String(inv.rzp_qr_close_by - Date.now()));
   ok("the button opens Razorpay's upi string", html.includes('href="upi://pay?ver=01&amp;mode=15&amp;pa=rpy.qr1@icici'), html.match(/href="upi[^"]+"/)?.[0]);
   ok("Android auto-opens the chooser", /<script>setTimeout\(function\(\)\{ location\.href = "upi:\/\/pay\?ver=01/.test(html));
   ok("the QR image is shown", html.includes('src="data:image/png;base64,'));
@@ -225,6 +229,25 @@ section("qr_code.credited settles the invoice once, and sends the receipt");
   const env = envWith(INV());
   const res = await webhook(env, CREDIT("qr_someone_else"));
   ok("a QR that is not ours is answered 200 and ignored", res.status === 200 && env.DB._db.invoices[0].status === "UNPAID" && env._c.mail.length === 0);
+}
+
+section("a cancelled invoice paid by UPI stays cancelled");
+{
+  const env = envWith(INV({ status: "VOID", rzp_qr_id: "qr_9", rzp_qr_amount: 125000 }));
+  await webhook(env, CREDIT("qr_9"));
+  ok("not revived as paid", env.DB._db.invoices[0].status === "VOID");
+  ok("no confirmation to the customer", env._c.wa.length === 0 && !env._c.mail.some((x) => JSON.stringify(x.to).includes("raagul@")));
+  ok("the owner is told to refund it", env._c.mail.length === 1 && /cancelled invoice/i.test(env._c.mail[0].subject), JSON.stringify(env._c.mail.map((x) => x.subject)));
+}
+
+section("card after UPI is reported, not swallowed");
+{
+  const env = envWith(INV({ status: "PAID", paid_via: "upi_qr", rzp_payment_id: "pay_upi", rzp_order_id: "order_2" }));
+  await webhook(env, { event: "order.paid", payload: { order: { entity: { id: "order_2", amount: 125000, notes: {} } }, payment: { entity: { id: "pay_card2", amount: 125000, order_id: "order_2", created_at: 1790500000 } } } }, "evt_o2");
+  ok("the invoice is left as it was", env.DB._db.invoices[0].rzp_payment_id === "pay_upi" && env.DB._db.invoices[0].paid_via === "upi_qr");
+  ok("the owner is emailed about the second payment", env._c.mail.length === 1 && /Paid twice/.test(env._c.mail[0].subject) && /pay_card2/.test(env._c.mail[0].text), JSON.stringify(env._c.mail.map((x) => x.subject)));
+  await webhook(env, { event: "order.paid", payload: { order: { entity: { id: "order_2", amount: 125000, notes: {} } }, payment: { entity: { id: "pay_upi", amount: 125000, order_id: "order_2" } } } }, "evt_o3");
+  ok("the same payment id reported again stays silent", env._c.mail.length === 1);
 }
 
 section("paid by card: the invoice's UPI QR is closed");
