@@ -123,8 +123,29 @@ wrangler secret put PRINT_RELAY_SECRET
 wrangler secret put RAZORPAY_KEY_ID
 wrangler secret put RAZORPAY_KEY_SECRET
 wrangler secret put RAZORPAY_WEBHOOK_SECRET
-npm run deploy                        # wrangler deploy
+npm run deploy                        # the FIRST deploy only — see Deploying
 ```
+
+### Deploying
+
+Pushing to `master` deploys: the repo is connected to Cloudflare **Workers
+Builds**, which runs `wrangler deploy` on every push and shows up as the
+"Workers Builds: invoicer" check on the commit. Do not deploy by hand from a
+laptop — twice a deploy from a stale working tree briefly shipped the wrong
+code. `npm run deploy` exists for the very first deploy of a fresh account and
+for an emergency when Workers Builds is down, nothing else.
+
+Two things Workers Builds does not do, so they stay manual and happen **before**
+the PR merges: `npm run db:migrate:remote` for any new migration, and
+`wrangler secret put` for any new secret.
+
+### Tests
+
+`npm test` runs every file in `test/` as its own process (`test/run.mjs`). The
+same command runs in GitHub Actions on every pull request and in the merge
+queue, and the "Tests" check is required, so a PR with a failing suite cannot
+merge. Do not run the suites with `node --test`: they use their own assert
+helper, and `node --test` reports them green even when assertions fail.
 
 ### Shareable pay links
 

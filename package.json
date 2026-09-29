@@ -1,11 +1,12 @@
 {
   "name": "invoicer",
   "version": "0.1.0",
-  "description": "Simple invoice generator — create, preview, download and email invoices. Cloudflare Worker + D1.",
+  "description": "Simple invoice generator \u2014 create, preview, download and email invoices. Cloudflare Worker + D1.",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "test": "node test/run.mjs",
     "db:migrate:local": "wrangler d1 migrations apply invoicer-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply invoicer-db --remote",
     "deploy": "wrangler deploy"

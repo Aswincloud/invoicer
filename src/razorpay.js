@@ -61,14 +61,6 @@ export async function createOrder(env, { amountPaise, receipt, notes }) {
   return { ok: true, order: body };
 }
 
-export async function fetchPayment(env, paymentId) {
-  const r = await fetch(`${API}/payments/${encodeURIComponent(paymentId)}`, {
-    headers: { Authorization: authHeader(env) },
-  });
-  const body = await r.json().catch(() => ({}));
-  return r.ok ? { ok: true, payment: body } : { ok: false, status: r.status, body };
-}
-
 // ── reading back ──────────────────────────────────────────────────
 // For reconciliation (reconcilePayLinkOrders in pay.js): which orders Razorpay holds
 // and which payment settled each. Read-only. Razorpay pages with `count` ≤ 100.
