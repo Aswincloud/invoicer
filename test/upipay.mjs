@@ -167,6 +167,25 @@ section("/u/: falls back to the business's own UPI ID when Razorpay refuses");
   ok("and says it is confirmed by hand", html.includes("confirms the transfer"));
 }
 {
+  // Razorpay creates the QR but returns no upi string: it must be closed, not
+  // left payable, and the page falls back.
+  const env = envWith(INV(), { over: {} });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = new URL(String(url));
+    if (u.hostname === "api.razorpay.com" && u.pathname === "/v1/payments/qr_codes") {
+      env._c.create.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ id: "qr_blank", entity: "qr_code", status: "active", image_url: "https://rzp.io/i/x" }), { status: 200 });
+    }
+    return realFetch(url, init);
+  };
+  const html = await page(env);
+  ok("a QR with no upi string is closed straight away", env._c.close.includes("qr_blank"), JSON.stringify(env._c.close));
+  ok("and not stored", !env.DB._db.invoices[0].rzp_qr_id);
+  ok("the page falls back to the own UPI ID", html.includes("pa=aswin@okhdfcbank"));
+  globalThis.fetch = realFetch;
+}
+{
   const env = envWith(INV(), { over: { UPI_QR_ENABLED: "false" } });
   await page(env);
   ok("UPI_QR_ENABLED=false never calls Razorpay", env._c.create.length === 0);

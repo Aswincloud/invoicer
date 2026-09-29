@@ -765,7 +765,16 @@ export async function upiTarget(env, inv, totalPaise) {
       ).bind(made.qr.id, uri, totalPaise, closeByReal, now(), inv.id).run();
       return { mode: "razorpay", uri };
     }
-    console.warn("razorpay UPI QR unavailable, falling back to the business UPI ID", made.status, made.error || "no upi string");
+    if (made.ok) {
+      // Created, but no upi:// string where expected. Close it at once: a QR
+      // nobody can be shown is still a live, payable object at Razorpay, and
+      // every page open would otherwise leave another one behind. The field
+      // NAMES are logged (never values) so the right one can be read next time.
+      await closeUpiQr(env, made.qr.id).catch(() => null);
+      console.warn("razorpay UPI QR has no upi string; closed it", made.qr.id, "fields:", Object.keys(made.qr || {}).join(","));
+    } else {
+      console.warn("razorpay UPI QR unavailable, falling back to the business UPI ID", made.status, made.error || "");
+    }
   }
   const direct = upiAmountUri(inv.upi_vpa, inv.biz_name, totalPaise, inv.number);
   if (direct) return { mode: "direct", uri: direct };
