@@ -215,11 +215,14 @@ both ends. Set `PRINT_ENABLED = "false"` to turn the whole path off.
 ### WhatsApp messages and shipments
 
 **Unpaid invoices go out as a payment request.** *Send invoice* on an unpaid ₹
-invoice sends **`invoice_payment_request`** (UTILITY, created 2026-09-29): the
-invoice PDF, and two URL buttons — **Pay online** (`/i/<token>`, Razorpay
-Checkout) and **Pay by UPI** (`/u/<token>`). Recorded in `wa_request_*`, apart
-from `wa_message_id`, so the paid confirmation still goes out automatically when
-the invoice is settled.
+invoice sends **`invoice_pay_online`** (UTILITY, 2026-09-29): the invoice PDF and
+one **Pay online** button (`/i/<token>`, Razorpay Checkout — card, UPI apps, net
+banking), so every payment it leads to is confirmed by the webhook. Recorded in
+`wa_request_*`, apart from `wa_message_id`, so the paid confirmation still goes
+out automatically when the invoice is settled. It replaced
+`invoice_payment_request`, whose second button, *Pay by UPI*, paid the owner's
+own UPI ID directly: nothing can observe that transfer, so the customer could
+never be told it succeeded. `/u/<token>` below still serves links already sent.
 
 `/u/<token>` hands the phone a `upi://pay` link — Android opens its UPI app
 chooser at once, iOS gets Google Pay / PhonePe / Paytm buttons, and a QR is shown

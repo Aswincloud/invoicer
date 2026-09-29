@@ -222,7 +222,7 @@ function wireBackend(){
       $("waTitle").textContent = p.request ? "Request payment on WhatsApp" : TITLES[WA.kind];
       $("waSub").textContent = already
         ? "Already sent "+new Date(already).toLocaleString("en-IN")+". Sending again will send it again."
-        : p.request ? "Unpaid, so this goes as a payment request: invoice PDF plus Pay online and Pay by UPI buttons."
+        : p.request ? "Unpaid, so this goes as a payment request: invoice PDF plus a Pay online button."
         : (p.pdf ? "The invoice PDF is attached to the message." : "Nothing is sent until you confirm.");
       $("waMsg").textContent = p.canSend ? "" : p.why;
       $("waSend").disabled = !p.canSend;
