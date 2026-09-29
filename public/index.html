@@ -207,7 +207,7 @@
 
   <!-- ────── LIVE PREVIEW ────── -->
   <section class="preview-wrap" aria-label="Invoice preview">
-    <div id="paper" class="paper"><!-- rendered by app.js --></div>
+    <div id="paper" class="paper"><!-- rendered by js/render.js --></div>
   </section>
 </main>
 
@@ -222,7 +222,7 @@
       <button class="close" id="authClose" aria-label="Close">×</button>
     </div>
 
-    <div id="ssoButtons" class="sso"><!-- provider buttons injected by app.js --></div>
+    <div id="ssoButtons" class="sso"><!-- provider buttons injected by js/backend.js --></div>
 
     <div class="divider" id="ssoDivider" hidden>or</div>
 
@@ -366,10 +366,20 @@
         <button class="close" id="invClose" aria-label="Close">×</button>
       </div>
     </div>
-    <div id="invList" class="inv-list"><!-- rows injected by app.js --></div>
+    <div id="invList" class="inv-list"><!-- rows injected by js/modals.js --></div>
   </div>
 </div>
 
-<script src="/app.js"></script>
+<!-- one script split in ten; order matters, see js/core.js -->
+<script src="/js/core.js"></script>
+<script src="/js/money.js"></script>
+<script src="/js/render.js"></script>
+<script src="/js/assets.js"></script>
+<script src="/js/profile.js"></script>
+<script src="/js/init.js"></script>
+<script src="/js/export.js"></script>
+<script src="/js/receipt.js"></script>
+<script src="/js/backend.js"></script>
+<script src="/js/modals.js"></script>
 </body>
 </html>

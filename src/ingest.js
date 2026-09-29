@@ -442,7 +442,7 @@ export function buildInvoice(b, receipt, user) {
   // and already printed on the customer's confirmation email — so an invoice can
   // be matched to an order at a glance, and two orders can never collide.
   //
-  // The form's own numbering is PREFIX-YEAR-<4 random digits> (public/app.js),
+  // The form's own numbering is PREFIX-YEAR-<4 random digits> (public/js/core.js, freshInvoiceNumber),
   // which is fine for a human filling in one invoice and wrong for automated
   // issuance: random numbers collide, and a document about money should not be
   // able to.

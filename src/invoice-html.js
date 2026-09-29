@@ -46,7 +46,7 @@ export function computeTotals(inv, items) {
   }
   // Round the grand total to a whole unit when the invoice was saved with it on,
   // shown as its own line. Subtotal, discount, shipping and each tax row stay
-  // exact — mirrors computeTotals() in public/app.js.
+  // exact — mirrors computeTotals() in public/js/money.js.
   const gross = taxable + taxTotal;
   const total = inv.round_off ? Math.round(gross) : gross;
   return { subtotal, disc, shipping, packaging, taxable, taxRows, gross, round: total - gross, total };
@@ -71,7 +71,7 @@ export const showRoundOff = (t) => Math.abs(t.round) >= 0.005;
    line item with qty 1 and a negative rate, so counting it as goods would
    overstate every discounted order by one.
 
-   Mirrored by itemUnits() in public/app.js for the preview and the receipt. */
+   Mirrored by itemUnits() in public/js/core.js for the preview and the receipt. */
 export function itemUnits(items) {
   return (items || []).reduce((n, i) => {
     const qty = Number(i.qty) || 0;
@@ -96,7 +96,7 @@ export const fmtUnits = (n) =>
      paid via the link → the Razorpay reference, which is what a receipt is for
      paid by hand      → just PAID; there is no reference to show
 
-   Mirrored by payBlock() in public/app.js for the on-screen preview and the
+   Mirrored by payBlock() in public/js/core.js for the on-screen preview and the
    thermal receipt, which render from form state rather than from a row. */
 export function paymentBlock(inv) {
   const paid = String(inv.status || "").toUpperCase() === "PAID";

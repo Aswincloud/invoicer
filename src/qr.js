@@ -5,7 +5,7 @@
 //
 // The matrix is built HERE, on the server, and never in the browser. The client
 // cannot import from src/ (public/ is served statically, src/ is bundled — see
-// the note above fmtDate in public/app.js about rules having to live twice), so
+// the note above fmtDate in public/js/core.js about rules having to live twice), so
 // a client-side encoder would mean a second QR implementation to keep in step.
 // It does not need one: the URL is a fixed property of the business, so the
 // matrix is computed once here and shipped with the profile. Every surface draws
