@@ -236,8 +236,8 @@ async function whatsappPreview(env, user, id, url) {
   });
 
   let canSend = waConfigured(env), why = canSend ? "" : "WhatsApp sending is not set up on this deployment.";
-  // An unpaid invoice's "Send invoice" is a payment request with Pay online and
-  // Pay by UPI buttons; a paid one keeps its confirmation or receipt.
+  // An unpaid invoice's "Send invoice" is a payment request with a Pay online
+  // button; a paid one keeps its confirmation or receipt.
   const totalPaise = Math.round(Number(computeTotals(inv, r.items).total || 0) * 100);
   const isRequest = kind === "invoice" && String(inv.status || "").toUpperCase() !== "PAID";
   const gate = isRequest ? canRequestPayment(inv, totalPaise) : canSendWhatsApp(inv);
@@ -262,7 +262,7 @@ async function whatsappPreview(env, user, id, url) {
     to: to ? prettyE164(to) : "", toRaw: to,
     text: previewText(isRequest ? "request" : kind, params, {
       buttonUrl: kind === "shipped" ? trackUrl(env, courier, awb) : "",
-      buttonUrls: isRequest ? [tokenUrl("i"), tokenUrl("u")] : [],
+      buttonUrls: isRequest ? [tokenUrl("i")] : [],
     }),
     request: isRequest,
     // The invoice message carries the PDF as its document header.
@@ -368,8 +368,8 @@ async function publicUser(env, u) {
    template with the customer, order number and business as its body params.
    The template has no document header, so unlike emailInvoice nothing is
    fetched from /i/<token>.pdf. A PAID invoice gets its confirmation or receipt
-   (canSendWhatsApp); an unpaid one goes out as a payment request with Pay
-   online and Pay by UPI buttons (canRequestPayment).
+   (canSendWhatsApp); an unpaid one goes out as a payment request with a Pay
+   online button (canRequestPayment).
 
    `b.to` overrides the stored number for a one-off send; either way the number
    used is normalised and refused if ambiguous - see toE164. */

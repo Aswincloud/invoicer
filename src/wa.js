@@ -35,7 +35,7 @@ export const WA_ENV = {
   version:   "WA_API_VERSION",       // default below
   tplPaid:   "WA_TEMPLATE_CONFIRMED", // default "order_confirmed_new"
   tplReceipt:"WA_TEMPLATE_RECEIPT",   // default "payment_received" — pay-link payments
-  tplRequest:"WA_TEMPLATE_REQUEST",   // default "invoice_payment_request" — unpaid invoices
+  tplRequest:"WA_TEMPLATE_REQUEST",   // default "invoice_pay_online" — unpaid invoices
   lang:      "WA_TEMPLATE_LANG",     // default "en"
 };
 
@@ -169,13 +169,18 @@ export function buildPaidMessage(env, args) {
  * it is only offered for what those pages can actually take: an INR invoice of
  * at least ₹1 that is neither paid nor cancelled.
  *
- *   invoice_payment_request   DOCUMENT header (the invoice PDF) + four params:
+ *   invoice_pay_online   DOCUMENT header (the invoice PDF) + four params:
  *     Hi {{1}}, your invoice {{2}} for {{3}} from {{4}} is ready. The invoice is
- *     attached. You can pay online, or directly from any UPI app, using the
- *     buttons below.
+ *     attached. You can pay securely online by card, UPI or net banking using
+ *     the button below.
  *     [Pay online] https://invoicer.aswincloud.com/i/{{1}}
- *     [Pay by UPI] https://invoicer.aswincloud.com/u/{{1}}
- *                                                 (created 2026-09-29, UTILITY) */
+ *                                                 (created 2026-09-29, UTILITY)
+ *
+ * One button, Razorpay only, so every payment it leads to is confirmed by the
+ * webhook. It replaced invoice_payment_request, whose second button paid the
+ * owner's personal UPI ID — a payment nothing here can see, so the customer
+ * could never be told it succeeded. /u/<token> still works for links already
+ * sent with that button. */
 export function canRequestPayment(inv, totalPaise) {
   const st = String(inv && inv.status || "").toUpperCase();
   if (st === "PAID") return { ok: false, why: "This invoice is already paid." };
@@ -196,10 +201,10 @@ export function requestParams(inv, totalPaise) {
 }
 
 export function buildPaymentRequestMessage(env, { to, inv, pdfUrl, token, totalPaise }) {
-  const name = env[WA_ENV.tplRequest] || "invoice_payment_request";
+  const name = env[WA_ENV.tplRequest] || "invoice_pay_online";
   const safeNum = String(inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
-  // Both buttons are URL buttons whose fixed prefix lives on the template; only
-  // the share token is sent. Meta indexes them "0" and "1" in template order.
+  // A URL button whose fixed prefix lives on the template; only the share token
+  // is sent. It is the template's only button, index "0".
   const button = (index) => ({ type: "button", sub_type: "url", index: String(index),
                                parameters: [{ type: "text", text: String(token) }] });
   return {
@@ -209,7 +214,7 @@ export function buildPaymentRequestMessage(env, { to, inv, pdfUrl, token, totalP
     template: { name, language: { code: env[WA_ENV.lang] || "en" }, components: [
       { type: "header", parameters: [{ type: "document", document: { link: pdfUrl, filename: `${safeNum}.pdf` } }] },
       { type: "body", parameters: requestParams(inv, totalPaise).map((text) => ({ type: "text", text })) },
-      button(0), button(1),
+      button(0),
     ] },
   };
 }

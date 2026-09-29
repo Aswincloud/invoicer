@@ -120,10 +120,10 @@ ok("non-₹ is refused", !canRequestPayment(INV({ currency: "$" }), 125000).ok);
 ok("below ₹1 is refused", !canRequestPayment(INV(), 99).ok);
 ok("params: name, number, amount, business", JSON.stringify(requestParams({ ...INV(), biz_name: "AswinCloud" }, 125000)) === JSON.stringify(["Raagul", "INV-AC-2026-0012", "₹1,250", "AswinCloud"]), JSON.stringify(requestParams({ ...INV(), biz_name: "AswinCloud" }, 125000)));
 const m = buildPaymentRequestMessage({}, { to: "919876543210", inv: { ...INV(), biz_name: "AswinCloud" }, pdfUrl: "https://x/i/t.pdf", token: TOKEN, totalPaise: 125000 });
-ok("template invoice_payment_request", m.template.name === "invoice_payment_request");
+ok("template invoice_pay_online", m.template.name === "invoice_pay_online", m.template.name);
 const comps = m.template.components;
-ok("header, body, two url buttons, in that order", comps.map((c) => c.type + (c.index ? ":" + c.index : "")).join() === "header,body,button:0,button:1", comps.map((c) => c.type).join());
-ok("both buttons carry only the share token", comps.filter((c) => c.type === "button").every((c) => c.sub_type === "url" && c.parameters[0].text === TOKEN));
+ok("header, body, ONE url button — Razorpay only, so every payment is confirmed", comps.map((c) => c.type + (c.index ? ":" + c.index : "")).join() === "header,body,button:0", comps.map((c) => c.type).join());
+ok("the button carries only the share token", comps.filter((c) => c.type === "button").every((c) => c.sub_type === "url" && c.parameters[0].text === TOKEN));
 ok("header is the invoice PDF", comps[0].parameters[0].document.link === "https://x/i/t.pdf" && comps[0].parameters[0].document.filename === "INV-AC-2026-0012.pdf");
 
 section("/u/: Razorpay QR for the exact amount, minted once");

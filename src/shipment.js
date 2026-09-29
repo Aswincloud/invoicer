@@ -233,8 +233,8 @@ const TEMPLATE_TEXT = {
   request: {
     header: "📄 (invoice PDF attached)",
     body: "Hi {{1}}, your invoice {{2}} for {{3}} from {{4}} is ready. The invoice is attached. " +
-          "You can pay online, or directly from any UPI app, using the buttons below.",
-    buttons: ["Pay online", "Pay by UPI"],
+          "You can pay securely online by card, UPI or net banking using the button below.",
+    buttons: ["Pay online"],
   },
   shipped: {
     body: "Hi {{1}}, good news! 🎉\n" +
