@@ -72,7 +72,8 @@ src/               Cloudflare Worker
 public/            static site (served by the Worker's ASSETS binding)
   index.html       form + preview shell + modals
   styles.css       screen + @media print styles
-  app.js           render, totals, persistence, auth, save/email
+  js/              the client, ten classic scripts loaded in order (see js/core.js):
+                   core, money, render, assets, profile, init, export, receipt, backend, modals
 migrations/        D1 SQL migrations
 wrangler.toml      Worker config: main, [assets], D1 binding, vars
 ```

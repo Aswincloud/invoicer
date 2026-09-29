@@ -320,7 +320,7 @@ async function whatsappSend(env, user, id, b) {
 
    `businesses` is the real answer now. `biz` and `defaults` are kept beside it,
    mirroring whichever business is default, because they are what an older cached
-   copy of app.js reads — a deploy where the Worker updates before a browser
+   copy of the client scripts reads — a deploy where the Worker updates before a browser
    picks up the new script must not blank somebody's letterhead mid-invoice. */
 async function publicUser(env, u) {
   const { results } = await env.DB.prepare(
@@ -485,7 +485,7 @@ const WRITE_PLACEHOLDERS = BIZ_WRITE_COLUMNS.split(",").map(() => "?").join(",")
    Still called "profile" because that is what the form is, but it now writes to
    a row in `businesses` rather than to the user. Without an explicit id it edits
    the default, which is exactly what the single-business case wants and keeps
-   an older cached app.js working. */
+   an older cached client working. */
 async function saveProfile(env, user, b) {
   const target = b.businessId
     ? await businessById(env, user.id, b.businessId)
