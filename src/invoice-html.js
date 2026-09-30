@@ -1,6 +1,7 @@
 // Server-side invoice HTML (for the "email invoice to client" feature).
 // Kept email-safe: inline styles, table layout, no <style>/@page.
 
+import { refLines } from "./upiref.js";
 import { qrMatrix, qrPngBase64 } from "./qr.js";
 import { signPngBase64 } from "./signature.js";
 import { payQrText, payeeFromPayload } from "./upi.js";
@@ -94,7 +95,8 @@ export const fmtUnits = (n) =>
    So:
      unpaid            → the pay-to details, as always
      paid via the link → the Razorpay reference, which is what a receipt is for
-     paid by UPI, ref recorded → "Paid by UPI" and the UTR the owner typed in
+     ref recorded by hand      → "Paid by UPI · UTR …", or "Paid via Razorpay · Ref pay_…"
+                                 for a Razorpay id typed in (see refLines in upiref.js)
      paid by hand, no ref      → just PAID; there is no reference to show
 
    Mirrored by payBlock() in public/js/core.js for the on-screen preview and the
@@ -108,8 +110,7 @@ export function paymentBlock(inv) {
     lines.push("Paid online via Razorpay");
     lines.push(`Ref ${inv.rzp_payment_id}`);
   } else if (inv.upi_ref) {
-    lines.push("Paid by UPI");
-    lines.push(`UTR ${inv.upi_ref}`);
+    lines.push(...refLines(inv.upi_ref));
   }
   if (inv.paid_at) lines.push(fmtPaidDate(inv.paid_at));
   return { kind: "paid", label: "Paid", lines };

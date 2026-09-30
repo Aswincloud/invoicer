@@ -18,13 +18,16 @@ check("letters uppercased", cleanUpiRef("axl1234abcd").ref === "AXL1234ABCD");
 check("empty means none", cleanUpiRef("").ok && cleanUpiRef("").ref === "" && cleanUpiRef(null).ref === "");
 check("too short refused", !cleanUpiRef("12345").ok);
 check("too long refused", !cleanUpiRef("1".repeat(36)).ok);
+check("a Razorpay payment id is kept exactly, case and all", cleanUpiRef("pay_Ti9e3IaRPdRK95").ref === "pay_Ti9e3IaRPdRK95");
+check("…with surrounding spaces trimmed and the prefix's case fixed", cleanUpiRef("  PAY_Ti9e3IaRPdRK95 ").ref === "pay_Ti9e3IaRPdRK95");
+check("a malformed pay_ id is refused rather than uppercased into a UTR", !cleanUpiRef("pay_Ti9e3IaRPd").ok && !cleanUpiRef("pay_Ti9e3IaRPdRK95x").ok && !cleanUpiRef("pay_Ti9e3 IaRPdRK95").ok);
 check("punctuation refused", !cleanUpiRef("4273#18905512").ok && !cleanUpiRef("<b>123456</b>").ok);
 
 // The browser's copy must agree with the server's on every case above.
 const core = readFileSync(new URL("../public/js/core.js", import.meta.url), "utf8");
 const src = core.match(/function cleanUpiRef\(raw\)\{[\s\S]*?\n\}/)[0];
 const clientClean = new Function(src + "; return cleanUpiRef;")();
-for (const s of ["427318905512", " 4273 1890-5512 ", "axl1234abcd", "", "12345", "1".repeat(36), "4273#18905512"]) {
+for (const s of ["427318905512", " 4273 1890-5512 ", "axl1234abcd", "", "12345", "1".repeat(36), "4273#18905512", "pay_Ti9e3IaRPdRK95", " PAY_Ti9e3IaRPdRK95 ", "pay_short"]) {
   const srv = cleanUpiRef(s); const cli = clientClean(s);
   check(`client agrees on ${JSON.stringify(s).slice(0, 20)}`, srv.ok ? cli === srv.ref : cli === null, `${JSON.stringify(cli)} vs ${JSON.stringify(srv)}`);
 }
@@ -34,6 +37,8 @@ const BASE = { number: "INV-AC-2026-1609", status: "PAID", biz_pay: "UPI aswincl
 let b = paymentBlock({ ...BASE, upi_ref: "427318905512" });
 check("says Paid by UPI with the UTR", b.label === "Paid" && b.lines[0] === "Paid by UPI" && b.lines[1] === "UTR 427318905512", JSON.stringify(b.lines));
 check("and no pay-to instructions", !b.lines.some((l) => l.includes("hdfcbank")));
+b = paymentBlock({ ...BASE, upi_ref: "pay_Ti9e3IaRPdRK95" });
+check("a typed Razorpay id reads as Razorpay's reference, not a UTR", b.lines[0] === "Paid via Razorpay" && b.lines[1] === "Ref pay_Ti9e3IaRPdRK95", JSON.stringify(b.lines));
 b = paymentBlock({ ...BASE, upi_ref: "427318905512", rzp_payment_id: "pay_ABC" });
 check("Razorpay's reference wins over a typed one", b.lines[0] === "Paid online via Razorpay" && !b.lines.some((l) => l.startsWith("UTR")), JSON.stringify(b.lines));
 b = paymentBlock({ ...BASE, status: "UNPAID", upi_ref: "427318905512" });
@@ -53,9 +58,11 @@ let env = envWith({ id: "i-1", user_id: "u-1", status: "PAID", rzp_payment_id: n
 let [st, j] = await call(env, "i-1", { upiRef: "4273 1890 5512" });
 check("paid by hand: saved, normalised", st === 200 && j.upiRef === "427318905512", `${st} ${JSON.stringify(j)}`);
 check("the write touches upi_ref and paid_via only", env.writes.length === 1 && /^UPDATE invoices SET upi_ref=\?, paid_via=/.test(env.writes[0].sql) && !/total|status|number|notes/.test(env.writes[0].sql.split("WHERE")[0].replace("paid_via", "")), env.writes[0]?.sql);
+[st, j] = await call(env, "i-1", { upiRef: "pay_Ti9e3IaRPdRK95" });
+check("a Razorpay id is saved as typed", st === 200 && j.upiRef === "pay_Ti9e3IaRPdRK95" && env.writes[1].a[0] === "pay_Ti9e3IaRPdRK95", JSON.stringify(j));
 [st] = await call(env, "i-1", { upiRef: "" });
-check("an empty ref clears it", st === 200 && env.writes.length === 2 && env.writes[1].a[0] === null);
-[st] = await call(env, "i-1", { upiRef: "12#4" }); check("garbage refused, nothing written", st === 400 && env.writes.length === 2);
+check("an empty ref clears it", st === 200 && env.writes.length === 3 && env.writes[2].a[0] === null);
+[st] = await call(env, "i-1", { upiRef: "12#4" }); check("garbage refused, nothing written", st === 400 && env.writes.length === 3);
 env = envWith({ id: "i-2", user_id: "u-1", status: "UNPAID", rzp_payment_id: null });
 [st] = await call(env, "i-2", { upiRef: "427318905512" }); check("unpaid invoice refused", st === 409 && env.writes.length === 0);
 env = envWith({ id: "i-3", user_id: "u-1", status: "PAID", rzp_payment_id: "pay_X" });

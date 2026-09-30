@@ -10,13 +10,30 @@
 // { ok: false, error }.
 import { json, bad, now } from "./lib.js";
 
+//
+// Or a Razorpay payment id, for money that came through a Razorpay link or QR
+// outside the invoicer: "pay_" and 14 letters and digits. Razorpay ids are
+// case-sensitive, so those are kept exactly as typed (bar the prefix) — the
+// uppercasing that tidies a UTR would make one Razorpay cannot find.
+export const RZP_PAY_ID = /^pay_[A-Za-z0-9]{14}$/;
+
 export function cleanUpiRef(raw) {
-  const ref = String(raw ?? "").replace(/[\s-]+/g, "").toUpperCase();
+  const s = String(raw ?? "").trim();
+  if (/^pay_/i.test(s)) {
+    const id = "pay_" + s.slice(4);
+    return RZP_PAY_ID.test(id) ? { ok: true, ref: id } : { ok: false, error: "Enter the UTR from your payment app (6 to 35 letters and digits) or a Razorpay payment id like pay_Ti9e3IaRPdRK95." };
+  }
+  const ref = s.replace(/[\s-]+/g, "").toUpperCase();
   if (!ref) return { ok: true, ref: "" };
   if (!/^[A-Z0-9]{6,35}$/.test(ref))
-    return { ok: false, error: "A UPI reference is 6 to 35 letters and digits, like the 12-digit UTR in your payment app." };
+    return { ok: false, error: "Enter the UTR from your payment app (6 to 35 letters and digits) or a Razorpay payment id like pay_Ti9e3IaRPdRK95." };
   return { ok: true, ref };
 }
+
+// How a recorded reference reads under "Paid": a Razorpay id as Razorpay's
+// reference, anything else as a UPI UTR.
+export const refLines = (ref) =>
+  RZP_PAY_ID.test(ref) ? ["Paid via Razorpay", `Ref ${ref}`] : ["Paid by UPI", `UTR ${ref}`];
 
 /* POST /api/invoices/:id/upi-ref — add or correct the UPI reference on an
    invoice that is already PAID, which the edit lock otherwise freezes.
