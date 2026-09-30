@@ -121,8 +121,26 @@ function wireBackend(){
   }
 
   $("btnSave").onclick = async () => {
+    // A paid invoice is locked, but its UPI reference is not part of the
+    // document: record a new or corrected one on its own.
+    if(CURRENT_ID && LOCKED_PAID && !LOCKED_PAID.rzp){
+      const ref = cleanUpiRef($("upiRef").value);
+      if(ref === null){ alert("A UPI reference is 6 to 35 letters and digits, like the 12-digit UTR in your payment app."); return; }
+      if(ref !== LOCKED_PAID.ref){
+        try{
+          await api("/invoices/"+CURRENT_ID+"/upi-ref", {method:"POST", body: JSON.stringify({ upiRef: ref })});
+          LOCKED_PAID.ref = ref; $("upiRef").value = ref; render();
+          alert(ref ? "UPI reference saved ✓  (UTR "+ref+")" : "UPI reference cleared ✓");
+        }catch(e){ alert("Could not save the UPI reference: "+e.message); }
+        return;
+      }
+    }
+    if($("status").value === "PAID" && cleanUpiRef($("upiRef").value) === null){
+      alert("A UPI reference is 6 to 35 letters and digits, like the 12-digit UTR in your payment app."); return;
+    }
     try{
       const r = await persistInvoice();
+      if($("status").value === "PAID") LOCKED_PAID = { ref: cleanUpiRef($("upiRef").value) || "", rzp: false };
       alert("Saved ✓  (total "+$("currency").value+" "+r.total+")");
       render();   // a PUT can change nothing visible, but the status may have
     }catch(e){

@@ -1,0 +1,13 @@
+-- The UPI reference (UTR) for an invoice paid directly, outside Razorpay
+-- (2026-09-30).
+--
+-- 21 of the 27 PAID invoices at the time had been marked paid by hand — a
+-- customer paying the UPI id on the invoice — and carried no trace of which
+-- transaction settled them. rzp_payment_id only exists for payments Razorpay
+-- saw. upi_ref is the owner's own record of the bank-side reference, typed in
+-- from the payment app, and printed under "Paid" as "UTR …".
+--
+--   upi_ref   uppercase letters and digits, 6–35 chars; see src/upiref.js
+--
+-- paid_via (0021) gains the value 'upi_manual' when a ref is recorded.
+ALTER TABLE invoices ADD COLUMN upi_ref TEXT;

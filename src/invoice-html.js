@@ -94,7 +94,8 @@ export const fmtUnits = (n) =>
    So:
      unpaid            → the pay-to details, as always
      paid via the link → the Razorpay reference, which is what a receipt is for
-     paid by hand      → just PAID; there is no reference to show
+     paid by UPI, ref recorded → "Paid by UPI" and the UTR the owner typed in
+     paid by hand, no ref      → just PAID; there is no reference to show
 
    Mirrored by payBlock() in public/js/core.js for the on-screen preview and the
    thermal receipt, which render from form state rather than from a row. */
@@ -106,6 +107,9 @@ export function paymentBlock(inv) {
   if (inv.rzp_payment_id) {
     lines.push("Paid online via Razorpay");
     lines.push(`Ref ${inv.rzp_payment_id}`);
+  } else if (inv.upi_ref) {
+    lines.push("Paid by UPI");
+    lines.push(`UTR ${inv.upi_ref}`);
   }
   if (inv.paid_at) lines.push(fmtPaidDate(inv.paid_at));
   return { kind: "paid", label: "Paid", lines };

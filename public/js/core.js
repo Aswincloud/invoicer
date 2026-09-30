@@ -149,6 +149,11 @@ let PAY_REF = null;                       // { number, id, at } | null
    the invoice the first press made. */
 let CURRENT_ID = null;
 
+/* The UPI ref as stored, when the invoice open in the editor is PAID and so
+   locked against edits — { ref } or null. Save then records a changed UPI ref
+   through its own endpoint instead of attempting an edit the server refuses. */
+let LOCKED_PAID = null;
+
 /* Ask the server for an invoice number it is not already using.
 
    The number stays PREFIX-YEAR-<4 random digits> — sequential numbering would
@@ -177,13 +182,25 @@ async function freshInvoiceNumber(){
 // module-level helpers need their own field accessor.
 const fld = (id) => ($(id)?.value || "").trim();
 
+// Mirrors src/upiref.js: spaces and dashes dropped, uppercased, 6–35 letters
+// and digits. null for something the server would refuse, "" for none.
+function cleanUpiRef(raw){
+  const r = String(raw || "").replace(/[\s-]+/g, "").toUpperCase();
+  if(!r) return "";
+  return /^[A-Z0-9]{6,35}$/.test(r) ? r : null;
+}
+
 function payBlock(){
   const paid = fld("status").toUpperCase() === "PAID";
   if(!paid) return { paid:false, label:"Pay To", lines: payToLines() };
 
   const ref = PAY_REF && PAY_REF.number === fld("invNo") ? PAY_REF : null;
   const lines = [];
+  // The UPI ref is a form field, so it previews as it is typed; Razorpay's
+  // reference wins when there is one, as it does in paymentBlock().
+  const upi = cleanUpiRef(fld("upiRef"));
   if(ref && ref.id){ lines.push("Paid online via Razorpay"); lines.push("Ref " + ref.id); }
+  else if(upi){ lines.push("Paid by UPI"); lines.push("UTR " + upi); }
   if(ref && ref.at) lines.push(fmtPaidDate(ref.at));
   return { paid:true, label:"Paid", lines };
 }

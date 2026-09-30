@@ -18,6 +18,7 @@ import {
 } from "./pay.js";
 import { sharePdf, sweepPayLinks, payLinkReceipt, upiPage } from "./pay.js";
 import { freeInvoiceNumber } from "./numbering.js";
+import { cleanUpiRef, setUpiRef } from "./upiref.js";
 import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor, canRequestPayment, requestParams, buildPaymentRequestMessage } from "./wa.js";
 import { maySend } from "./access.js";
 import { payLinkPage, startPayLink } from "./paylink.js";
@@ -188,6 +189,8 @@ async function api(request, env, url, ctx) {
   }
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/email$/)) && m === "POST")
     return emailInvoice(env, user, match[1], body);
+  if ((match = p.match(/^\/api\/invoices\/([^/]+)\/upi-ref$/)) && m === "POST")
+    return setUpiRef(env, user, match[1], body);
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/share$/)) && m === "POST")
     return shareInvoice(env, user, match[1], request.url);
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/whatsapp\/preview$/)) && m === "GET")
@@ -692,6 +695,8 @@ async function createInvoice(env, user, b) {
   const id = uid(); const t = now();
   const items = Array.isArray(b.items) ? b.items : [];
   const inv = invoiceFields(b);
+  const upi = cleanUpiRef(b.upiRef);
+  if (!upi.ok) return bad(upi.error, 400);
 
   if (await numberTaken(env, user, inv.number))
     return bad(`Invoice number ${inv.number} is already in use.`, 409);
@@ -718,9 +723,22 @@ async function createInvoice(env, user, b) {
          inv.gift_code, inv.gift_amount, t, t).run();
 
   await writeLineItems(env, id, items);
+  await recordUpiRef(env, id, inv.status, upi.ref);
 
   return json({ ok: true, id, total });
 }
+
+/* The UPI reference, written beside the form fields rather than among them: it
+   belongs to the payment, not the document, and is only meaningful on a PAID
+   invoice. On anything else it is ignored rather than stored, so an invoice
+   flipped back to UNPAID before saving does not keep a stale ref. */
+async function recordUpiRef(env, id, status, ref) {
+  if (!ref || String(status || "").toUpperCase() !== "PAID") return;
+  await env.DB.prepare(
+    "UPDATE invoices SET upi_ref=?, paid_via=COALESCE(paid_via,'upi_manual'), updated_at=? WHERE id=?"
+  ).bind(ref, now(), id).run();
+}
+
 
 /* Edit an invoice in place.
 
@@ -754,6 +772,8 @@ async function updateInvoice(env, user, id, b) {
 
   const items = Array.isArray(b.items) ? b.items : [];
   const inv = invoiceFields(b);
+  const upi = cleanUpiRef(b.upiRef);
+  if (!upi.ok) return bad(upi.error, 400);
 
   if (await numberTaken(env, user, inv.number, id))
     return bad(`Invoice number ${inv.number} is already in use.`, 409);
@@ -781,6 +801,7 @@ async function updateInvoice(env, user, id, b) {
          inv.client_gst, total, inv.gift_code, inv.gift_amount, now(), id, user.id).run();
 
   await writeLineItems(env, id, items);
+  await recordUpiRef(env, id, inv.status, upi.ref);
 
   return json({ ok: true, id, total, updated: true });
 }

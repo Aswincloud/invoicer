@@ -213,6 +213,9 @@ async function openInvoiceInEditor(id){
     PAY_REF = inv.rzp_payment_id || inv.paid_at
       ? { number: (inv.number || "").trim(), id: inv.rzp_payment_id || "", at: inv.paid_at || 0 }
       : null;
+    $("upiRef").value = inv.upi_ref || "";
+    LOCKED_PAID = (String(inv.status || "").toUpperCase() === "PAID" || inv.rzp_payment_id)
+      ? { ref: inv.upi_ref || "", rzp: !!inv.rzp_payment_id } : null;
     $("notes").value    = inv.notes || "";
     $("clName").value   = inv.client_name || "";
     $("clEmail").value  = inv.client_email || "";

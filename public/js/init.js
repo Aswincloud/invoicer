@@ -44,6 +44,7 @@ function init(){
   // Rounding changes the total, so the solver has to re-aim at it.
   $("roundOff").addEventListener("change", update);
   $("payQrOn").addEventListener("change", update);
+  $("upiRef").addEventListener("input", render);
   // Business fields persist locally always, and to the account (debounced) when
   // signed in — so a logged-in user's profile lives in the cloud DB, not just
   // this device.
@@ -80,6 +81,7 @@ function init(){
     applyInference();
     $("status").value = "UNPAID";
     PAY_REF = null;              // a blank invoice carries no payment reference
+    $("upiRef").value = ""; LOCKED_PAID = null;
     CURRENT_ID = null;           // ...and is not an edit of anything
     $("items").innerHTML=""; addItem();
     freshInvoiceNumber().then(nu => { $("invNo").value = nu; render(); });
@@ -115,6 +117,8 @@ function collect(){
     roundOff:$("roundOff").checked,
     showPayQr:$("payQrOn").checked,
     status:v("status"),notes:v("notes"),
+    // Only meaningful on a PAID invoice; the server ignores it otherwise.
+    upiRef:$("upiRef").value.trim(),
     // Which business is issuing it. Ignored by the server on an edit — the
     // issuing business is fixed at creation.
     businessId: ACTIVE_BIZ,
