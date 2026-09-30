@@ -199,6 +199,14 @@
                migration 0009 lets a replacement reuse it. -->
           <option>VOID</option>
         </select></label>
+        <!-- Shown only while Status is PAID. For a payment made straight to the
+             UPI id: the UTR / UPI Ref No. from the payment app, printed under
+             "Paid". Saved with the invoice, or on its own once the invoice is
+             paid and locked (POST /api/invoices/:id/upi-ref). -->
+        <label id="upiRefWrap" hidden>UPI ref (UTR)
+          <input id="upiRef" type="text" inputmode="text" autocomplete="off" spellcheck="false"
+                 maxlength="45" placeholder="12-digit UTR from the payment app">
+        </label>
         <label class="col2">Notes / terms<textarea id="notes" rows="2" placeholder="Net 14 days. Thank you for your business!"></textarea></label>
       </div>
 

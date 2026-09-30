@@ -8,6 +8,7 @@ function render(){
   const v = (id) => $(id).value.trim();
   const cur = $("currency").value;
   const status = v("status") || "UNPAID";
+  { const w = $("upiRefWrap"); if(w) w.hidden = status.toUpperCase() !== "PAID"; }
   const payNow = payBlock();
   const words = amountInWords(t.total, cur);
   const units = itemUnits(items);
