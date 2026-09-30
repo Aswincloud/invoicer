@@ -125,7 +125,7 @@ function wireBackend(){
     // document: record a new or corrected one on its own.
     if(CURRENT_ID && LOCKED_PAID && !LOCKED_PAID.rzp){
       const ref = cleanUpiRef($("upiRef").value);
-      if(ref === null){ alert("A UPI reference is 6 to 35 letters and digits, like the 12-digit UTR in your payment app."); return; }
+      if(ref === null){ alert("Enter the UTR from your payment app (6 to 35 letters and digits) or a Razorpay payment id like pay_Ti9e3IaRPdRK95."); return; }
       if(ref !== LOCKED_PAID.ref){
         try{
           await api("/invoices/"+CURRENT_ID+"/upi-ref", {method:"POST", body: JSON.stringify({ upiRef: ref })});
@@ -136,7 +136,7 @@ function wireBackend(){
       }
     }
     if($("status").value === "PAID" && cleanUpiRef($("upiRef").value) === null){
-      alert("A UPI reference is 6 to 35 letters and digits, like the 12-digit UTR in your payment app."); return;
+      alert("Enter the UTR from your payment app (6 to 35 letters and digits) or a Razorpay payment id like pay_Ti9e3IaRPdRK95."); return;
     }
     try{
       const r = await persistInvoice();

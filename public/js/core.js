@@ -184,8 +184,11 @@ const fld = (id) => ($(id)?.value || "").trim();
 
 // Mirrors src/upiref.js: spaces and dashes dropped, uppercased, 6–35 letters
 // and digits. null for something the server would refuse, "" for none.
+// A Razorpay payment id (pay_ + 14) is case-sensitive and kept as typed.
 function cleanUpiRef(raw){
-  const r = String(raw || "").replace(/[\s-]+/g, "").toUpperCase();
+  const s = String(raw || "").trim();
+  if(/^pay_/i.test(s)){ const id = "pay_" + s.slice(4); return /^pay_[A-Za-z0-9]{14}$/.test(id) ? id : null; }
+  const r = s.replace(/[\s-]+/g, "").toUpperCase();
   if(!r) return "";
   return /^[A-Z0-9]{6,35}$/.test(r) ? r : null;
 }
@@ -200,6 +203,7 @@ function payBlock(){
   // reference wins when there is one, as it does in paymentBlock().
   const upi = cleanUpiRef(fld("upiRef"));
   if(ref && ref.id){ lines.push("Paid online via Razorpay"); lines.push("Ref " + ref.id); }
+  else if(upi && /^pay_/.test(upi)){ lines.push("Paid via Razorpay"); lines.push("Ref " + upi); }
   else if(upi){ lines.push("Paid by UPI"); lines.push("UTR " + upi); }
   if(ref && ref.at) lines.push(fmtPaidDate(ref.at));
   return { paid:true, label:"Paid", lines };
