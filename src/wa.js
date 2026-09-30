@@ -245,8 +245,27 @@ export function buildTemplateMessage(env, { to, inv, pdfUrl }) {
 
 /* POST it. Returns { ok, id } or { ok:false, error, status }. Never throws on
  * an HTTP error - the caller turns it into a 502 with Meta's own message, which
- * is the useful one ("template not found", "recipient not opted in"). */
+ * is the useful one ("template not found", "recipient not opted in").
+ *
+ * Every message a customer is sent is then sent, identically, to WA_COPY_TO
+ * when that is set (a Worker secret: the owner's own WhatsApp number), so the
+ * owner sees on a real phone exactly what went out — Meta keeps no sent log,
+ * and API-sent messages do not appear in Chatwoot. Only after Meta accepted
+ * the customer's copy, never for a message already addressed to that number,
+ * and a failed copy is logged and ignored: it must not turn a delivered
+ * customer message into an error. Each copy is a paid utility message outside
+ * a 24 h window (about 14 paise with GST, Sep 2026). */
 export async function sendTemplate(env, body) {
+  const res = await postMessage(env, body);
+  const copyTo = toE164(env.WA_COPY_TO);
+  if (res.ok && copyTo && copyTo !== toE164(body?.to)) {
+    const copy = await postMessage(env, { ...body, to: copyTo });
+    if (!copy.ok) console.error("whatsapp owner copy failed", copy.error);
+  }
+  return res;
+}
+
+async function postMessage(env, body) {
   const ver = env[WA_ENV.version] || "v23.0";
   const url = `https://graph.facebook.com/${ver}/${env[WA_ENV.phoneId]}/messages`;
   let r;
