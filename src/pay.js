@@ -174,6 +174,13 @@ export async function sharePage(env, token) {
     <div class="paywrap">
       <button id="pay" class="pay">Pay ${esc(amountLabel)}</button>
       <div id="msg" class="msg"></div>
+      <button id="qrbtn" class="qrbtn" type="button">Or pay by scanning a UPI QR</button>
+      <div id="qrbox" class="qrbox" hidden>
+        <img id="qrimg" alt="UPI QR code for ${esc(amountLabel)}" width="260">
+        <div class="qrnote">Scan with any UPI app (Google Pay, PhonePe, Paytm, your bank).
+          It is for exactly ${esc(amountLabel)} and works once. This page updates when the payment arrives.</div>
+        <div id="qrmsg" class="msg"></div>
+      </div>
       <div class="secure">
         <img src="/razorpay.svg" alt="Razorpay" class="rzp" width="104" height="22">
         <div class="secure-note">Card and UPI details are entered on Razorpay's
@@ -181,7 +188,8 @@ export async function sharePage(env, token) {
       </div>
     </div>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-    <script>${payScript(token, bizName, inv)}</script>` :
+    <script>${payScript(token, bizName, inv)}</script>
+    <script>${qrScript(token)}</script>` :
     (isPaid || isVoid || !can.why || can.why === "paid" ? "" :
       `<div class="paywrap"><div class="msg">${esc(can.why)}</div></div>`);
 
@@ -242,6 +250,12 @@ export async function sharePage(env, token) {
   .msg.err { color:#b91c1c; }
   .msg.ok  { color:#166534; font-weight:600; }
   .secure { margin-top:14px; }
+  .qrbtn { margin-top:12px; width:100%; max-width:420px; padding:12px 18px; font-size:14px; font-weight:600;
+           color:#4f46e5; background:transparent; border:1.5px solid #c7d2fe; border-radius:11px; cursor:pointer; }
+  .qrbtn:disabled { opacity:.6; cursor:default; }
+  .qrbox { margin:14px auto 0; max-width:320px; }
+  .qrbox img { width:100%; max-width:260px; height:auto; background:#fff; border-radius:12px; padding:8px; }
+  .qrnote { margin-top:8px; font-size:12px; line-height:1.5; color:#71717a; }
   .rzp { height:22px; width:auto; opacity:.9; }
   .secure-note { margin:7px auto 0; max-width:360px; font-size:11.5px;
                  line-height:1.5; color:#71717a; }
@@ -350,6 +364,44 @@ function jsonForScript(value) {
 // The page's own script. Kept as a string rather than a static asset because the
 // token and invoice details are baked in, and a static file would have to fetch
 // them separately anyway.
+/* The UPI QR button: fetch (or reuse) the invoice's Razorpay QR, show it, and
+   poll the status while it is on screen so the page can say Paid. Stops polling
+   after ten minutes, and offers a fresh QR once the shown one has expired. */
+function qrScript(token) {
+  const t = jsonForScript(token);
+  return `
+(function(){
+  var T = ${t};
+  var btn = document.getElementById('qrbtn'), box = document.getElementById('qrbox'),
+      img = document.getElementById('qrimg'), msg = document.getElementById('qrmsg');
+  if (!btn) return;
+  var label = btn.textContent, poll = null, until = 0, closeBy = 0;
+  function say(t, c){ msg.textContent = t; msg.className = 'msg' + (c ? ' ' + c : ''); }
+  function stop(){ if (poll) { clearInterval(poll); poll = null; } }
+  btn.onclick = async function(){
+    btn.disabled = true; btn.textContent = 'Getting your QR…'; say('');
+    try {
+      var r = await fetch('/api/pay/' + T + '/qr', { method: 'POST' });
+      var d = await r.json();
+      if (!r.ok || !d.image) throw new Error(d.error || 'Could not get a QR.');
+      img.src = d.image; closeBy = d.closeBy || 0;
+      box.hidden = false; btn.hidden = true;
+      if (closeBy) say('Valid until ' + new Date(closeBy).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '.');
+      until = Date.now() + 10 * 60 * 1000; stop();
+      poll = setInterval(async function(){
+        if (Date.now() > until) { stop(); say('Paid already? Reload this page to see the updated invoice.'); return; }
+        if (closeBy && Date.now() > closeBy) { stop(); box.hidden = true; btn.hidden = false; btn.disabled = false;
+          btn.textContent = 'That QR expired — get a new one'; return; }
+        try {
+          var s = await (await fetch('/api/pay/' + T + '/status')).json();
+          if (s.status === 'PAID') { stop(); say('Payment received. Thank you!', 'ok'); setTimeout(function(){ location.reload(); }, 2000); }
+        } catch (_) {}
+      }, 5000);
+    } catch (e) { say(e.message || String(e), 'err'); btn.disabled = false; btn.textContent = label; }
+  };
+})();`;
+}
+
 function payScript(token, bizName, inv) {
   const cfg = jsonForScript({
     token,
@@ -779,6 +831,71 @@ export async function upiTarget(env, inv, totalPaise) {
   const direct = upiAmountUri(inv.upi_vpa, inv.biz_name, totalPaise, inv.number);
   if (direct) return { mode: "direct", uri: direct };
   return { mode: null, uri: "" };
+}
+
+// ── POST /api/pay/:token/qr — the UPI QR on the invoice page ─────────────────
+//
+// A Razorpay single-use QR fixed to the invoice's exact amount, shown as
+// Razorpay's own image. Any UPI app pays it, and qr_code.credited (above) marks
+// the invoice PAID and sends the receipts — the same path a /u QR used.
+//
+// Minted only when the customer asks for it (a button, not page load), so a
+// link preview or a crawler never creates one, and reused while it is for the
+// same amount with more than SHARE_QR_MIN_LEFT_MS to go, so re-opening the page
+// shows the same QR. A changed total closes the old QR before minting the next:
+// only one can ever be paid. Token-gated like the page; POSTs to /api/pay/* sit
+// behind the zone rate limit. Returns { ok, image, amount, closeBy } or
+// { ok:false, error }.
+const SHARE_QR_LIFETIME_MS = 2 * 60 * 60 * 1000;   // Razorpay caps single-use QRs anyway
+const SHARE_QR_MIN_LEFT_MS = 15 * 60 * 1000;
+
+export async function shareQr(env, token) {
+  const loaded = await loadByToken(env, token);
+  if (!loaded) return bad("not found", 404);
+  const { inv, items } = loaded;
+  const total = computeTotals(inv, items).total;
+  const can = payability(env, inv, total);
+  if (!can.ok) return bad(can.why === "paid" ? "This invoice is already paid." : can.why === "void" ? "This invoice has been cancelled." : can.why, 409);
+  const totalPaise = paise(total);
+
+  if (inv.rzp_qr_image && Number(inv.rzp_qr_amount) === totalPaise &&
+      Number(inv.rzp_qr_close_by) > now() + SHARE_QR_MIN_LEFT_MS) {
+    return json({ ok: true, image: inv.rzp_qr_image, amount: totalPaise, closeBy: Number(inv.rzp_qr_close_by) });
+  }
+
+  const closeBy = now() + SHARE_QR_LIFETIME_MS;
+  const made = await createUpiQr(env, {
+    amountPaise: totalPaise, name: inv.biz_name || "Invoice",
+    description: `Invoice ${inv.number || ""}`.trim(), closeBy,
+    notes: { invoicer_invoice: inv.id, number: String(inv.number || "") },
+  });
+  if (!made.ok) {
+    console.warn("share-page UPI QR refused by Razorpay", made.status, made.error || "");
+    return bad("UPI QR is not available right now. Use the Pay button instead.", 502);
+  }
+  const image = String(made.qr.image_url || "");
+  if (!/^https:\/\//i.test(image)) {
+    // A live, payable QR nobody can be shown: close it at once. Field NAMES
+    // only are logged, so the right one can be read next time.
+    await closeUpiQr(env, made.qr.id).catch(() => null);
+    console.warn("razorpay UPI QR has no image_url; closed it", made.qr.id, Object.keys(made.qr || {}).join(","));
+    return bad("UPI QR is not available right now. Use the Pay button instead.", 502);
+  }
+  const closeByReal = Number(made.qr.close_by) > 0 ? Math.min(closeBy, Number(made.qr.close_by) * 1000) : closeBy;
+  if (inv.rzp_qr_id) closeUpiQr(env, inv.rzp_qr_id).catch(() => null);
+  await env.DB.prepare(
+    `UPDATE invoices SET rzp_qr_id=?, rzp_qr_image=?, rzp_qr_upi=?, rzp_qr_amount=?, rzp_qr_close_by=?, updated_at=? WHERE id=?`
+  ).bind(made.qr.id, image, String(made.qr.image_content || "") || null, totalPaise, closeByReal, now(), inv.id).run();
+  return json({ ok: true, image, amount: totalPaise, closeBy: closeByReal });
+}
+
+// ── GET /api/pay/:token/status — has the invoice been paid yet? ──────────────
+// Polled by the page while the QR is on screen, so it can say "Paid" the moment
+// the webhook lands. Token-gated, and only the status leaves.
+export async function shareStatus(env, token) {
+  const loaded = await loadByToken(env, token);
+  if (!loaded) return bad("not found", 404);
+  return json({ status: String(loaded.inv.status || "UNPAID").toUpperCase() });
 }
 
 // ── GET /u/:token — Pay by UPI ──────────────────────────────────────────────

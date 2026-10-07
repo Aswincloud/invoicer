@@ -16,7 +16,7 @@ import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
 } from "./pay.js";
-import { sharePdf, sweepPayLinks, payLinkReceipt, upiPage } from "./pay.js";
+import { sharePdf, sweepPayLinks, payLinkReceipt, upiPage, shareQr, shareStatus } from "./pay.js";
 import { freeInvoiceNumber } from "./numbering.js";
 import { cleanUpiRef, setUpiRef } from "./upiref.js";
 import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor, canRequestPayment, requestParams, buildPaymentRequestMessage } from "./wa.js";
@@ -144,6 +144,11 @@ async function api(request, env, url, ctx) {
   let pm;
   if ((pm = p.match(/^\/api\/pay\/([^/]+)\/order$/)) && m === "POST")
     return createPayOrder(env, pm[1]);
+  // The UPI QR on the invoice page, and the status it polls; see shareQr.
+  if ((pm = p.match(/^\/api\/pay\/([0-9a-f]{32})\/qr$/)) && m === "POST")
+    return shareQr(env, pm[1]);
+  if ((pm = p.match(/^\/api\/pay\/([0-9a-f]{32})\/status$/)) && m === "GET")
+    return shareStatus(env, pm[1]);
   if ((pm = p.match(/^\/api\/pay\/([^/]+)\/verify$/)) && m === "POST")
     return verifyPayCallback(env, pm[1], body);
 

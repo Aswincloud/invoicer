@@ -53,10 +53,11 @@ const check = (label, cond, detail = "") => {
 
 check("page rendered", res.status === 200 && html.includes("<script>"));
 
-// The ONLY </script> tags in the document must be the two real ones that close
-// the Checkout include and the inline block. A third means a value broke out.
+// The ONLY </script> tags in the document must be the three real ones that
+// close the Checkout include, the Pay block and the UPI QR block (2026-10-07).
+// One more means a value broke out.
 const closers = (html.match(/<\/script>/gi) || []).length;
-check("no injected </script>", closers === 2, `found ${closers}, expected 2`);
+check("no injected </script>", closers === 3, `found ${closers}, expected 3`);
 
 check("hostile string is escaped in the script block",
   html.includes("\\u003c/script") || !html.includes(`${HOSTILE}`) ,

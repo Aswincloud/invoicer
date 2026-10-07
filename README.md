@@ -224,6 +224,16 @@ out automatically when the invoice is settled. It replaced
 own UPI ID directly: nothing can observe that transfer, so the customer could
 never be told it succeeded. `/u/<token>` below still serves links already sent.
 
+**UPI QR on the invoice page.** An unpaid invoice's page (`/i/<token>`) has
+"Or pay by scanning a UPI QR" under the Pay button. Pressing it mints a Razorpay
+single-use QR fixed to the exact amount (`POST /api/pay/<token>/qr`), shows
+Razorpay's image of it, and polls `GET /api/pay/<token>/status` so the page turns
+to Paid when the **`qr_code.credited`** webhook lands. Minted on request, never
+on page load; reused while the amount matches and it has 15+ minutes left; a
+changed total closes the old one first. Needs QR Codes enabled on the Razorpay
+account and the webhook subscribed to `qr_code.credited`. Independent of
+`UPI_QR_ENABLED`, which only governs `/u/<token>`.
+
 `/u/<token>` hands the phone a `upi://pay` link — Android opens its UPI app
 chooser at once, iOS gets Google Pay / PhonePe / Paytm buttons, and a QR is shown
 for everything else. The link is, in order of preference:

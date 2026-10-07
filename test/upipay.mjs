@@ -9,7 +9,7 @@
 // arriving twice is reported rather than silently absorbed.
 //
 //   node test/upipay.mjs
-import { upiPage, razorpayWebhook, upiTarget } from "../src/pay.js";
+import { upiPage, razorpayWebhook, upiTarget, shareQr, shareStatus, sharePage } from "../src/pay.js";
 import { canRequestPayment, requestParams, buildPaymentRequestMessage } from "../src/wa.js";
 import { upiAmountUri, upiAppLinks } from "../src/upi.js";
 import { hmacHex } from "../src/lib.js";
@@ -48,6 +48,10 @@ function makeDB(inv) {
     }
     if (s.startsWith("SELECT description,qty,rate,pos FROM line_items")) return { results: db.line_items.filter((l) => l.invoice_id === a[0]) };
     if (s.startsWith("SELECT description FROM line_items")) return { first: db.line_items.find((l) => l.invoice_id === a[0]) || null };
+    if (s.startsWith("UPDATE invoices SET rzp_qr_id=?, rzp_qr_image=?")) {
+      const i = db.invoices.find((x) => x.id === a[6]);
+      Object.assign(i, { rzp_qr_id: a[0], rzp_qr_image: a[1], rzp_qr_upi: a[2], rzp_qr_amount: a[3], rzp_qr_close_by: a[4] }); return { meta: { changes: 1 } };
+    }
     if (s.startsWith("UPDATE invoices SET rzp_qr_id=?")) {
       const i = db.invoices.find((x) => x.id === a[5]);
       Object.assign(i, { rzp_qr_id: a[0], rzp_qr_upi: a[1], rzp_qr_amount: a[2], rzp_qr_close_by: a[3] }); return { meta: { changes: 1 } };
@@ -75,7 +79,7 @@ function makeDB(inv) {
 }
 
 // Outbound: Razorpay QR create/close, Resend, Meta.
-function envWith(inv, { qrRefused = false, over = {} } = {}) {
+function envWith(inv, { qrRefused = false, noImage = false, over = {} } = {}) {
   const calls = { create: [], close: [], mail: [], wa: [] };
   const env = { ...ENV, ...over, DB: makeDB(inv), _c: calls };
   let n = 0;
@@ -90,6 +94,7 @@ function envWith(inv, { qrRefused = false, over = {} } = {}) {
       // the real API is reported to, and returns the clamped close_by.
       const clamped = Math.min(b.close_by, Math.floor(Date.now() / 1000) + 2 * 3600);
       return new Response(JSON.stringify({ id: `qr_${n}`, entity: "qr_code", status: "active", close_by: clamped,
+        image_url: noImage ? undefined : `https://rzp.io/i/qr${n}`,
         image_content: `upi://pay?ver=01&mode=15&pa=rpy.qr${n}@icici&pn=AswinCloud&tr=RZPqr${n}&am=${(b.payment_amount / 100).toFixed(2)}&cu=INR` }), { status: 200 });
     }
     const close = u.pathname.match(/^\/v1\/payments\/qr_codes\/([^/]+)\/close$/);
@@ -214,6 +219,52 @@ async function webhook(env, evt, eventId = "evt_q1") {
 const CREDIT = (qrId, amount = 125000, payId = "pay_q1") => ({ event: "qr_code.credited", payload: {
   qr_code: { entity: { id: qrId, payment_amount: amount } },
   payment: { entity: { id: payId, amount, status: "captured", created_at: 1790500000 } } } });
+
+section("/i/: the UPI QR is offered, minted on request, and reused");
+{
+  const PAYENV = { PAY_ENABLED: "true" };
+  const env = envWith(INV(), { over: PAYENV });
+  const html = await (await sharePage(env, TOKEN)).text();
+  ok("page offers the QR button", html.includes('id="qrbtn"') && html.includes("/api/pay/"));
+  ok("opening the page mints nothing", env._c.create.length === 0);
+  const r1 = await shareQr(env, TOKEN); const j1 = await r1.json();
+  ok("first press mints one QR for the exact amount", r1.status === 200 && j1.image === "https://rzp.io/i/qr1" && env._c.create.length === 1 && env._c.create[0].payment_amount === 125000 && env._c.create[0].fixed_amount === true && env._c.create[0].usage === "single_use", JSON.stringify(j1));
+  ok("stored with its image", env.DB._db.invoices[0].rzp_qr_id === "qr_1" && env.DB._db.invoices[0].rzp_qr_image === "https://rzp.io/i/qr1");
+  const j2 = await (await shareQr(env, TOKEN)).json();
+  ok("second press reuses it", j2.image === "https://rzp.io/i/qr1" && env._c.create.length === 1);
+  env.DB._db.line_items[0].rate = 1500;
+  const j3 = await (await shareQr(env, TOKEN)).json();
+  ok("a changed total mints a new QR and closes the old one", j3.image === "https://rzp.io/i/qr2" && env._c.create[1].payment_amount === 150000 && env._c.close.includes("qr_1"), JSON.stringify(env._c));
+  env.DB._db.invoices[0].rzp_qr_close_by = Date.now() + 60 * 1000;
+  await shareQr(env, TOKEN);
+  ok("a nearly expired QR is replaced", env._c.create.length === 3);
+  const st = await (await shareStatus(env, TOKEN)).json();
+  ok("status reads UNPAID", st.status === "UNPAID");
+  // ...and the webhook settles an invoice whose QR came from this page.
+  await webhook(env, CREDIT("qr_3", 150000, "pay_share"), "evt_share");
+  ok("qr_code.credited marks it PAID via upi_qr, receipts sent", env.DB._db.invoices[0].status === "PAID" && env.DB._db.invoices[0].paid_via === "upi_qr" && env._c.mail.length >= 1, JSON.stringify(env.DB._db.invoices[0].status));
+  ok("status now reads PAID", (await (await shareStatus(env, TOKEN)).json()).status === "PAID");
+  const paidHtml = await (await sharePage(env, TOKEN)).text();
+  ok("a paid page offers no QR", !paidHtml.includes('id="qrbtn"'));
+}
+
+section("/i/: QR refusals");
+{
+  const PAYENV = { PAY_ENABLED: "true" };
+  let env = envWith(INV({ status: "PAID" }), { over: PAYENV });
+  let r = await shareQr(env, TOKEN); ok("paid invoice: 409, nothing minted", r.status === 409 && env._c.create.length === 0);
+  env = envWith(INV({ status: "VOID" }), { over: PAYENV });
+  r = await shareQr(env, TOKEN); ok("cancelled invoice: 409, nothing minted", r.status === 409 && env._c.create.length === 0);
+  env = envWith(INV({ currency: "$" }), { over: PAYENV });
+  r = await shareQr(env, TOKEN); ok("non-rupee invoice: refused", r.status === 409 && env._c.create.length === 0);
+  env = envWith(INV(), { over: { PAY_ENABLED: "false" } });
+  r = await shareQr(env, TOKEN); ok("payments off: refused, page offers no QR", r.status === 409 && !(await (await sharePage(env, TOKEN)).text()).includes('id="qrbtn"'));
+  env = envWith(INV(), { qrRefused: true, over: PAYENV });
+  r = await shareQr(env, TOKEN); ok("Razorpay refuses: 502 with a pointer to the Pay button, nothing stored", r.status === 502 && /Pay button/.test((await r.json()).error) && !env.DB._db.invoices[0].rzp_qr_id);
+  env = envWith(INV(), { noImage: true, over: PAYENV });
+  r = await shareQr(env, TOKEN); ok("QR with no image: closed at once, 502, nothing stored", r.status === 502 && env._c.close.includes("qr_1") && !env.DB._db.invoices[0].rzp_qr_id);
+  r = await shareQr(env, "nothex"); ok("bad token: 404", r.status === 404);
+}
 
 section("qr_code.credited settles the invoice once, and sends the receipt");
 {
