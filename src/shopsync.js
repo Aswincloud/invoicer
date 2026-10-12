@@ -20,14 +20,14 @@ const ATTEMPT_MS = 4000;
 export async function notifyShopShipment(env, inv, kind) {
   if (String(inv?.source || "") !== "shop" || !inv.source_ref) return { ok: true, skipped: "not a shop order" };
   const url = baseUrl(env.SHOP_URL, "https://3d-prints.aswincloud.com");
+  const secret = env.SHOP_INGEST_SECRET;
+  if (!secret || String(env.SHOP_SYNC_ENABLED ?? "true").toLowerCase() === "false") {
+    return { ok: true, skipped: "sync off" };
+  }
   // HTTPS only: the request carries a signature and the customer's tracking.
   if (!/^https:\/\//i.test(url)) {
     console.error("shop shipment sync: SHOP_URL must be https — refusing", url.slice(0, 40));
     return { ok: false, error: "SHOP_URL is not https" };
-  }
-  const secret = env.SHOP_INGEST_SECRET;
-  if (!secret || String(env.SHOP_SYNC_ENABLED ?? "true").toLowerCase() === "false") {
-    return { ok: true, skipped: "sync off" };
   }
   const raw = JSON.stringify({
     ts: now(), receipt: inv.source_ref, kind,
@@ -56,10 +56,12 @@ export async function notifyShopShipment(env, inv, kind) {
         headers: { "Content-Type": "application/json", "User-Agent": "invoicer/1.0", "x-invoicer-signature": signature },
         body: raw,
       });
-      const body = await Promise.race([
+      const parsed = await Promise.race([
         res.json().catch(() => ({})),
         new Promise((_, rej) => ac.signal.addEventListener("abort", () => rej(ac.signal.reason || new Error("timeout")), { once: true })),
       ]);
+      // A JSON null (or any non-object) reads as an empty answer, not a crash.
+      const body = parsed && typeof parsed === "object" ? parsed : {};
       if (res.ok) {
         console.log("shop shipment sync", kind, inv.source_ref, body.already ? "already" : body.status, body.emailed ? "emailed" : "");
         return { ok: true, status: res.status, body };

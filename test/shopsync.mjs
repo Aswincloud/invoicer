@@ -66,6 +66,15 @@ globalThis.fetch = async (url, init) => { calls.push({ url: String(url) }); retu
 const plain = await notifyShopShipment({ ...ENV, SHOP_URL: "http://shop.test" }, INV, "shipped");
 check("an http:// SHOP_URL is refused, nothing sent", plain.ok === false && calls.length === 0, plain.error);
 
+calls.length = 0;
+const offHttp = await notifyShopShipment({ ...ENV, SHOP_URL: "http://shop.test", SHOP_SYNC_ENABLED: "false" }, INV, "shipped");
+check("sync off is reported as off, even with an http URL", offHttp.ok === true && offHttp.skipped === "sync off", JSON.stringify(offHttp));
+
+n = 0;
+globalThis.fetch = async () => { n++; return new Response("null", { status: 200 }); };
+const nul = await notifyShopShipment(ENV, INV, "shipped");
+check("a 200 with a JSON null body is success, not a retry", nul.ok === true && n === 1, `${n} ${JSON.stringify(nul)}`);
+
 n = 0;
 globalThis.fetch = async () => { n++; return new Response('{"error":"Cannot go from cancelled"}', { status: 409 }); };
 const refused = await notifyShopShipment(ENV, INV, "shipped");
