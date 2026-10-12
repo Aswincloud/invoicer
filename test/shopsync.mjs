@@ -53,6 +53,19 @@ globalThis.fetch = async () => { n++; return n === 1 ? new Response("{}", { stat
 const flaky = await notifyShopShipment(ENV, INV, "shipped");
 check("a 502 then success counts as success", flaky.ok === true && n === 2, `${n} ${JSON.stringify(flaky)}`);
 
+// A shop that never answers: each attempt is cut off, and the result comes back.
+n = 0;
+globalThis.fetch = (url, init) => { n++; return new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(init.signal.reason), { once: true })); };
+const t0 = Date.now();
+const hung = await notifyShopShipment(ENV, INV, "shipped");
+const took = Date.now() - t0;
+check("a hung shop is abandoned, not waited on forever", hung.ok === false && n === 2 && took < 10000, `${n} attempts, ${took} ms, ${hung.error}`);
+
+calls.length = 0;
+globalThis.fetch = async (url, init) => { calls.push({ url: String(url) }); return new Response("{}"); };
+const plain = await notifyShopShipment({ ...ENV, SHOP_URL: "http://shop.test" }, INV, "shipped");
+check("an http:// SHOP_URL is refused, nothing sent", plain.ok === false && calls.length === 0, plain.error);
+
 n = 0;
 globalThis.fetch = async () => { n++; return new Response('{"error":"Cannot go from cancelled"}', { status: 409 }); };
 const refused = await notifyShopShipment(ENV, INV, "shipped");
