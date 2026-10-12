@@ -28,19 +28,34 @@ export async function notifyShopShipment(env, inv, kind) {
     courier: carrierName(inv.courier) || String(inv.courier || ""),
     tracking: String(inv.tracking_id || ""),
   });
-  try {
-    const res = await fetch(`${url}/api/sync/shipment`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": "invoicer/1.0",
-                 "x-invoicer-signature": await hmacHex("invoicer->shop\n" + raw, secret) },
-      body: raw,
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) console.error("shop shipment sync", kind, inv.source_ref, res.status, JSON.stringify(body).slice(0, 160));
-    else console.log("shop shipment sync", kind, inv.source_ref, body.already ? "already" : body.status, body.emailed ? "emailed" : "");
-    return { ok: res.ok, status: res.status, body };
-  } catch (e) {
-    console.error("shop shipment sync error", kind, inv.source_ref, e?.message || e);
-    return { ok: false, error: String(e?.message || e) };
+  const signature = await hmacHex("invoicer->shop\n" + raw, secret);
+  // One immediate retry for a network error or a 5xx — the transient failures
+  // (the shop mid-deploy, an edge 502). Not for a 4xx: a refusal (cancelled
+  // order, bad signature) will not change on a second try. No queue, no cron:
+  // if it still fails, the caller tells the owner in the dashboard.
+  let last = { ok: false, error: "not attempted" };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch(`${url}/api/sync/shipment`, {
+        method: "POST",
+        // Never follow a redirect: it would forward the signature and the
+        // customer's tracking details to wherever it pointed.
+        redirect: "error",
+        headers: { "Content-Type": "application/json", "User-Agent": "invoicer/1.0", "x-invoicer-signature": signature },
+        body: raw,
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        console.log("shop shipment sync", kind, inv.source_ref, body.already ? "already" : body.status, body.emailed ? "emailed" : "");
+        return { ok: true, status: res.status, body };
+      }
+      console.error("shop shipment sync", kind, inv.source_ref, res.status, JSON.stringify(body).slice(0, 160));
+      last = { ok: false, status: res.status, body, error: body?.error || `HTTP ${res.status}` };
+      if (res.status < 500) return last;
+    } catch (e) {
+      console.error("shop shipment sync error", kind, inv.source_ref, e?.message || e);
+      last = { ok: false, error: String(e?.message || e) };
+    }
   }
+  return last;
 }

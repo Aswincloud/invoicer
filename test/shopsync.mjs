@@ -37,9 +37,26 @@ check("SHOP_SYNC_ENABLED=false: no call", calls.length === 0);
 await notifyShopShipment({ SHOP_INGEST_SECRET: "s3cret" }, INV, "delivered");
 check("defaults to the live shop URL", calls[0]?.url === "https://3d-prints.aswincloud.com/api/sync/shipment" && JSON.parse(calls[0].init.body).kind === "delivered", calls[0]?.url);
 
-globalThis.fetch = async () => { throw new Error("network down"); };
+calls.length = 0;
+globalThis.fetch = async (url, init) => { calls.push({ url: String(url), init }); return new Response("{}", { status: 200 }); };
+await notifyShopShipment(ENV, INV, "shipped");
+check("request sets redirect: error", calls[0].init.redirect === "error", String(calls[0].init.redirect));
+
+let n = 0;
+globalThis.fetch = async () => { n++; throw new Error("network down"); };
 const down = await notifyShopShipment(ENV, INV, "shipped");
 check("a network failure never throws", down.ok === false && /network/.test(down.error));
+check("and is retried once", n === 2, String(n));
+
+n = 0;
+globalThis.fetch = async () => { n++; return n === 1 ? new Response("{}", { status: 502 }) : new Response('{"ok":true,"status":"shipped"}', { status: 200 }); };
+const flaky = await notifyShopShipment(ENV, INV, "shipped");
+check("a 502 then success counts as success", flaky.ok === true && n === 2, `${n} ${JSON.stringify(flaky)}`);
+
+n = 0;
+globalThis.fetch = async () => { n++; return new Response('{"error":"Cannot go from cancelled"}', { status: 409 }); };
+const refused = await notifyShopShipment(ENV, INV, "shipped");
+check("a 4xx refusal is not retried", refused.ok === false && n === 1 && /cancelled/.test(refused.error), `${n} ${refused.error}`);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall pass");
 process.exit(failed ? 1 : 0);

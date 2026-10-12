@@ -262,7 +262,7 @@ function wireBackend(){
         const r = await api("/invoices/"+WA.id+"/whatsapp",{method:"POST",body:JSON.stringify(body)});
         $("waMsg").textContent = "";
         closeWa();
-        alert("Sent on WhatsApp to "+(r.to||body.to)+" ✓");
+        alert("Sent on WhatsApp to "+(r.to||body.to)+" ✓"+(r.shopSync ? "\n\n"+r.shopSync : ""));
       }catch(e){
         // The server's message already begins "WhatsApp failed:" - do not
         // prefix it twice.
