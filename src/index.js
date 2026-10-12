@@ -16,6 +16,7 @@ import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
 } from "./pay.js";
+import { notifyShopShipment } from "./shopsync.js";
 import { sharePdf, sweepPayLinks, payLinkReceipt, upiPage, shareQr, shareStatus } from "./pay.js";
 import { freeInvoiceNumber } from "./numbering.js";
 import { cleanUpiRef, setUpiRef } from "./upiref.js";
@@ -201,7 +202,7 @@ async function api(request, env, url, ctx) {
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/whatsapp\/preview$/)) && m === "GET")
     return whatsappPreview(env, user, match[1], url);
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/whatsapp$/)) && m === "POST")
-    return whatsappSend(env, user, match[1], body);
+    return whatsappSend(env, user, match[1], body, ctx);
 
   return bad("not found", 404);
 }
@@ -289,7 +290,7 @@ async function whatsappPreview(env, user, id, url) {
   });
 }
 
-async function whatsappSend(env, user, id, b) {
+async function whatsappSend(env, user, id, b, ctx = null) {
   if (!maySend(env, user.email)) return bad("this account cannot send messages", 403);
   const kind = String((b && b.kind) || "invoice");
   if (!WA_KINDS.has(kind)) return bad("unknown kind");
@@ -316,6 +317,10 @@ async function whatsappSend(env, user, id, b) {
        WHERE id=?`
     ).bind(courier, awb, now(), now(), to, id).run();
 
+    // Tell the shop, whatever WhatsApp does next: the shipment is a fact now.
+    const sync = notifyShopShipment(env, { ...inv, courier, tracking_id: awb }, "shipped");
+    if (ctx?.waitUntil) ctx.waitUntil(sync); else await sync;
+
     const res = await sendTemplate(env, buildShippedMessage(env, { to, inv, courier, awb }));
     if (!res.ok) {
       console.error("whatsapp shipped failed", inv.number, res.status, res.error);
@@ -332,6 +337,8 @@ async function whatsappSend(env, user, id, b) {
   await env.DB.prepare(
     "UPDATE invoices SET delivered_at=COALESCE(delivered_at, ?), track_status='delivered', updated_at=? WHERE id=?"
   ).bind(now(), now(), id).run();
+  const syncD = notifyShopShipment(env, inv, "delivered");
+  if (ctx?.waitUntil) ctx.waitUntil(syncD); else await syncD;
   const res = await sendTemplate(env, buildDeliveredMessage(env, { to, inv }));
   if (!res.ok) {
     console.error("whatsapp delivered failed", inv.number, res.status, res.error);
