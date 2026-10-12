@@ -31,6 +31,10 @@ SHIPTRACK_BASE_URL = "https://shiptrack.aswincloud.com"
 # Kill switch: set to "false" and deploy to stop accepting them, without touching
 # the shop. Checked before any work, so a disabled endpoint writes nothing.
 SHOP_INGEST_ENABLED = "true"
+# Two-way shipment sync: shipping or delivering a shop invoice from this
+# dashboard tells the shop at once (POST <SHOP_URL>/api/sync/shipment, signed
+# with SHOP_INGEST_SECRET). SHOP_SYNC_ENABLED = "false" turns it off.
+SHOP_URL = "https://3d-prints.aswincloud.com"
 
 # Whose business appears on an auto-raised invoice. Read from config, never from
 # the request — otherwise the caller would choose whose name is on the document.

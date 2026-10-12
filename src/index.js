@@ -16,6 +16,7 @@ import {
   sharePage, shareLogo, createPayOrder, verifyPayCallback, razorpayWebhook,
   shareInvoice, shareUrl,
 } from "./pay.js";
+import { notifyShopShipment } from "./shopsync.js";
 import { sharePdf, sweepPayLinks, payLinkReceipt, upiPage, shareQr, shareStatus } from "./pay.js";
 import { freeInvoiceNumber } from "./numbering.js";
 import { cleanUpiRef, setUpiRef } from "./upiref.js";
@@ -201,7 +202,7 @@ async function api(request, env, url, ctx) {
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/whatsapp\/preview$/)) && m === "GET")
     return whatsappPreview(env, user, match[1], url);
   if ((match = p.match(/^\/api\/invoices\/([^/]+)\/whatsapp$/)) && m === "POST")
-    return whatsappSend(env, user, match[1], body);
+    return whatsappSend(env, user, match[1], body, ctx);
 
   return bad("not found", 404);
 }
@@ -289,7 +290,7 @@ async function whatsappPreview(env, user, id, url) {
   });
 }
 
-async function whatsappSend(env, user, id, b) {
+async function whatsappSend(env, user, id, b, ctx = null) {
   if (!maySend(env, user.email)) return bad("this account cannot send messages", 403);
   const kind = String((b && b.kind) || "invoice");
   if (!WA_KINDS.has(kind)) return bad("unknown kind");
@@ -316,15 +317,22 @@ async function whatsappSend(env, user, id, b) {
        WHERE id=?`
     ).bind(courier, awb, now(), now(), to, id).run();
 
+    // Tell the shop, whatever WhatsApp does next: the shipment is a fact now.
+    // Awaited, not waitUntil: the result goes back to the dashboard, so a shop
+    // that could not be reached is SAID, not silently left at "ready". It is
+    // one signed request with a single quick retry, well inside a click.
+    const sync = await notifyShopShipment(env, { ...inv, courier, tracking_id: awb }, "shipped");
+    const shopSync = shopSyncNote(sync);
+
     const res = await sendTemplate(env, buildShippedMessage(env, { to, inv, courier, awb }));
     if (!res.ok) {
       console.error("whatsapp shipped failed", inv.number, res.status, res.error);
-      return bad("Shipment saved, but WhatsApp failed: " + res.error, 502);
+      return bad("Shipment saved, but WhatsApp failed: " + res.error + (shopSync ? ` ${shopSync}` : ""), 502);
     }
     await env.DB.prepare(
       "UPDATE invoices SET wa_shipped_message_id=?, wa_shipped_at=?, updated_at=? WHERE id=?"
     ).bind(res.id, now(), now(), id).run();
-    return json({ ok: true, id: res.id, to: prettyE164(to), courier, tracking: awb, trackUrl: trackUrl(env, courier, awb) });
+    return json({ ok: true, id: res.id, to: prettyE164(to), courier, tracking: awb, trackUrl: trackUrl(env, courier, awb), shopSync });
   }
 
   // delivered
@@ -332,15 +340,23 @@ async function whatsappSend(env, user, id, b) {
   await env.DB.prepare(
     "UPDATE invoices SET delivered_at=COALESCE(delivered_at, ?), track_status='delivered', updated_at=? WHERE id=?"
   ).bind(now(), now(), id).run();
+  const shopSyncD = shopSyncNote(await notifyShopShipment(env, inv, "delivered"));
   const res = await sendTemplate(env, buildDeliveredMessage(env, { to, inv }));
   if (!res.ok) {
     console.error("whatsapp delivered failed", inv.number, res.status, res.error);
-    return bad("Marked delivered, but WhatsApp failed: " + res.error, 502);
+    return bad("Marked delivered, but WhatsApp failed: " + res.error + (shopSyncD ? ` ${shopSyncD}` : ""), 502);
   }
   await env.DB.prepare(
     "UPDATE invoices SET wa_delivered_message_id=?, wa_delivered_at=?, updated_at=? WHERE id=?"
   ).bind(res.id, now(), now(), id).run();
-  return json({ ok: true, id: res.id, to: prettyE164(to) });
+  return json({ ok: true, id: res.id, to: prettyE164(to), shopSync: shopSyncD });
+}
+
+// "" when the shop was told (or this is not a shop invoice); otherwise one line
+// for the owner, so a shop order left behind is visible at the moment it happens.
+function shopSyncNote(r) {
+  if (!r || r.ok || r.skipped) return "";
+  return `The shop order was NOT updated (${r.error || "unreachable"}) — mark it in the shop dashboard; it will not re-send the WhatsApp.`;
 }
 
 /* What the browser gets about the signed-in account.
