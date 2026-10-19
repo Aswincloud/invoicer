@@ -36,6 +36,7 @@ export const WA_ENV = {
   tplPaid:   "WA_TEMPLATE_CONFIRMED", // default "order_confirmed_new"
   tplReceipt:"WA_TEMPLATE_RECEIPT",   // default "payment_received" — pay-link payments
   tplRequest:"WA_TEMPLATE_REQUEST",   // default "invoice_pay_online" — unpaid invoices
+  tplBalance:"WA_TEMPLATE_BALANCE",   // default "invoice_balance_due" — unpaid, part already received
   lang:      "WA_TEMPLATE_LANG",     // default "en"
 };
 
@@ -200,8 +201,27 @@ export function requestParams(inv, totalPaise) {
   ];
 }
 
-export function buildPaymentRequestMessage(env, { to, inv, pdfUrl, token, totalPaise }) {
-  const name = env[WA_ENV.tplRequest] || "invoice_pay_online";
+/* invoice_balance_due (2026-10-19) — the request for an invoice that has been
+ * part-paid by hand. {{1}} customer, {{2}} number, {{3}} business, {{4}} the
+ * invoice total, {{5}} received so far, {{6}} the balance. Same DOCUMENT
+ * header and single "Pay balance" URL button as invoice_pay_online, so the
+ * message is built the same way and only the body differs. */
+export function balanceParams(inv, { totalPaise, receivedPaise, balancePaise }) {
+  const rs = (p) => rupeesText({ rzp_amount: p, currency: inv.currency });
+  return [
+    String(inv.client_name || "").trim() || "there",
+    String(inv.number || ""),
+    String(inv.biz_name || "").trim() || "us",
+    rs(totalPaise), rs(receivedPaise), rs(balancePaise),
+  ];
+}
+
+/* `part` = { totalPaise, receivedPaise, balancePaise } when some of the
+ * invoice has been received by hand: the balance template is used and
+ * totalPaise (the amount asked for) is the balance. Absent, the plain request. */
+export function buildPaymentRequestMessage(env, { to, inv, pdfUrl, token, totalPaise, part = null }) {
+  const name = part ? (env[WA_ENV.tplBalance] || "invoice_balance_due")
+                    : (env[WA_ENV.tplRequest] || "invoice_pay_online");
   const safeNum = String(inv.number || "invoice").replace(/[^A-Za-z0-9._-]/g, "-");
   // A URL button whose fixed prefix lives on the template; only the share token
   // is sent. It is the template's only button, index "0".
@@ -213,7 +233,7 @@ export function buildPaymentRequestMessage(env, { to, inv, pdfUrl, token, totalP
     type: "template",
     template: { name, language: { code: env[WA_ENV.lang] || "en" }, components: [
       { type: "header", parameters: [{ type: "document", document: { link: pdfUrl, filename: `${safeNum}.pdf` } }] },
-      { type: "body", parameters: requestParams(inv, totalPaise).map((text) => ({ type: "text", text })) },
+      { type: "body", parameters: (part ? balanceParams(inv, part) : requestParams(inv, totalPaise)).map((text) => ({ type: "text", text })) },
       button(0),
     ] },
   };

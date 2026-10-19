@@ -9,6 +9,8 @@ import { readFileSync } from "node:fs";
 import { balanceOf, renderInvoiceEmail, computeTotals } from "../src/invoice-html.js";
 import { renderInvoicePdf } from "../src/invoice-pdf.js";
 import { createPayOrder, shareQr, sharePage } from "../src/pay.js";
+import { buildPaymentRequestMessage, balanceParams } from "../src/wa.js";
+import { previewText } from "../src/shipment.js";
 
 let failed = 0;
 const check = (l, c, d = "") => { console.log(`${c ? "PASS" : "FAIL"}  ${l}${d ? "   " + d : ""}`); if (!c) failed++; };
@@ -77,5 +79,18 @@ check("share page button says Pay ₹ 1,000.00", /Pay ₹ 1,000\.00/.test(html),
 calls.length = 0; e = env({ amount_received: 1500 }, calls);
 r = await createPayOrder(e, TOKEN);
 check("fully received but still marked unpaid: nothing to charge", r.status === 409 && calls.length === 0, String(r.status));
+
+console.log("\n— the WhatsApp request —");
+const WINV = { ...INV, biz_name: "Aswin3DPrints" };
+let m = buildPaymentRequestMessage({}, { to: "919876543210", inv: WINV, pdfUrl: "https://x/i/t.pdf", token: TOKEN, totalPaise: 100000,
+  part: { totalPaise: 150000, receivedPaise: 50000, balancePaise: 100000 } });
+const body = m.template.components.find((c) => c.type === "body").parameters.map((p) => p.text);
+check("part-paid uses invoice_balance_due", m.template.name === "invoice_balance_due", m.template.name);
+check("body: name, number, business, total, received, balance", JSON.stringify(body) === JSON.stringify(["Raagul", "INV-AC-2026-1111", "Aswin3DPrints", "₹1,500", "₹500", "₹1,000"]), JSON.stringify(body));
+check("same document header and Pay button as the plain request", m.template.components[0].type === "header" && m.template.components[2].sub_type === "url" && m.template.components[2].parameters[0].text === TOKEN);
+m = buildPaymentRequestMessage({}, { to: "919876543210", inv: WINV, pdfUrl: "https://x/i/t.pdf", token: TOKEN, totalPaise: 150000 });
+check("nothing received: the plain invoice_pay_online, unchanged", m.template.name === "invoice_pay_online" && m.template.components[1].parameters.length === 4);
+const pv = previewText("balance", balanceParams(WINV, { totalPaise: 150000, receivedPaise: 50000, balancePaise: 100000 }), { buttonUrls: ["https://invoicer.aswincloud.com/i/x"] });
+check("preview reads total, received and balance", /Invoice total: ₹1,500/.test(pv) && /Received so far: ₹500/.test(pv) && /Balance due: \*?₹1,000/.test(pv) && /Pay balance/.test(pv), pv.slice(0, 200));
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed"); process.exit(failed ? 1 : 0);
