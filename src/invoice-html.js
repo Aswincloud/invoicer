@@ -53,6 +53,22 @@ export function computeTotals(inv, items) {
   return { subtotal, disc, shipping, packaging, taxable, taxRows, gross, round: total - gross, total };
 }
 
+/* Part-payment recorded by hand (migration 0024).
+
+   `received` is what the owner has already collected outside the invoicer;
+   `balance` is what is still owed, and what anything asking for money with a
+   fixed amount must ask for. Only an UNPAID/DUE/DRAFT invoice carries one: a
+   PAID invoice is settled in full and a VOID one owes nothing, so on those
+   `received` reads 0 and the receipt shows no balance lines. Clamped so a typo
+   larger than the total cannot produce a negative balance. Mirrored by
+   balanceOf() in public/js/money.js. */
+export function balanceOf(inv, total) {
+  const st = String((inv && inv.status) || "").toUpperCase();
+  const raw = +(inv && inv.amount_received) || 0;
+  const received = st === "PAID" || st === "VOID" ? 0 : Math.min(Math.max(0, Math.round(raw * 100) / 100), total);
+  return { received, balance: Math.round((total - received) * 100) / 100 };
+}
+
 /* The packaging row's label. Free text so "Secure 3-layer packaging" prints
    as written; an empty label is plain "Packaging" rather than a blank cell. */
 export const packagingLabel = (inv) => (inv.packaging_label || "").trim() || "Packaging";
@@ -466,6 +482,7 @@ export function renderInvoiceEmail(inv, items, opts = {}) {
       <td align="right" style="padding:6px 10px;font-family:${MONO};color:${opts.strong ? INK : SOFT}">${opts.neg ? "– " : opts.pos ? "+ " : ""}${money(cur, val)}</td></tr>`;
 
   const taxRows = t.taxRows.map(([l, v]) => totRow(l, v)).join("");
+  const bal = balanceOf(inv, t.total);
   const pay = paymentBlock(inv);
   const pos = placeOfSupply(inv);
   const words = amountInWords(t.total, cur);
@@ -598,6 +615,9 @@ export function renderInvoiceEmail(inv, items, opts = {}) {
    ${showRoundOff(t) ? totRow("Round off", Math.abs(t.round), { neg: t.round < 0, pos: t.round > 0 }) : ""}
    <tr><td style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${SANS};font-weight:700;text-transform:uppercase;letter-spacing:.6px">Total ${cur ? `(${esc(cur)})` : ""}</td>
        <td align="right" style="padding:12px 10px 6px;border-top:3px double ${RULE};font-family:${MONO};font-weight:600;font-size:18px;color:${GREEN}">${money(cur, t.total)}</td></tr>
+   ${bal.received ? `${totRow("Received", bal.received, { neg: true })}
+   <tr><td style="padding:8px 10px 6px;border-top:1px solid ${RULE};font-weight:700">Balance due</td>
+       <td align="right" style="padding:8px 10px 6px;border-top:1px solid ${RULE};font-family:${MONO};font-weight:700;font-size:16px">${money(cur, bal.balance)}</td></tr>` : ""}
   </table>
   <div style="clear:both"></div>
   ${words ? `<div style="margin-top:14px;font-size:11px;color:${SOFT};max-width:62%">

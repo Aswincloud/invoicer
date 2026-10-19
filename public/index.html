@@ -204,6 +204,12 @@
              pay_… id for a payment through a Razorpay link or QR — printed under
              "Paid". Saved with the invoice, or on its own once the invoice is
              paid and locked (POST /api/invoices/:id/upi-ref). -->
+        <!-- Part-payment collected by hand. Shown while the invoice is unpaid; the
+             invoice then prints Received and Balance due under the total, and
+             the Pay button, UPI QR and WhatsApp request ask for the balance. -->
+        <label id="receivedWrap">Amount received so far
+          <input id="amountReceived" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0 — leave blank if nothing yet">
+        </label>
         <label id="upiRefWrap" hidden>Payment ref (UTR or pay_…)
           <input id="upiRef" type="text" inputmode="text" autocomplete="off" spellcheck="false"
                  maxlength="45" placeholder="UTR from the UPI app, or Razorpay pay_…">

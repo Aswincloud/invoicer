@@ -245,6 +245,13 @@ function posOps(){
   ops.push({t:"left",   s:"TOTAL"+(cur?` (${posCur(cur)})`:""), size:PS.grandLabel, bold:true});
   ops.push({t:"right",  s:money(t.total), size:PS.grand, bold:true, fit:true});
   ops.push({t:"rule", heavy:true});
+  // A part-payment collected by hand: what came in, and what is still owed.
+  const bal = balanceOf(t.total);
+  if(bal.received){
+    ops.push({t:"kv", k:"Received", val:"-"+money(bal.received), size:PS.totals, fit:true});
+    ops.push({t:"kv", k:"BALANCE DUE", val:money(bal.balance), size:PS.totals, fit:true});
+    ops.push({t:"rule"});
+  }
 
   // The figure written out, as the A4 carries it. It is the check against a
   // total being altered after the fact, and ~4mm of paper is a fair price for

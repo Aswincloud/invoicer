@@ -28,7 +28,7 @@
 // is never derived from anything the owner exposes elsewhere.
 
 import { json, bad, now, randToken, sendEmail, baseUrl } from "./lib.js";
-import { computeTotals, renderInvoiceEmail, esc, fmtDate } from "./invoice-html.js";
+import { computeTotals, balanceOf, renderInvoiceEmail, esc, fmtDate } from "./invoice-html.js";
 import { renderInvoicePdf } from "./invoice-pdf.js";
 import { BIZ_SELECT, BIZ_JOIN } from "./business.js";
 import { isPayLinkOrder, invoiceFromPaidOrder, paylinkEnabled, PAYLINK_SOURCE } from "./paylink.js";
@@ -130,7 +130,8 @@ export async function sharePage(env, token) {
 
   const { inv, items } = loaded;
   const t = computeTotals(inv, items);
-  const can = payability(env, inv, t.total);
+  const due = balanceOf(inv, t.total).balance;
+  const can = payability(env, inv, due);
   const isPaid = String(inv.status || "").toUpperCase() === "PAID";
   const isVoid = String(inv.status || "").toUpperCase() === "VOID";
 
@@ -142,7 +143,7 @@ export async function sharePage(env, token) {
   const body = renderInvoiceEmail(inv, items, { logoSrc: inv.biz_logo || null });
 
   const bizName = (inv.biz_name || "Invoicer").trim();
-  const amountLabel = `${inv.currency || PAYABLE_CURRENCY} ${Number(t.total).toLocaleString(
+  const amountLabel = `${inv.currency || PAYABLE_CURRENCY} ${Number(due).toLocaleString(
     (inv.currency || PAYABLE_CURRENCY) === "₹" ? "en-IN" : "en-US",
     { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -472,14 +473,18 @@ export async function createPayOrder(env, token) {
 
   const { inv, items } = loaded;
   const t = computeTotals(inv, items);
-  const can = payability(env, inv, t.total);
+  const due = balanceOf(inv, t.total).balance;
+  const can = payability(env, inv, due);
   if (!can.ok) {
     // 409, not 400: nothing about the request is malformed — the invoice is
     // simply not in a payable state (already settled, wrong currency, disabled).
     return json({ error: can.why === "paid" ? "This invoice is already paid." : can.why }, 409);
   }
 
-  const amountPaise = paise(t.total);
+  // The balance, not the total: a part already collected by hand is not
+  // charged again. The reuse check below compares against it too, so recording
+  // a part-payment after sharing replaces the order for the old figure.
+  const amountPaise = paise(due);
 
   // Reuse the order while it is still for the right amount. A client refreshing
   // the page would otherwise leave a trail of orphan Razorpay orders, and an
@@ -853,7 +858,7 @@ export async function shareQr(env, token) {
   const loaded = await loadByToken(env, token);
   if (!loaded) return bad("not found", 404);
   const { inv, items } = loaded;
-  const total = computeTotals(inv, items).total;
+  const total = balanceOf(inv, computeTotals(inv, items).total).balance;   // what is still owed
   const can = payability(env, inv, total);
   if (!can.ok) return bad(can.why === "paid" ? "This invoice is already paid." : can.why === "void" ? "This invoice has been cancelled." : can.why, 409);
   const totalPaise = paise(total);
@@ -903,7 +908,7 @@ export async function upiPage(env, token, request) {
   const loaded = await loadByToken(env, token);
   if (!loaded) return notFoundPage();
   const { inv, items } = loaded;
-  const total = computeTotals(inv, items).total;
+  const total = balanceOf(inv, computeTotals(inv, items).total).balance;   // what is still owed
   const totalPaise = paise(total);
   const bizName = (inv.biz_name || "Invoicer").trim();
   const st = String(inv.status || "").toUpperCase();

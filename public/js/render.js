@@ -8,6 +8,8 @@ function render(){
   const v = (id) => $(id).value.trim();
   const cur = $("currency").value;
   const status = v("status") || "UNPAID";
+  const bal = balanceOf(t.total);
+  { const w = $("receivedWrap"); if(w) w.hidden = ["PAID","VOID"].includes(status.toUpperCase()); }
   { const w = $("upiRefWrap"); if(w) w.hidden = status.toUpperCase() !== "PAID"; }
   const payNow = payBlock();
   const words = amountInWords(t.total, cur);
@@ -81,6 +83,8 @@ function render(){
   ${taxHtml}
   ${showRound(t)?`<tr><td>Round off</td><td class="r">${t.round<0?"– ":"+ "}${fmt(Math.abs(t.round))}</td></tr>`:""}
   <tr class="grand"><td>Total ${cur?`(${esc(cur)})`:""}</td><td class="r">${fmt(t.total)}</td></tr>
+  ${bal.received?`<tr><td>Received</td><td class="r">– ${fmt(bal.received)}</td></tr>
+  <tr class="balance"><td>Balance due</td><td class="r">${fmt(bal.balance)}</td></tr>`:""}
 </table></div>
 
 ${words?`<div class="pwords"><div class="lbl">Amount in words</div><p>${esc(words)}</p></div>`:""}

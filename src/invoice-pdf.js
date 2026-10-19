@@ -30,7 +30,7 @@
 // The one import: deciding what sits where "PAY TO" goes is a rule about the
 // document, not about PDF drawing, and a second copy of it here is how the PDF
 // and the email would end up disagreeing on a paid invoice.
-import { packagingLabel, wantsPayQr, paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
+import { balanceOf, packagingLabel, wantsPayQr, paymentBlock, fmtDate, amountInWords, placeOfSupply, plain,
          itemUnits, fmtUnits, giftBlock } from "./invoice-html.js";
 import { qrMatrix, QR_QUIET } from "./qr.js";
 import { parseSignature } from "./signature.js";
@@ -344,6 +344,15 @@ export function renderInvoicePdf(inv, items, totals, { showGift = false } = {}) 
   p.text(labelX, y, "TOTAL", { size: 11, bold: true });
   p.text(COL_AMT, y, money(totals.total), { size: 13, bold: true, color: "0.18 0.49 0.33", align: "right" });
   y -= 26;
+  // A part-payment collected by hand: what came in, and what is still owed.
+  const bal = balanceOf(inv, totals.total);
+  if (bal.received) {
+    y += 6;
+    totRow("Received", bal.received, { neg: true });
+    p.text(labelX, y, "BALANCE DUE", { size: 10, bold: true });
+    p.text(COL_AMT, y, money(bal.balance), { size: 12, bold: true, align: "right" });
+    y -= 22;
+  }
 
   // ── amount in words ──
   //

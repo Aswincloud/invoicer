@@ -97,6 +97,15 @@ function computeTotals(items){
   return {subtotal, disc, shipping, packaging, taxable, taxRows, gross, round: total - gross, total};
 }
 
+// Mirrors balanceOf() in src/invoice-html.js: what has been collected by hand
+// on an unpaid invoice, and what is still owed. PAID and VOID carry none.
+function balanceOf(total){
+  const st = fld("status").toUpperCase();
+  const raw = num($("amountReceived").value);
+  const received = (st === "PAID" || st === "VOID") ? 0 : Math.min(Math.max(0, Math.round(raw * 100) / 100), total);
+  return { received, balance: Math.round((total - received) * 100) / 100 };
+}
+
 // The packaging row's label: free text so "Secure 3-layer packaging" prints as
 // written, plain "Packaging" when left blank. Mirrors packagingLabel() server-side.
 function pkgLabel(){
