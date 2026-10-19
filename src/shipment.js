@@ -378,6 +378,13 @@ export async function chatShipmentsHandler(request, env) {
   if (phone) { where.push("client_phone = ?"); params.push(phone); }
   if (quoted.length) { where.push(`number IN (${quoted.map(() => "?").join(",")})`); params.push(...quoted); }
 
+  // Unpaid invoices are included. This lookup began as "where is my parcel?",
+  // where only paid orders have anything to track, but customers also ask
+  // "my order status?" about an invoice they were just sent - and an unpaid
+  // invoice quoted from another phone was filtered out BEFORE the name/amount
+  // check could run, so the customer was refused instead of being asked to
+  // verify. Each row already carries `status` (PAID / UNPAID / DUE), so the
+  // bot can say "payment pending" rather than nothing. VOID stays out.
   // Placeholders bind in textual order: WHERE (owner, phone, numbers),
   // created_at, then the ORDER BY's copy of the numbers, then LIMIT.
   const { results } = await env.DB.prepare(
@@ -385,7 +392,6 @@ export async function chatShipmentsHandler(request, env) {
             track_status, track_checked_at, paid_at, created_at, client_phone, client_name, business_id
        FROM invoices
       WHERE user_id = ? AND (${where.join(" OR ")}) AND status <> 'VOID'
-        AND (status = 'PAID' OR shipped_at IS NOT NULL)
         AND created_at > ?
       ORDER BY (number IN (${quoted.length ? quoted.map(() => "?").join(",") : "''"})) DESC, created_at DESC LIMIT ?`
   ).bind(...params, now() - LOOKBACK_MS, ...quoted, MAX_SHIPMENTS + 3).all();
