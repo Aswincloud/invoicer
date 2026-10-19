@@ -24,6 +24,7 @@
 
 import { json, bad, now, hmacHex, timingSafeEqualHex, baseUrl } from "./lib.js";
 import { WA_ENV, toE164, waConfigured, sendTemplate } from "./wa.js";
+import { balanceOf } from "./invoice-html.js";
 
 /* ShipTrack's carriers. Ids are what its API and /track/ links take; names are
  * what goes into the customer's message. Kept in step with
@@ -389,7 +390,8 @@ export async function chatShipmentsHandler(request, env) {
   // created_at, then the ORDER BY's copy of the numbers, then LIMIT.
   const { results } = await env.DB.prepare(
     `SELECT id, number, status, currency, total, courier, tracking_id, shipped_at, delivered_at,
-            track_status, track_checked_at, paid_at, created_at, client_phone, client_name, business_id
+            track_status, track_checked_at, paid_at, created_at, client_phone, client_name, business_id,
+            amount_received
        FROM invoices
       WHERE user_id = ? AND (${where.join(" OR ")}) AND status <> 'VOID'
         AND created_at > ?
@@ -431,12 +433,19 @@ export async function chatShipmentsHandler(request, env) {
 
   return json({
     pending_verification: pending,
-    shipments: rows.map((r) => ({
+    shipments: rows.map((r) => {
+      // Part-payments: an UNPAID/DUE invoice may carry money received by hand.
+      // balanceOf() is the one rule (PAID/VOID owe nothing; clamped to total),
+      // so the bot never tells a customer "no payment" on a part-paid invoice.
+      const bal = balanceOf(r, Number(r.total) || 0);
+      return {
       number: r.number,
       status: r.status,
       total: r.total,
       currency: r.currency,
       biz_name: r.biz_name || null,
+      amount_received: bal.received,
+      balance: bal.balance,
       items: (items[r.id] || []).slice(0, 4),
       courier: r.courier || null,
       courier_name: carrierName(r.courier) || null,
@@ -446,7 +455,8 @@ export async function chatShipmentsHandler(request, env) {
       track_status: r.track_status || null,
       track_checked_at: r.track_checked_at || null,
       track_url: trackUrl(env, r.courier, r.tracking_id) || null,
-    })),
+      };
+    }),
   });
 }
 
