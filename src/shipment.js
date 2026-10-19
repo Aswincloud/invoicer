@@ -236,6 +236,14 @@ const TEMPLATE_TEXT = {
           "You can pay securely online by card, UPI or net banking using the button below.",
     buttons: ["Pay online"],
   },
+  // invoice_balance_due: the request for an invoice part-paid by hand.
+  balance: {
+    header: "📄 (invoice PDF attached)",
+    body: "Hi {{1}}, here is your updated invoice {{2}} from {{3}}.\n\n" +
+          "Invoice total: {{4}}\nReceived so far: {{5}}\nBalance due: *{{6}}*\n\n" +
+          "The invoice is attached. You can pay the balance securely online by card, UPI or net banking using the button below.",
+    buttons: ["Pay balance"],
+  },
   shipped: {
     body: "Hi {{1}}, good news! 🎉\n" +
           "Your order {{2}} from {{3}} has been shipped via {{4}}.\n" +

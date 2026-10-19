@@ -20,7 +20,7 @@ import { notifyShopShipment } from "./shopsync.js";
 import { sharePdf, sweepPayLinks, payLinkReceipt, upiPage, shareQr, shareStatus } from "./pay.js";
 import { freeInvoiceNumber } from "./numbering.js";
 import { cleanUpiRef, setUpiRef } from "./upiref.js";
-import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor, canRequestPayment, requestParams, buildPaymentRequestMessage } from "./wa.js";
+import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor, balanceParams, canRequestPayment, requestParams, buildPaymentRequestMessage } from "./wa.js";
 import { maySend } from "./access.js";
 import { payLinkPage, startPayLink } from "./paylink.js";
 import {
@@ -247,8 +247,12 @@ async function whatsappPreview(env, user, id, url) {
   let canSend = waConfigured(env), why = canSend ? "" : "WhatsApp sending is not set up on this deployment.";
   // An unpaid invoice's "Send invoice" is a payment request with a Pay online
   // button; a paid one keeps its confirmation or receipt.
-  // What is still owed: a part-payment collected by hand is not asked for again.
-  const totalPaise = Math.round(balanceOf(inv, computeTotals(inv, r.items).total).balance * 100);
+  // What is still owed: a part-payment collected by hand is not asked for again,
+  // and an invoice with one is sent the balance template (see whatsappInvoice).
+  const full = computeTotals(inv, r.items).total;
+  const bal = balanceOf(inv, full);
+  const totalPaise = Math.round(bal.balance * 100);
+  const part = bal.received ? { totalPaise: Math.round(full * 100), receivedPaise: Math.round(bal.received * 100), balancePaise: totalPaise } : null;
   const isRequest = kind === "invoice" && String(inv.status || "").toUpperCase() !== "PAID";
   const gate = isRequest ? canRequestPayment(inv, totalPaise) : canSendWhatsApp(inv);
   if (canSend && !gate.ok) { canSend = false; why = gate.why; }
@@ -261,7 +265,7 @@ async function whatsappPreview(env, user, id, url) {
   }
 
   const tokenUrl = (p) => inv.share_token ? `${baseUrl(env.APP_BASE_URL)}/${p}/${inv.share_token}` : `(link made on send)`;
-  const params = isRequest ? requestParams(inv, totalPaise)
+  const params = isRequest ? (part ? balanceParams(inv, part) : requestParams(inv, totalPaise))
                : kind === "shipped" ? shippedParams(inv, courier, awb)
                : kind === "delivered" ? deliveredParams(inv)
                : templateKindFor(inv) === "receipt" ? receiptParams(inv, r.items?.[0]?.description)
@@ -270,7 +274,7 @@ async function whatsappPreview(env, user, id, url) {
   return json({
     kind, canSend, why,
     to: to ? prettyE164(to) : "", toRaw: to,
-    text: previewText(isRequest ? "request" : kind, params, {
+    text: previewText(isRequest ? (part ? "balance" : "request") : kind, params, {
       buttonUrl: kind === "shipped" ? trackUrl(env, courier, awb) : "",
       buttonUrls: isRequest ? [tokenUrl("i")] : [],
     }),
@@ -404,7 +408,12 @@ async function whatsappInvoice(env, user, id, b) {
   const r = await loadInvoice(env, user, id);
   if (!r) return bad("not found", 404);
 
-  const totalPaise = Math.round(balanceOf(r.inv, computeTotals(r.inv, r.items).total).balance * 100);
+  const full = computeTotals(r.inv, r.items).total;
+  const bal = balanceOf(r.inv, full);
+  const totalPaise = Math.round(bal.balance * 100);
+  // Part-paid by hand: the balance template, which states total, received and
+  // balance, instead of a request that reads as if the balance were the bill.
+  const part = bal.received ? { totalPaise: Math.round(full * 100), receivedPaise: Math.round(bal.received * 100), balancePaise: totalPaise } : null;
   const isRequest = String(r.inv.status || "").toUpperCase() !== "PAID";
   const gate = isRequest ? canRequestPayment(r.inv, totalPaise) : canSendWhatsApp(r.inv);
   if (!gate.ok) return bad(gate.why, 409);
@@ -424,7 +433,7 @@ async function whatsappInvoice(env, user, id, b) {
   const pdfUrl = `${baseUrl(env.APP_BASE_URL)}/i/${token}.pdf`;
 
   const msg = isRequest
-    ? buildPaymentRequestMessage(env, { to, inv: r.inv, pdfUrl, token, totalPaise })
+    ? buildPaymentRequestMessage(env, { to, inv: r.inv, pdfUrl, token, totalPaise, part })
     : buildPaidMessage(env, { to, inv: r.inv, pdfUrl, what: r.items?.[0]?.description });
   const res = await sendTemplate(env, msg);
   if (!res.ok) {
