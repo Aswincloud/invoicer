@@ -214,6 +214,7 @@ async function openInvoiceInEditor(id){
       ? { number: (inv.number || "").trim(), id: inv.rzp_payment_id || "", at: inv.paid_at || 0 }
       : null;
     $("upiRef").value = inv.upi_ref || "";
+    $("amountReceived").value = +inv.amount_received ? inv.amount_received : "";
     LOCKED_PAID = (String(inv.status || "").toUpperCase() === "PAID" || inv.rzp_payment_id)
       ? { ref: inv.upi_ref || "", rzp: !!inv.rzp_payment_id } : null;
     $("notes").value    = inv.notes || "";

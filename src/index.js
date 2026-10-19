@@ -2,7 +2,7 @@
 import {
   json, bad, uid, randToken, now, sign, unsign, parseCookies, cookie,
   sendEmail, isEmail, baseUrl } from "./lib.js";
-import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
+import { renderInvoiceEmail, computeTotals, balanceOf, logoAttachment, qrAttachment,
          signAttachment, payQrAttachment } from "./invoice-html.js";
 import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
 import { ingestOrder, ingestShipment } from "./ingest.js";
@@ -247,7 +247,8 @@ async function whatsappPreview(env, user, id, url) {
   let canSend = waConfigured(env), why = canSend ? "" : "WhatsApp sending is not set up on this deployment.";
   // An unpaid invoice's "Send invoice" is a payment request with a Pay online
   // button; a paid one keeps its confirmation or receipt.
-  const totalPaise = Math.round(Number(computeTotals(inv, r.items).total || 0) * 100);
+  // What is still owed: a part-payment collected by hand is not asked for again.
+  const totalPaise = Math.round(balanceOf(inv, computeTotals(inv, r.items).total).balance * 100);
   const isRequest = kind === "invoice" && String(inv.status || "").toUpperCase() !== "PAID";
   const gate = isRequest ? canRequestPayment(inv, totalPaise) : canSendWhatsApp(inv);
   if (canSend && !gate.ok) { canSend = false; why = gate.why; }
@@ -403,7 +404,7 @@ async function whatsappInvoice(env, user, id, b) {
   const r = await loadInvoice(env, user, id);
   if (!r) return bad("not found", 404);
 
-  const totalPaise = Math.round(Number(computeTotals(r.inv, r.items).total || 0) * 100);
+  const totalPaise = Math.round(balanceOf(r.inv, computeTotals(r.inv, r.items).total).balance * 100);
   const isRequest = String(r.inv.status || "").toUpperCase() !== "PAID";
   const gate = isRequest ? canRequestPayment(r.inv, totalPaise) : canSendWhatsApp(r.inv);
   if (!gate.ok) return bad(gate.why, 409);
@@ -678,6 +679,10 @@ function invoiceFields(b) {
     // cannot move the amount due or the taxable value in either direction.
     gift_code: String(b.giftCode || "").trim().slice(0, 60),
     gift_amount: +b.giftAmount || 0,
+    // Part-payment collected by hand; see balanceOf in invoice-html.js. Rupees,
+    // never negative, rounded to paise. Meaningless once PAID, so not kept then.
+    amount_received: String(b.status || "").toUpperCase() === "PAID" ? 0
+      : Math.max(0, Math.round((+b.amountReceived || 0) * 100) / 100),
   };
 }
 
@@ -733,15 +738,15 @@ async function createInvoice(env, user, b) {
 
   await env.DB.prepare(
     `INSERT INTO invoices (id,user_id,business_id,number,issue_date,due_date,currency,tax_mode,tax_rate,
-       discount_pct,shipping,shipping_mode,packaging,packaging_label,round_off,show_pay_qr,status,notes,client_name,client_email,client_phone,client_addr,client_gst,total,gift_code,gift_amount,created_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       discount_pct,shipping,shipping_mode,packaging,packaging_label,round_off,show_pay_qr,status,notes,client_name,client_email,client_phone,client_addr,client_gst,total,gift_code,gift_amount,amount_received,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).bind(id, user.id, biz ? biz.id : null,
          inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
          inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode,
          inv.packaging, inv.packaging_label, inv.round_off, inv.show_pay_qr,
          inv.status, inv.notes,
          inv.client_name, inv.client_email, inv.client_phone, inv.client_addr, inv.client_gst, total,
-         inv.gift_code, inv.gift_amount, t, t).run();
+         inv.gift_code, inv.gift_amount, inv.amount_received, t, t).run();
 
   await writeLineItems(env, id, items);
   await recordUpiRef(env, id, inv.status, upi.ref);
@@ -813,13 +818,13 @@ async function updateInvoice(env, user, id, b) {
        tax_rate=?, discount_pct=?, shipping=?, shipping_mode=?, packaging=?, packaging_label=?,
        round_off=?, show_pay_qr=?,
        status=?, notes=?, client_name=?, client_email=?, client_phone=?, client_addr=?, client_gst=?,
-       total=?, gift_code=?, gift_amount=?, updated_at=?
+       total=?, gift_code=?, gift_amount=?, amount_received=?, updated_at=?
      WHERE id=? AND user_id=?`
   ).bind(inv.number, inv.issue_date, inv.due_date, inv.currency, inv.tax_mode,
          inv.tax_rate, inv.discount_pct, inv.shipping, inv.shipping_mode,
          inv.packaging, inv.packaging_label, inv.round_off, inv.show_pay_qr,
          inv.status, inv.notes, inv.client_name, inv.client_email, inv.client_phone, inv.client_addr,
-         inv.client_gst, total, inv.gift_code, inv.gift_amount, now(), id, user.id).run();
+         inv.client_gst, total, inv.gift_code, inv.gift_amount, inv.amount_received, now(), id, user.id).run();
 
   await writeLineItems(env, id, items);
   await recordUpiRef(env, id, inv.status, upi.ref);
