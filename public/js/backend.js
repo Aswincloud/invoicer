@@ -210,8 +210,13 @@ function wireBackend(){
       await refreshPreview(true);
     }
 
+    // Every preview request is numbered, and only the newest may update the
+    // dialog: typing and quick fills fire requests that can return out of
+    // order, and a stale reply would show old text with Send enabled.
+    let previewSeq = 0;
     async function refreshPreview(first){
       if(!WA) return;
+      const seq = ++previewSeq;
       const q = new URLSearchParams({ kind: WA.kind });
       const to = $("waTo").value.trim(); if(to) q.set("to", to);
       if(WA.kind === "shipped"){
@@ -224,8 +229,8 @@ function wireBackend(){
       }
       let p;
       try{ p = await api("/invoices/"+WA.id+"/whatsapp/preview?"+q); }
-      catch(e){ $("waPreview").textContent = ""; $("waMsg").textContent = "Couldn't build the preview: "+e.message; return; }
-      if(!WA) return;
+      catch(e){ if(seq !== previewSeq) return; $("waPreview").textContent = ""; $("waMsg").textContent = "Couldn't build the preview: "+e.message; return; }
+      if(!WA || seq !== previewSeq) return;
       if(first && WA.kind === "shipped"){
         // Courier dropdown from the server's list; preselect what the row has.
         const sel = $("waCourier"); sel.innerHTML = "";
@@ -255,14 +260,16 @@ function wireBackend(){
 
     // Re-preview as the fields change, lightly debounced so typing a tracking
     // number does not fire a request per keystroke.
-    const queue = () => { clearTimeout(previewTimer); previewTimer = setTimeout(() => refreshPreview(false), 350); };
+    // Send stays off from the first keystroke until the preview for those exact
+    // fields has come back, so a message is never sent unseen.
+    const queue = () => { $("waSend").disabled = true; clearTimeout(previewTimer); previewTimer = setTimeout(() => refreshPreview(false), 350); };
     $("waCourier").onchange = () => refreshPreview(false);
     $("waTracking").oninput = queue;
     $("waTo").oninput = queue;
     $("waDelayReason").oninput = queue;
     $("waDelayUntil").oninput = queue;
     document.querySelectorAll("#waDelayFields [data-reason]").forEach((b) => {
-      b.onclick = () => { $("waDelayReason").value = b.dataset.reason; refreshPreview(false); };
+      b.onclick = () => { $("waDelayReason").value = b.dataset.reason; $("waSend").disabled = true; refreshPreview(false); };
     });
 
     $("waSend").onclick = async () => {
