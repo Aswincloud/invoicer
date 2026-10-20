@@ -1005,6 +1005,7 @@ async function notifyPaid(env, inv, payment, { what = "" } = {}) {
   if (inv.client_email) {
     tasks.push(sendEmail(env, {
       to: inv.client_email,
+      bcc: inv.owner_email,
       fromName: `${bizName} Billing`,
       subject: `Payment received — invoice ${num}`,
       text: `Thank you. We've received ${amount} for invoice ${num}.${ref}`,
