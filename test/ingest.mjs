@@ -418,6 +418,7 @@ section("the logo survives the trip to an inbox");
   ok("one is the logo", Boolean(logoAtt));
   ok("and the HTML points at it", mail.html.includes("cid:logo@invoicer"));
   ok("and carries no data: image", !/src="data:/.test(mail.html));
+  ok("the owner gets a blind copy of the invoice email", JSON.stringify(mail.bcc) === '["aswin@aswincloud.com"]', JSON.stringify(mail.bcc));
 
   // The logo must be INLINE and the PDF must NOT be — a logo listed as a
   // downloadable file, or a PDF that never shows as one, would both be wrong.

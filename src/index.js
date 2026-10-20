@@ -998,6 +998,7 @@ async function emailInvoice(env, user, id, b) {
   const bizName = String(r.inv.biz_name || "").trim();
   const res = await sendEmail(env, {
     to,
+    bcc: user.email,
     fromName: `${bizName || "Invoicer"} Billing`,
     subject: b.subject || `Invoice ${r.inv.number} from ${bizName || "us"}`,
     html,

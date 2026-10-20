@@ -107,7 +107,7 @@ function fromHeader(env, name) {
 // ── Resend email (NOTE: User-Agent header is REQUIRED or Resend 403s /1010) ──
 // `fromName` is an optional display name; `attachments` is an optional array of
 // { filename, content } where content is base64 (Resend's attachment format).
-export async function sendEmail(env, { to, subject, html, text, fromName, attachments }) {
+export async function sendEmail(env, { to, subject, html, text, fromName, attachments, bcc }) {
   const key = env.RESEND_API_KEY;
   if (!key) return { ok: false, error: "RESEND_API_KEY not set" };
   const payload = {
@@ -115,6 +115,12 @@ export async function sendEmail(env, { to, subject, html, text, fromName, attach
     to: Array.isArray(to) ? to : [to],
     subject, html, text,
   };
+  // The owner's blind copy of what a client was sent. Dropped when malformed or
+  // already a recipient — an owner emailing their own address must not get two.
+  const lower = new Set(payload.to.map((a) => String(a).trim().toLowerCase()));
+  const blind = (Array.isArray(bcc) ? bcc : [bcc])
+    .map((a) => String(a || "").trim()).filter((a) => isEmail(a) && !lower.has(a.toLowerCase()));
+  if (blind.length) payload.bcc = blind;
   if (Array.isArray(attachments) && attachments.length) payload.attachments = attachments;
   const r = await fetch("https://api.resend.com/emails", {
     method: "POST",

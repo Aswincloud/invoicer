@@ -216,6 +216,7 @@ export async function ingestOrder(request, env) {
 
   const sent = await sendEmail(env, {
     to: inv.client_email,
+    bcc: ownerEmail,
     fromName: `${bizName || "Invoicer"} Billing`,
     subject: `Invoice ${inv.number} — order ${receipt}`,
     // No payUrl: a shop order is already paid, so the fourth argument stays null

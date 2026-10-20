@@ -176,6 +176,8 @@ section("order.paid for a pay-link order raises the invoice and sends BOTH recei
   ok("subject says payment received, from whom, how much", /^Payment received — ₹ 250\.00 from Raagul$/.test(owner?.subject || ""), owner?.subject);
   const client = env._sent.find((m) => JSON.stringify(m.to).includes("raagul@"));
   ok("the customer's receipt states the amount", client && client.text.includes("₹ 250.00"), client?.text);
+  ok("the owner gets a blind copy of the customer's receipt", JSON.stringify(client?.bcc) === JSON.stringify([OWNER.email]), JSON.stringify(client?.bcc));
+  ok("the owner's own mail is not copied to itself", owner && owner.bcc === undefined, JSON.stringify(owner?.bcc));
   ok("the message id is recorded on the invoice", inv.wa_message_id === "wamid.1", String(inv.wa_message_id));
   ok("the event is tied to the invoice", env.DB._db.webhook_events[0]?.invoice_id === inv.id);
 }
