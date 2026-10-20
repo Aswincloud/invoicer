@@ -40,7 +40,11 @@ check("defaults to the live shop URL", calls[0]?.url === "https://3d-prints.aswi
 calls.length = 0;
 globalThis.fetch = async (url, init) => { calls.push({ url: String(url), init }); return new Response("{}", { status: 200 }); };
 await notifyShopShipment(ENV, INV, "shipped");
-check("request sets redirect: error", calls[0].init.redirect === "error", String(calls[0].init.redirect));
+check("redirect mode is one Workers accept, and not follow", calls[0].init.redirect === "manual", String(calls[0].init.redirect));
+calls.length = 0;
+globalThis.fetch = async () => new Response(null, { status: 302, headers: { location: "https://evil.example/" } });
+const redir = await notifyShopShipment(ENV, INV, "shipped");
+check("a redirect is refused, not followed or retried", redir.ok === false && /redirect/.test(redir.error), JSON.stringify(redir));
 
 let n = 0;
 globalThis.fetch = async () => { n++; throw new Error("network down"); };

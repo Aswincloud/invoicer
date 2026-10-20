@@ -51,11 +51,16 @@ export async function notifyShopShipment(env, inv, kind) {
         signal: ac.signal,
         method: "POST",
         // Never follow a redirect: it would forward the signature and the
-        // customer's tracking details to wherever it pointed.
-        redirect: "error",
+        // customer's tracking details to wherever it pointed. "manual", not
+        // "error" — Workers reject "error" at runtime; a redirect is refused below.
+        redirect: "manual",
         headers: { "Content-Type": "application/json", "User-Agent": "invoicer/1.0", "x-invoicer-signature": signature },
         body: raw,
       });
+      if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
+        console.error("shop shipment sync", kind, inv.source_ref, "redirect refused", res.status);
+        return { ok: false, status: res.status, error: "the shop answered with a redirect — refused" };
+      }
       const parsed = await Promise.race([
         res.json().catch(() => ({})),
         new Promise((_, rej) => ac.signal.addEventListener("abort", () => rej(ac.signal.reason || new Error("timeout")), { once: true })),
