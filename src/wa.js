@@ -36,6 +36,7 @@ export const WA_ENV = {
   tplPaid:   "WA_TEMPLATE_CONFIRMED", // default "order_confirmed_new"
   tplReceipt:"WA_TEMPLATE_RECEIPT",   // default "payment_received" — pay-link payments
   tplRequest:"WA_TEMPLATE_REQUEST",   // default "invoice_pay_online" — unpaid invoices
+  tplPending:"WA_TEMPLATE_PENDING",   // default "order_payment_pending" — unpaid SHOP orders
   tplBalance:"WA_TEMPLATE_BALANCE",   // default "invoice_balance_due" — unpaid, part already received
   lang:      "WA_TEMPLATE_LANG",     // default "en"
 };
@@ -308,4 +309,30 @@ async function postMessage(env, body) {
              code: data?.error?.code };
   }
   return { ok: true, id: data?.messages?.[0]?.id || "" };
+}
+
+/* A shop order that was never paid, sent when the owner presses "Send payment
+ * reminder" in the shop dashboard (2026-10-20).
+ *
+ *   order_payment_pending   body + one URL button:
+ *     Hi {{1}}, your order {{2}} for {{3}} at {{4}} hasn't been paid yet. If
+ *     you'd still like it, you can complete the payment securely using the
+ *     button below.
+ *     [Complete payment] https://3d-prints.aswincloud.com/o/{{1}}
+ *
+ * The button carries only the order's pay token; the shop's /o/ page reads the
+ * Razorpay order and amount from its own row. */
+export function buildPendingPaymentMessage(env, { to, name, receipt, amountPaise, payToken, shopName = "AswinPrints" }) {
+  const amount = rupeesText({ rzp_amount: amountPaise });
+  return {
+    messaging_product: "whatsapp", to, type: "template",
+    template: {
+      name: env[WA_ENV.tplPending] || "order_payment_pending",
+      language: { code: env[WA_ENV.lang] || "en" },
+      components: [
+        { type: "body", parameters: [String(name || "").trim() || "there", String(receipt), amount, shopName].map((text) => ({ type: "text", text })) },
+        { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: String(payToken) }] },
+      ],
+    },
+  };
 }
