@@ -462,3 +462,6 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
 :root[data-theme="dark"] .wa-preview{background:#1f3a2a;color:#e8f5e8;border-color:#2c5a3c}
 .wa-preview.pending{color:var(--muted);font-style:italic;background:var(--surface-2);border-color:var(--border)}
 .wa-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+
+/* Inline text buttons, e.g. the delay notice quick fills. */
+.linkbtn{background:none;border:0;padding:0;color:var(--accent,#4f46e5);font:inherit;cursor:pointer;text-decoration:underline}

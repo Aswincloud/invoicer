@@ -26,6 +26,7 @@ import { payLinkPage, startPayLink } from "./paylink.js";
 import {
   CARRIERS, carrierName, isCarrier, normalizeAwb, trackUrl,
   shippedParams, deliveredParams, buildShippedMessage, buildDeliveredMessage, previewText,
+  delayInput, delayParams, buildDelayMessage,
   chatShipmentsHandler, checkDeliveries,
 } from "./shipment.js";
 
@@ -219,7 +220,7 @@ async function api(request, env, url, ctx) {
    Preview and send build the SAME params, so the text Aswin confirms is the
    text that goes out. PAID only for all three: every template speaks of a
    confirmed, paid order. */
-const WA_KINDS = new Set(["invoice", "shipped", "delivered"]);
+const WA_KINDS = new Set(["invoice", "shipped", "delivered", "delay"]);
 
 function shipmentInput(inv, src) {
   // What the request says wins over what the row has, so the preview follows
@@ -260,6 +261,17 @@ async function whatsappPreview(env, user, id, url) {
   if (canSend && kind === "shipped" && (!isCarrier(courier) || !awb)) {
     canSend = false; why = "Choose the courier and enter the tracking number.";
   }
+  // A delay notice is about an order still on its way to the customer, paid or
+  // not — anything but a cancelled or already-delivered one.
+  const delay = kind === "delay" ? delayInput({ reason: url.searchParams.get("reason"), until: url.searchParams.get("until") }) : null;
+  if (kind === "delay") {
+    const st = String(inv.status || "").toUpperCase();
+    canSend = waConfigured(env); why = canSend ? "" : "WhatsApp sending is not set up on this deployment.";
+    if (canSend && st === "VOID") { canSend = false; why = "This invoice is cancelled."; }
+    if (canSend && inv.delivered_at) { canSend = false; why = "This order has already been delivered."; }
+    if (canSend && !to) { canSend = false; why = "Add the customer's mobile number to the invoice first."; }
+    if (canSend && (!delay.reason || !delay.until)) { canSend = false; why = "Fill in the reason and when couriers are expected back."; }
+  }
   if (canSend && kind === "delivered" && !inv.shipped_at) {
     canSend = false; why = "Mark it shipped first, so the customer has had the tracking details.";
   }
@@ -268,6 +280,7 @@ async function whatsappPreview(env, user, id, url) {
   const params = isRequest ? (part ? balanceParams(inv, part) : requestParams(inv, totalPaise))
                : kind === "shipped" ? shippedParams(inv, courier, awb)
                : kind === "delivered" ? deliveredParams(inv)
+               : kind === "delay" ? delayParams(inv, { reason: delay.reason || "…", until: delay.until || "…" })
                : templateKindFor(inv) === "receipt" ? receiptParams(inv, r.items?.[0]?.description)
                : confirmedParams(inv);
 
@@ -290,9 +303,34 @@ async function whatsappPreview(env, user, id, url) {
       track_status: inv.track_status || "", track_checked_at: inv.track_checked_at || null,
       wa_sent_at: inv.wa_sent_at || null, wa_shipped_at: inv.wa_shipped_at || null,
       wa_delivered_at: inv.wa_delivered_at || null,
+      wa_delay_at: inv.wa_delay_at || null,
       wa_request_at: inv.wa_request_at || null,
     },
   });
+}
+
+/* The delay notice: any open order — paid or not — that is neither cancelled
+   nor delivered. Records when it went out; changes nothing else about the
+   order, and can be sent again (a second delay is a second notice). */
+async function whatsappDelay(env, inv, id, b) {
+  const st = String(inv.status || "").toUpperCase();
+  if (st === "VOID") return bad("This invoice is cancelled.", 409);
+  if (inv.delivered_at) return bad("This order has already been delivered.", 409);
+  const to = toE164(b.to || inv.client_phone);
+  if (!to) return bad("A valid mobile number is required (e.g. +91 98765 43210).");
+  const d = delayInput(b);
+  if (!d.reason || !d.until) return bad("Fill in the reason and when couriers are expected back.");
+  const res = await sendTemplate(env, buildDelayMessage(env, { to, inv, ...d }));
+  if (!res.ok) {
+    console.error("whatsapp delay failed", inv.number, res.status, res.error);
+    return bad("WhatsApp failed: " + res.error, 502);
+  }
+  await env.DB.prepare(
+    `UPDATE invoices SET wa_delay_message_id=?, wa_delay_at=?, updated_at=?,
+       client_phone = CASE WHEN client_phone='' OR client_phone IS NULL THEN ? ELSE client_phone END
+     WHERE id=?`
+  ).bind(res.id, now(), now(), to, id).run();
+  return json({ ok: true, id: res.id, to: prettyE164(to) });
 }
 
 async function whatsappSend(env, user, id, b, ctx = null) {
@@ -305,6 +343,7 @@ async function whatsappSend(env, user, id, b, ctx = null) {
   const r = await loadInvoice(env, user, id);
   if (!r) return bad("not found", 404);
   const inv = r.inv;
+  if (kind === "delay") return whatsappDelay(env, inv, id, b);
   const gate = canSendWhatsApp(inv);
   if (!gate.ok) return bad(gate.why, 409);
   const to = toE164(b.to || inv.client_phone);

@@ -184,6 +184,7 @@ function wireBackend(){
     $("waInvoice").onclick  = () => { openMenu(false); openWa("invoice"); };
     $("waShipped").onclick  = () => { openMenu(false); openWa("shipped"); };
     $("waDelivered").onclick= () => { openMenu(false); openWa("delivered"); };
+    $("waDelay").onclick    = () => { openMenu(false); openWa("delay"); };
     $("waClose").onclick = $("waCancel").onclick = closeWa;
 
     let WA = null;            // { id, kind } while the modal is open
@@ -191,7 +192,7 @@ function wireBackend(){
 
     function closeWa(){ $("waModal").hidden = true; WA = null; }
 
-    const TITLES = { invoice: "Send invoice on WhatsApp", shipped: "Share tracking on WhatsApp", delivered: "Send delivered on WhatsApp" };
+    const TITLES = { invoice: "Send invoice on WhatsApp", shipped: "Share tracking on WhatsApp", delivered: "Send delivered on WhatsApp", delay: "Send a delay notice on WhatsApp" };
 
     async function openWa(kind){
       let id;
@@ -201,6 +202,7 @@ function wireBackend(){
       $("waSub").textContent = "Nothing is sent until you confirm.";
       $("waTo").value = $("clPhone").value || "";
       $("waShipFields").hidden = kind !== "shipped";
+      $("waDelayFields").hidden = kind !== "delay";
       $("waMsg").textContent = ""; $("waTrackLink").textContent = "";
       $("waPreview").textContent = "Loading preview…"; $("waPreview").classList.add("pending");
       $("waSend").disabled = true;
@@ -215,6 +217,10 @@ function wireBackend(){
       if(WA.kind === "shipped"){
         q.set("courier", $("waCourier").value || "");
         q.set("tracking", $("waTracking").value || "");
+      }
+      if(WA.kind === "delay"){
+        q.set("reason", $("waDelayReason").value || "");
+        q.set("until", $("waDelayUntil").value || "");
       }
       let p;
       try{ p = await api("/invoices/"+WA.id+"/whatsapp/preview?"+q); }
@@ -236,7 +242,8 @@ function wireBackend(){
       // An unpaid invoice goes out as a payment request (Pay online / Pay by UPI
       // buttons); its "already sent" is the request's own timestamp.
       const already = WA.kind === "invoice" ? (p.request ? s.wa_request_at : s.wa_sent_at)
-                    : WA.kind === "shipped" ? s.wa_shipped_at : s.wa_delivered_at;
+                    : WA.kind === "shipped" ? s.wa_shipped_at
+                    : WA.kind === "delay" ? s.wa_delay_at : s.wa_delivered_at;
       $("waTitle").textContent = p.request ? "Request payment on WhatsApp" : TITLES[WA.kind];
       $("waSub").textContent = already
         ? "Already sent "+new Date(already).toLocaleString("en-IN")+". Sending again will send it again."
@@ -252,11 +259,17 @@ function wireBackend(){
     $("waCourier").onchange = () => refreshPreview(false);
     $("waTracking").oninput = queue;
     $("waTo").oninput = queue;
+    $("waDelayReason").oninput = queue;
+    $("waDelayUntil").oninput = queue;
+    document.querySelectorAll("#waDelayFields [data-reason]").forEach((b) => {
+      b.onclick = () => { $("waDelayReason").value = b.dataset.reason; refreshPreview(false); };
+    });
 
     $("waSend").onclick = async () => {
       if(!WA) return;
       const body = { kind: WA.kind, to: $("waTo").value.trim() };
       if(WA.kind === "shipped"){ body.courier = $("waCourier").value; body.tracking = $("waTracking").value; }
+      if(WA.kind === "delay"){ body.reason = $("waDelayReason").value; body.until = $("waDelayUntil").value; }
       $("waSend").disabled = true; $("waMsg").textContent = "Sending…";
       try{
         const r = await api("/invoices/"+WA.id+"/whatsapp",{method:"POST",body:JSON.stringify(body)});
