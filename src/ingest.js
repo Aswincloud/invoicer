@@ -24,7 +24,7 @@
 // that it is an open "email anyone an invoice from Aswin's business" endpoint.
 
 import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex, randToken, baseUrl } from "./lib.js";
-import { waConfigured, toE164, buildPaidMessage, templateKindFor, sendTemplate } from "./wa.js";
+import { waConfigured, toE164, buildPaidMessage, templateKindFor, sendTemplate, buildPendingPaymentMessage } from "./wa.js";
 import { shopCourier, normalizeAwb, buildShippedMessage, buildDeliveredMessage } from "./shipment.js";
 import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
          signAttachment, payQrAttachment } from "./invoice-html.js";
@@ -498,4 +498,34 @@ export function buildInvoice(b, receipt, user) {
   }
 
   return { inv, items, total: t.total };
+}
+
+// ── POST /api/ingest/payment-reminder ───────────────────────────────────────
+//
+// The shop asking for the "payment pending" WhatsApp on an unpaid order, after
+// the owner pressed the button. Same signed door as ingest and shipment. The
+// shop sends the customer's name, phone, receipt, amount and the order's pay
+// token; nothing is stored here — there is no invoice for an unpaid order.
+const PAY_TOKEN_RE = /^[0-9a-f]{32}$/;
+export async function ingestPaymentReminder(request, env) {
+  const v = await verifyShopRequest(request, env);
+  if (v.response) return v.response;
+  const b = v.body;
+  if (!waConfigured(env)) return json({ ok: true, whatsapp: "skipped", why: "whatsapp not configured" });
+  const receipt = String(b?.receipt || "").trim();
+  if (!/^AP-[0-9a-zA-Z]{6,20}$/.test(receipt)) return bad("bad receipt", 400);
+  if (!PAY_TOKEN_RE.test(String(b?.pay_token || ""))) return bad("bad pay token", 400);
+  const amountPaise = Number(b?.amount_paise);
+  if (!Number.isInteger(amountPaise) || amountPaise < 100) return bad("bad amount", 400);
+  const to = toE164(b?.phone);
+  if (!to) return json({ ok: true, whatsapp: "skipped", why: "no valid mobile on the order" });
+  const res = await sendTemplate(env, buildPendingPaymentMessage(env, {
+    to, name: b?.name, receipt, amountPaise, payToken: b.pay_token,
+  }));
+  if (!res.ok) {
+    console.error("payment reminder whatsapp failed", receipt, res.status, res.error);
+    return json({ ok: true, whatsapp: "failed", why: res.error });
+  }
+  console.log("payment reminder whatsapp sent", receipt);
+  return json({ ok: true, whatsapp: "sent", id: res.id });
 }

@@ -5,7 +5,7 @@ import {
 import { renderInvoiceEmail, computeTotals, balanceOf, logoAttachment, qrAttachment,
          signAttachment, payQrAttachment } from "./invoice-html.js";
 import { providersResponse, oauthStart, oauthCallback } from "./oauth-routes.js";
-import { ingestOrder, ingestShipment } from "./ingest.js";
+import { ingestOrder, ingestShipment, ingestPaymentReminder } from "./ingest.js";
 import { printReceipt } from "./print.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
 import {
@@ -122,6 +122,8 @@ async function api(request, env, url, ctx) {
   // The shop marking an order shipped or delivered. Same signature scheme as
   // ingest, same position above the parse — see ingestShipment in src/ingest.js.
   if (p === "/api/ingest/shipment" && m === "POST") return ingestShipment(request, env);
+  // The shop asking for the "payment pending" WhatsApp on an unpaid order.
+  if (p === "/api/ingest/payment-reminder" && m === "POST") return ingestPaymentReminder(request, env);
   if (p === "/api/webhook/razorpay" && m === "POST") return razorpayWebhook(request, env, ctx);
   // The support bot asking for a WhatsApp customer's shipments. Signed with
   // INVOICER_CHAT_SECRET over the raw body and scoped to the owner account —
