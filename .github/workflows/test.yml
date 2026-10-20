@@ -8,6 +8,10 @@ on:
   merge_group:
   push:
     branches: [master]
+# Read-only token: the job checks out code and runs tests, nothing else.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Tests

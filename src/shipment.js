@@ -207,7 +207,16 @@ export function buildShippedMessage(env, { to, inv, courier, awb, courierName = 
  * {{5}} when courier services are expected back. Both free-text fields are the
  * owner's, typed per send; cleaned to one line, since Meta refuses a parameter
  * with a newline, a tab or four spaces in a row. */
-export const delayText = (s, max) => String(s || "").replace(/\s+/g, " ").trim().replace(/[.\s]+$/, "").slice(0, max);
+// Clamped first, so nothing after it scans more than `max` characters; and the
+// trailing full stops are dropped with a plain loop, because an anchored
+// /[.\s]+$/ backtracks quadratically on a long run of spaces (CodeQL
+// js/polynomial-redos). Whitespace is already single spaces by then.
+export function delayText(s, max) {
+  let t = String(s || "").slice(0, max * 4).replace(/\s+/g, " ").trim().slice(0, max);
+  let end = t.length;
+  while (end > 0 && (t[end - 1] === "." || t[end - 1] === " ")) end--;
+  return t.slice(0, end);
+}
 export function delayInput(b) {
   return { reason: delayText(b?.reason, 160), until: delayText(b?.until, 40) };
 }
