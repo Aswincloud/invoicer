@@ -35,6 +35,7 @@
           <button type="button" class="dd-item" id="waInvoice" role="menuitem">Send invoice <span class="hint">PDF + confirmation</span></button>
           <button type="button" class="dd-item" id="waShipped" role="menuitem">Share tracking <span class="hint">courier + number</span></button>
           <button type="button" class="dd-item" id="waDelivered" role="menuitem">Send delivered <span class="hint">closes the order</span></button>
+          <button type="button" class="dd-item" id="waDelay" role="menuitem">Delay notice <span class="hint">holiday, couriers closed…</span></button>
         </div>
       </div>
       <button id="btnPos" class="btn ghost" title="Download a 57mm thermal receipt PDF">POS receipt</button>
@@ -272,6 +273,23 @@
         <input id="waTracking" type="text" placeholder="e.g. 1234567890123" autocomplete="off" spellcheck="false">
       </label>
       <p class="sub" id="waTrackLink"></p>
+    </div>
+
+    <!-- Delay notice: completes "Your order is delayed because …" and "…resume by …". -->
+    <div id="waDelayFields" hidden>
+      <label>Reason <span class="hint">finishes "Your order is delayed because…"</span>
+        <input id="waDelayReason" type="text" maxlength="160" autocomplete="off"
+               placeholder="courier services are closed for the Diwali holidays">
+      </label>
+      <label>Couriers expected back by
+        <input id="waDelayUntil" type="text" maxlength="40" autocomplete="off" placeholder="24 Oct">
+      </label>
+      <p class="sub">Quick fills:
+        <button type="button" class="linkbtn" data-reason="courier services are closed for a national holiday">National holiday</button> ·
+        <button type="button" class="linkbtn" data-reason="courier services are closed for the festival holidays">Festival holidays</button> ·
+        <button type="button" class="linkbtn" data-reason="courier pickups are suspended due to heavy rain in our area">Heavy rain</button> ·
+        <button type="button" class="linkbtn" data-reason="the courier company is facing operational delays">Courier delays</button>
+      </p>
     </div>
 
     <div class="wa-preview" id="waPreview" aria-live="polite"></div>

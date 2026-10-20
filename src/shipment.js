@@ -202,6 +202,35 @@ export function buildShippedMessage(env, { to, inv, courier, awb, courierName = 
   };
 }
 
+/* order_delay_notice (approved 2026-10-20): {{1}} customer, {{2}} order number,
+ * {{3}} business, {{4}} why — completes "Your order is delayed because …",
+ * {{5}} when courier services are expected back. Both free-text fields are the
+ * owner's, typed per send; cleaned to one line, since Meta refuses a parameter
+ * with a newline, a tab or four spaces in a row. */
+// Clamped first, so nothing after it scans more than `max` characters; and the
+// trailing full stops are dropped with a plain loop, because an anchored
+// /[.\s]+$/ backtracks quadratically on a long run of spaces (CodeQL
+// js/polynomial-redos). Whitespace is already single spaces by then.
+export function delayText(s, max) {
+  let t = String(s || "").slice(0, max * 4).replace(/\s+/g, " ").trim().slice(0, max);
+  let end = t.length;
+  while (end > 0 && (t[end - 1] === "." || t[end - 1] === " ")) end--;
+  return t.slice(0, end);
+}
+export function delayInput(b) {
+  return { reason: delayText(b?.reason, 160), until: delayText(b?.until, 40) };
+}
+export function delayParams(inv, { reason, until }) {
+  return [who(inv), String(inv.number || ""), biz(inv), reason, until];
+}
+export function buildDelayMessage(env, { to, inv, reason, until }) {
+  return {
+    messaging_product: "whatsapp", to, type: "template",
+    template: { name: env.WA_TEMPLATE_DELAY || "order_delay_notice", language: { code: lang(env) },
+                components: [bodyComponent(delayParams(inv, { reason, until }))] },
+  };
+}
+
 export function buildDeliveredMessage(env, { to, inv }) {
   return {
     messaging_product: "whatsapp", to, type: "template",
@@ -236,6 +265,14 @@ const TEMPLATE_TEXT = {
     body: "Hi {{1}}, your invoice {{2}} for {{3}} from {{4}} is ready. The invoice is attached. " +
           "You can pay securely online by card, UPI or net banking using the button below.",
     buttons: ["Pay online"],
+  },
+  delay: {
+    header: "Update on your order",
+    body: "Hi {{1}}, a quick update on your order {{2}} from {{3}}.\n\n" +
+          "Your order is delayed because {{4}}. We expect courier services to resume by {{5}}, " +
+          "and your order will be on its way as soon as they do.\n\n" +
+          "We're sorry for the wait, and thank you for your patience.",
+    buttons: [],
   },
   // invoice_balance_due: the request for an invoice part-paid by hand.
   balance: {
