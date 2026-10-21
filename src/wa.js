@@ -38,6 +38,7 @@ export const WA_ENV = {
   tplRequest:"WA_TEMPLATE_REQUEST",   // default "invoice_pay_online" — unpaid invoices
   tplPending:"WA_TEMPLATE_PENDING",   // default "order_payment_pending" — unpaid SHOP orders
   tplBalance:"WA_TEMPLATE_BALANCE",   // default "invoice_balance_due" — unpaid, part already received
+  tplComeback:"WA_TEMPLATE_COMEBACK", // default "comeback_offer" — MARKETING; opted-in shop customers only
   lang:      "WA_TEMPLATE_LANG",     // default "en"
 };
 
@@ -322,6 +323,27 @@ async function postMessage(env, body) {
  *
  * The button carries only the order's pay token; the shop's /o/ page reads the
  * Razorpay order and amount from its own row. */
+// The shop's COMEBACK offer (comeback_offer, a MARKETING template). Body:
+// "Hi {{1}}, you left {{2}} at {{3}}. ... use code {{4}} at checkout." The button
+// opens https://3d-prints.aswincloud.com/back/{{1}}, which restores the cart.
+// Only ever sent for a customer who ticked "send me offers on WhatsApp" — the
+// shop decides that; this builds what it was asked to.
+export function buildComebackMessage(env, { to, name, what, token, code = "COMEBACK", shopName = "AswinPrints" }) {
+  // Meta refuses a parameter with a newline, a tab or four spaces in a row.
+  const one = (s, max) => String(s || "").replace(/\s+/g, " ").trim().slice(0, max);
+  return {
+    messaging_product: "whatsapp", to, type: "template",
+    template: {
+      name: env[WA_ENV.tplComeback] || "comeback_offer",
+      language: { code: env[WA_ENV.lang] || "en" },
+      components: [
+        { type: "body", parameters: [one(name, 40) || "there", one(what, 90) || "your items", one(shopName, 40), one(code, 30)].map((text) => ({ type: "text", text })) },
+        { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: String(token) }] },
+      ],
+    },
+  };
+}
+
 export function buildPendingPaymentMessage(env, { to, name, receipt, amountPaise, payToken, shopName = "AswinPrints" }) {
   const amount = rupeesText({ rzp_amount: amountPaise });
   return {
