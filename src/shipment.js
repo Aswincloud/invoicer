@@ -116,6 +116,9 @@ export async function trackShipment(env, carrier, awb, { timeoutMs = 8000 } = {}
 }
 
 export const isDelivered = (track) => !!(track && track.ok && track.status === "delivered");
+// ShipTrack normalises every carrier's wording ("Out For Delivery", "OFD", …)
+// to this one status.
+export const isOutForDelivery = (track) => !!(track && track.ok && track.status === "out_for_delivery");
 
 /* Epoch ms for "when was it delivered", from the courier's own event time when
  * there is one, else now. A date on the message should be the courier's. */
@@ -142,6 +145,7 @@ export function deliveredAtFrom(track) {
 
 const tplShipped   = (env) => env.WA_TEMPLATE_SHIPPED   || "order_shipped_link";
 const tplDelivered = (env) => env.WA_TEMPLATE_DELIVERED || "order_delivered_new";
+const tplOutForDelivery = (env) => env.WA_TEMPLATE_OFD || "order_out_for_delivery";
 const lang = (env) => env[WA_ENV.lang] || "en";
 
 /* A Meta URL button is a FIXED prefix set on the template plus one dynamic
@@ -171,6 +175,24 @@ export function shippedParams(inv, courier, awb, courierName = "") {
   return [who(inv), String(inv.number || ""), biz(inv),
           courierName || carrierName(courier) || String(courier || ""), String(awb || "")];
 }
+/* order_out_for_delivery (2026-10-21): {{1}} customer, {{2}} order number,
+ * {{3}} business, {{4}} courier; Track button as on the shipped message. */
+export function outForDeliveryParams(inv) {
+  return [who(inv), String(inv.number || ""), biz(inv),
+          carrierName(inv.courier) || String(inv.courier || "") || "the courier"];
+}
+export function buildOutForDeliveryMessage(env, { to, inv }) {
+  return {
+    messaging_product: "whatsapp", to, type: "template",
+    template: { name: tplOutForDelivery(env), language: { code: lang(env) },
+                components: [
+                  bodyComponent(outForDeliveryParams(inv)),
+                  { type: "button", sub_type: "url", index: "0",
+                    parameters: [{ type: "text", text: shippedButtonParam(env, inv.courier || "other", inv.tracking_id) }] },
+                ] },
+  };
+}
+
 export function deliveredParams(inv) {
   return [who(inv), String(inv.number || ""), biz(inv)];
 }
@@ -265,6 +287,13 @@ const TEMPLATE_TEXT = {
     body: "Hi {{1}}, your invoice {{2}} for {{3}} from {{4}} is ready. The invoice is attached. " +
           "You can pay securely online by card, UPI or net banking using the button below.",
     buttons: ["Pay online"],
+  },
+  ofd: {
+    header: "Out for Delivery",
+    body: "Hi {{1}}, your order {{2}} from {{3}} is out for delivery today! 🚚\n\n" +
+          "It's with {{4}} and should reach you soon. Please keep your phone handy for the delivery partner.\n\n" +
+          "You can follow it live using the button below.",
+    buttons: ["Track Package"],
   },
   delay: {
     header: "Update on your order",
@@ -503,13 +532,31 @@ const CRON_BATCH = 25;
 const IN_TRANSIT_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
 
 /* Every run: for each invoice shipped but not yet delivered, ask ShipTrack.
- * Record what it said; when it says delivered, stamp the invoice and send the
- * customer the delivered template — once, guarded by wa_delivered_at.
+ * Record what it said. When it first says out_for_delivery, send the customer
+ * the out-for-delivery template — once, guarded by wa_ofd_at. When it says
+ * delivered, stamp the invoice and send the delivered template — once,
+ * guarded by wa_delivered_at.
  *
  * Never throws. A courier site being down must not take the cron with it; the
  * next run tries again. */
+// biz_name for {{3}}; the raw invoice row does not carry it. The column is
+// biz_name, not name - this once read `SELECT name`, which throws "no such
+// column", was swallowed, and sent every automatic message as "from us". Falls
+// back to the account default business for rows raised before business_id.
+async function bizNameFor(env, inv) {
+  const b = await env.DB.prepare(
+    inv.business_id
+      ? "SELECT biz_name FROM businesses WHERE id=?"
+      : "SELECT biz_name FROM businesses WHERE user_id=? ORDER BY is_default DESC, created_at ASC LIMIT 1"
+  ).bind(inv.business_id || inv.user_id).first().catch((e) => {
+    console.error("business lookup failed", inv.number, String(e?.message || e));
+    return null;
+  });
+  return b?.biz_name || inv.biz_name || "";
+}
+
 export async function checkDeliveries(env) {
-  const summary = { checked: 0, delivered: 0, notified: 0, errors: 0 };
+  const summary = { checked: 0, outForDelivery: 0, delivered: 0, notified: 0, errors: 0 };
   const owner = await ownerUser(env);
   if (!owner) return summary;
 
@@ -537,6 +584,21 @@ export async function checkDeliveries(env) {
     if (!isDelivered(track)) {
       await env.DB.prepare("UPDATE invoices SET track_status=?, track_checked_at=? WHERE id=?")
         .bind(track.status, t, inv.id).run();
+      // Out for delivery: tell the customer once, the first time ShipTrack says
+      // so. Guarded by wa_ofd_at, so a parcel that sits "out for delivery" for
+      // several runs (or goes out twice after a failed attempt) gets one message.
+      if (isOutForDelivery(track) && !inv.wa_ofd_at && inv.client_phone && waConfigured(env)) {
+        const bn = await bizNameFor(env, inv);
+        const res = await sendTemplate(env, buildOutForDeliveryMessage(env, { to: inv.client_phone, inv: { ...inv, biz_name: bn } }));
+        if (!res.ok) {
+          summary.errors++;
+          console.error("out-for-delivery message failed", inv.number, res.status, res.error);
+        } else {
+          summary.outForDelivery++;
+          await env.DB.prepare("UPDATE invoices SET wa_ofd_message_id=?, wa_ofd_at=?, updated_at=? WHERE id=?")
+            .bind(res.id, now(), now(), inv.id).run();
+        }
+      }
       continue;
     }
 
@@ -552,15 +614,7 @@ export async function checkDeliveries(env) {
     // "no such column", was swallowed by the catch, and sent every automatic
     // delivered message as "from us". Falls back to the account default business
     // for rows raised before business_id existed.
-    const b = await env.DB.prepare(
-      inv.business_id
-        ? "SELECT biz_name FROM businesses WHERE id=?"
-        : "SELECT biz_name FROM businesses WHERE user_id=? ORDER BY is_default DESC, created_at ASC LIMIT 1"
-    ).bind(inv.business_id || inv.user_id).first().catch((e) => {
-      console.error("business lookup failed", inv.number, String(e?.message || e));
-      return null;
-    });
-    const msg = buildDeliveredMessage(env, { to: inv.client_phone, inv: { ...inv, biz_name: b?.biz_name || inv.biz_name } });
+    const msg = buildDeliveredMessage(env, { to: inv.client_phone, inv: { ...inv, biz_name: await bizNameFor(env, inv) } });
     const res = await sendTemplate(env, msg);
     if (!res.ok) {
       summary.errors++;
