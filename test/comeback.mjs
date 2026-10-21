@@ -26,6 +26,8 @@ check("one URL button carrying only the token", m.template.components[1].sub_typ
 const messy = buildComebackMessage({}, { to: "1", name: "  ", what: "A\n\tB    C", token: TOKEN }).template.components[0].parameters.map((p) => p.text);
 check("whitespace collapsed (Meta rejects newlines/tabs/4 spaces)", messy[1] === "A B C", JSON.stringify(messy));
 check("blank name reads 'there'", messy[0] === "there");
+const over = buildComebackMessage({}, { to: "1", token: TOKEN, shopName: "Aswin\nPrints", code: "COME\tBACK" }).template.components[0].parameters.map((p) => p.text);
+check("shop name and code are one line too", over[2] === "Aswin Prints" && over[3] === "COME BACK", JSON.stringify(over));
 check("template name overridable", buildComebackMessage({ WA_TEMPLATE_COMEBACK: "x" }, { to: "1", token: TOKEN }).template.name === "x");
 
 let [st, b] = await call(B());

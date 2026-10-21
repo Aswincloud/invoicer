@@ -337,7 +337,7 @@ export function buildComebackMessage(env, { to, name, what, token, code = "COMEB
       name: env[WA_ENV.tplComeback] || "comeback_offer",
       language: { code: env[WA_ENV.lang] || "en" },
       components: [
-        { type: "body", parameters: [one(name, 40) || "there", one(what, 90) || "your items", shopName, code].map((text) => ({ type: "text", text })) },
+        { type: "body", parameters: [one(name, 40) || "there", one(what, 90) || "your items", one(shopName, 40), one(code, 30)].map((text) => ({ type: "text", text })) },
         { type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: String(token) }] },
       ],
     },
