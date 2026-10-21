@@ -24,7 +24,7 @@
 // that it is an open "email anyone an invoice from Aswin's business" endpoint.
 
 import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex, randToken, baseUrl } from "./lib.js";
-import { waConfigured, toE164, buildPaidMessage, templateKindFor, sendTemplate, buildPendingPaymentMessage } from "./wa.js";
+import { waConfigured, toE164, buildPaidMessage, templateKindFor, sendTemplate, buildPendingPaymentMessage, buildComebackMessage } from "./wa.js";
 import { shopCourier, normalizeAwb, buildShippedMessage, buildDeliveredMessage } from "./shipment.js";
 import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
          signAttachment, payQrAttachment } from "./invoice-html.js";
@@ -528,5 +528,29 @@ export async function ingestPaymentReminder(request, env) {
     return json({ ok: true, whatsapp: "failed", why: res.error });
   }
   console.log("payment reminder whatsapp sent", receipt);
+  return json({ ok: true, whatsapp: "sent", id: res.id });
+}
+
+// ── POST /api/ingest/comeback ─────────────────────────────────────
+// The shop's automated reminder, for a customer who opted in to WhatsApp offers:
+// the comeback_offer template, whose button opens the shop's /back/<token> page.
+// Signed like every ingest call. The token is the shop's — "u" or "o" and 32
+// hex — and is checked by shape only, because it is used as a URL suffix on the
+// shop's own domain and nothing here looks it up.
+const BACK_TOKEN_RE = /^[uo][0-9a-f]{32}$/;
+
+export async function ingestComeback(request, env) {
+  const v = await verifyShopRequest(request, env);
+  if (v.response) return v.response;
+  const b = v.body;
+  if (!waConfigured(env)) return json({ ok: true, whatsapp: "skipped", why: "whatsapp not configured" });
+  if (!BACK_TOKEN_RE.test(String(b?.token || ""))) return bad("bad token", 400);
+  const to = toE164(b?.phone);
+  if (!to) return json({ ok: true, whatsapp: "skipped", why: "no valid mobile" });
+  const res = await sendTemplate(env, buildComebackMessage(env, { to, name: b?.name, what: b?.what, token: b.token }));
+  if (!res.ok) {
+    console.error("comeback whatsapp failed", res.status, res.error);
+    return json({ ok: true, whatsapp: "failed", why: res.error });
+  }
   return json({ ok: true, whatsapp: "sent", id: res.id });
 }
