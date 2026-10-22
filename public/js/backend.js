@@ -221,13 +221,17 @@ function wireBackend(){
     // Every preview request is numbered, and only the newest may update the
     // dialog: typing and quick fills fire requests that can return out of
     // order, and a stale reply would show old text with Send enabled.
-    // previewSeq also advances on EVERY edit (see queue below), so a reply in
-    // flight for older field values is stale the moment a key is pressed.
-    // (That half was meant to ship with #106 and missed the squash.)
+    // One rule keeps this dialog honest: every preview request takes its own
+    // number, every edit invalidates the current one (edited() below), and
+    // ONLY the reply carrying the latest number may change anything — fields,
+    // preview text, or Send. Older replies are dropped whole, so a slow one can
+    // neither repaint old text, nor refill a box the user just cleared, nor
+    // re-enable Send. The courier list is the one exception: it is static, so
+    // any reply may fill it, but only once and without touching the choice.
     let previewSeq = 0, couriersLoaded = false;
     async function refreshPreview(first){
       if(!WA) return;
-      const seq = first ? ++previewSeq : previewSeq;
+      const seq = ++previewSeq;
       if(first) couriersLoaded = false;
       const forId = WA.id;
       const q = new URLSearchParams({ kind: WA.kind });
@@ -243,7 +247,12 @@ function wireBackend(){
       }
       let p;
       try{ p = await api("/invoices/"+WA.id+"/whatsapp/preview?"+q); }
-      catch(e){ if(seq !== previewSeq) return; $("waPreview").textContent = ""; $("waMsg").textContent = "Couldn't build the preview: "+e.message; return; }
+      catch(e){
+        if(seq !== previewSeq || !WA || WA.id !== forId) return;
+        $("waPreview").textContent = ""; $("waMsg").textContent = "Couldn't build the preview: "+e.message;
+        $("waSend").disabled = true;    // no preview, no send
+        return;
+      }
       // A reply for a dialog since closed, or reopened on another invoice, is dropped.
       if(!WA || WA.id !== forId) return;
       // The courier list is static, so it is filled from whichever reply comes
@@ -253,13 +262,19 @@ function wireBackend(){
         const sel = $("waCourier"), keep = sel.value; sel.innerHTML = "";
         const opt0 = document.createElement("option"); opt0.value = ""; opt0.textContent = "Choose courier…"; sel.appendChild(opt0);
         for(const c of p.carriers){ const o = document.createElement("option"); o.value = c.id; o.textContent = c.name; sel.appendChild(o); }
-        sel.value = keep || (p.shipment && p.shipment.courier) || "";
+        sel.value = keep;               // the list only; the choice is set below
       }
-      // This invoice's OWN stored tracking (p.shipment, straight from its row),
-      // never p.tracking, which echoes what was sent in. Fills an empty box only.
-      if(first && WA.kind === "shipped" && !$("waTracking").value)
+      if(seq !== previewSeq) return;     // everything after this is the latest reply only
+      // First open, nothing edited since (any edit would have moved previewSeq):
+      // fill from THIS invoice's own stored row — p.shipment, never p.tracking,
+      // which echoes whatever was sent in.
+      if(first && WA.kind === "shipped"){
+        $("waCourier").value = (p.shipment && p.shipment.courier) || "";
         $("waTracking").value = (p.shipment && p.shipment.tracking_id) || "";
-      if(seq !== previewSeq) return;
+        // The preview just shown was built without those fields; ask again
+        // with them so the text, the link and Send all match the boxes.
+        if($("waTracking").value || $("waCourier").value){ refreshPreview(false); return; }
+      }
       if(first && p.to && !$("waTo").value) $("waTo").value = p.to;
       $("waPreview").textContent = p.text;
       $("waPreview").classList.toggle("pending", !p.canSend);
@@ -283,14 +298,16 @@ function wireBackend(){
     // number does not fire a request per keystroke.
     // Send stays off from the first keystroke until the preview for those exact
     // fields has come back, so a message is never sent unseen.
-    const queue = () => { ++previewSeq; $("waSend").disabled = true; clearTimeout(previewTimer); previewTimer = setTimeout(() => refreshPreview(false), 350); };
-    $("waCourier").onchange = () => { ++previewSeq; $("waSend").disabled = true; refreshPreview(false); };
+    // Any edit: the reply in flight is now stale, and Send waits for the next.
+    const edited = () => { ++previewSeq; $("waSend").disabled = true; clearTimeout(previewTimer); };
+    const queue = () => { edited(); previewTimer = setTimeout(() => refreshPreview(false), 350); };
+    $("waCourier").onchange = () => { edited(); refreshPreview(false); };
     $("waTracking").oninput = queue;
     $("waTo").oninput = queue;
     $("waDelayReason").oninput = queue;
     $("waDelayUntil").oninput = queue;
     document.querySelectorAll("#waDelayFields [data-reason]").forEach((b) => {
-      b.onclick = () => { $("waDelayReason").value = b.dataset.reason; ++previewSeq; $("waSend").disabled = true; refreshPreview(false); };
+      b.onclick = () => { $("waDelayReason").value = b.dataset.reason; edited(); refreshPreview(false); };
     });
 
     $("waSend").onclick = async () => {
