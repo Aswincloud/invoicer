@@ -26,6 +26,12 @@ APP_BASE_URL = "https://invoicer.aswincloud.com"
 # public API. No credentials; its /api/track is open.
 SHIPTRACK_BASE_URL = "https://shiptrack.aswincloud.com"
 
+# WhatsApp sends go through wa-relay, which forwards them to Meta unchanged
+# (same token, same response) and records each accepted customer message in the
+# Chatwoot support inbox, so replies to these notifications arrive with context.
+# Delete this line to send straight to graph.facebook.com again.
+WA_API_BASE = "https://wa-relay.aswincloud.com/graph"
+
 # Invoices raised automatically from paid orders at 3d-prints.aswincloud.com.
 #
 # Kill switch: set to "false" and deploy to stop accepting them, without touching

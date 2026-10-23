@@ -35,6 +35,20 @@ sent = []; plan = ["ok", "throw"];
 r = await sendTemplate(ENV, MSG);
 check("nor does a network error on the copy", r.ok && sent.length === 2, JSON.stringify(r));
 
+// Through wa-relay: the base is configurable, and each send says who it is so
+// the relay records customer messages in Chatwoot but not the owner's copy.
+let urls = [], senders = [];
+const prevFetch = globalThis.fetch;
+globalThis.fetch = async (url, init) => { urls.push(String(url)); senders.push(init.headers["X-Aswin-Sender"]); return prevFetch(url, init); };
+sent = []; plan = [];
+r = await sendTemplate({ ...ENV, WA_API_BASE: "https://wa-relay.aswincloud.com/graph/" }, MSG);
+check("WA_API_BASE routes both sends via the relay", urls.length === 2 && urls.every((u) => u === "https://wa-relay.aswincloud.com/graph/v23.0/1336188189573573/messages"), JSON.stringify(urls));
+check("customer send is labelled invoicer, the copy owner-copy", senders[0] === "invoicer" && senders[1] === "owner-copy", JSON.stringify(senders));
+urls = [];
+await sendTemplate(ENV, MSG);
+check("without WA_API_BASE it still goes straight to Meta", urls[0] === "https://graph.facebook.com/v23.0/1336188189573573/messages", urls[0]);
+globalThis.fetch = prevFetch;
+
 sent = []; plan = [];
 r = await sendTemplate(ENV, { ...MSG, to: "916380157944" });
 check("a message already addressed to the owner is not copied to them again", r.ok && sent.length === 1);

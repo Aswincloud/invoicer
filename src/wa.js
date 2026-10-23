@@ -33,6 +33,7 @@ export const WA_ENV = {
   phoneId:   "WA_PHONE_NUMBER_ID",
   token:     "WA_ACCESS_TOKEN",
   version:   "WA_API_VERSION",       // default below
+  apiBase:   "WA_API_BASE",          // default https://graph.facebook.com; wa-relay records sends in Chatwoot
   tplPaid:   "WA_TEMPLATE_CONFIRMED", // default "order_confirmed_new"
   tplReceipt:"WA_TEMPLATE_RECEIPT",   // default "payment_received" — pay-link payments
   tplRequest:"WA_TEMPLATE_REQUEST",   // default "invoice_pay_online" — unpaid invoices
@@ -281,21 +282,28 @@ export async function sendTemplate(env, body) {
   const res = await postMessage(env, body);
   const copyTo = toE164(env.WA_COPY_TO);
   if (res.ok && copyTo && copyTo !== toE164(body?.to)) {
-    const copy = await postMessage(env, { ...body, to: copyTo });
+    const copy = await postMessage(env, { ...body, to: copyTo }, "owner-copy");
     if (!copy.ok) console.error("whatsapp owner copy failed", copy.error);
   }
   return res;
 }
 
-async function postMessage(env, body) {
+/* WA_API_BASE points sends at wa-relay (https://wa-relay.aswincloud.com/graph),
+ * which forwards them to Meta unchanged and records each accepted customer send
+ * in Chatwoot, so the support inbox and its bot see what the customer is
+ * replying to. X-Aswin-Sender names the sender there; the owner copy is
+ * labelled "owner-copy" so it is not recorded as a customer conversation. */
+async function postMessage(env, body, sender = "invoicer") {
   const ver = env[WA_ENV.version] || "v23.0";
-  const url = `https://graph.facebook.com/${ver}/${env[WA_ENV.phoneId]}/messages`;
+  const base = String(env[WA_ENV.apiBase] || "https://graph.facebook.com").replace(/\/$/, "");
+  const url = `${base}/${ver}/${env[WA_ENV.phoneId]}/messages`;
   let r;
   try {
     r = await fetch(url, {
       method: "POST",
       headers: { "Authorization": `Bearer ${env[WA_ENV.token]}`,
-                 "Content-Type": "application/json" },
+                 "Content-Type": "application/json",
+                 "X-Aswin-Sender": sender },
       body: JSON.stringify(body),
     });
   } catch (e) {
