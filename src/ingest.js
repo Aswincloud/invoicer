@@ -423,42 +423,53 @@ export async function ingestShipmentCombined(request, env) {
   const user = await env.DB.prepare("SELECT * FROM users WHERE lower(email)=?").bind(ownerEmail).first();
   if (!user) return json({ error: "invoicing is not configured" }, 503);
 
+  // Every receipt must have its invoice. Dropping a missing one would silently
+  // change the lead — the order the parcel went to — and message the wrong phone.
   const invs = [];
   for (const r of receipts) {
     const inv = await env.DB.prepare("SELECT * FROM invoices WHERE source_ref=? AND source='shop' AND user_id=?").bind(r, user.id).first();
-    if (inv) { await attachBusiness(env, inv); invs.push(inv); }
+    if (!inv) return bad(`no invoice for ${r}`, 404);
+    await attachBusiness(env, inv);
+    invs.push(inv);
   }
-  if (!invs.length) return bad("no invoice for those orders", 404);
 
   const courier = shopCourier(b?.courier);
   const awb = normalizeAwb(b?.tracking);
   if (!awb) return json({ ok: true, whatsapp: "skipped", why: "no tracking number" });
   const t = now();
-  for (const inv of invs) {
-    await env.DB.prepare(`UPDATE invoices SET courier=?, tracking_id=?, shipped_at=COALESCE(shipped_at, ?), updated_at=? WHERE id=?`)
-      .bind(courier.id || courier.name, awb, t, t, inv.id).run();
-  }
+
+  // Already told: change nothing, so the stored tracking keeps matching the
+  // message the customer already has — the same order ingestShipment checks in.
   if (invs.some((i) => i.wa_shipped_message_id)) return json({ ok: true, whatsapp: "already_sent" });
+
+  await env.DB.batch(invs.map((inv) => env.DB.prepare(
+    `UPDATE invoices SET courier=?, tracking_id=?, shipped_at=COALESCE(shipped_at, ?), updated_at=? WHERE id=?`
+  ).bind(courier.id || courier.name, awb, t, t, inv.id)));
+
   if (!waConfigured(env)) return json({ ok: true, whatsapp: "skipped", why: "whatsapp not configured" });
   const lead = invs[0];
   const to = toE164(lead.client_phone);
   if (!to) return json({ ok: true, whatsapp: "skipped", why: "no valid mobile on the order" });
 
-  const together = String(env.WA_COMBINED_SHIP_ENABLED || "").toLowerCase() === "true" && invs.length > 1;
+  // Meta refuses an empty parameter, and "shipped via " needs a courier.
+  const courierName = courier.name || "the courier";
+  const together = String(env.WA_COMBINED_SHIP_ENABLED || "").toLowerCase() === "true";
   const others = invs.slice(1).map((i) => i.number).filter(Boolean).join(", ");
   const msg = together
-    ? buildShippedTogetherMessage(env, { to, invs, courier: courier.id, courierName: courier.name, awb })
+    ? buildShippedTogetherMessage(env, { to, invs, courier: courier.id, courierName, awb })
     : buildShippedMessage(env, { to, inv: lead, courier: courier.id, awb,
         // {{4}} reads "shipped via {{4}}": the other orders ride along in it.
-        courierName: (courier.name || "the courier") + (others ? ` (packed with ${others})` : "") });
+        courierName: courierName + (others ? ` (packed with ${others})` : "") });
   const res = await sendTemplate(env, msg);
   if (!res.ok) {
     console.error("combined shipped whatsapp failed", receipts.join(","), res.status, res.error);
     return json({ ok: true, whatsapp: "failed", why: res.error, template: together ? "together" : "single" });
   }
-  for (const inv of invs) {
-    await env.DB.prepare("UPDATE invoices SET wa_shipped_message_id=?, wa_shipped_at=?, updated_at=? WHERE id=?").bind(res.id, t, t, inv.id).run();
-  }
+  // One batch: every invoice is marked or none is, so a partial failure cannot
+  // leave one open for a second, per-order shipped message about the same parcel.
+  await env.DB.batch(invs.map((inv) => env.DB.prepare(
+    "UPDATE invoices SET wa_shipped_message_id=?, wa_shipped_at=?, updated_at=? WHERE id=?"
+  ).bind(res.id, t, t, inv.id)));
   return json({ ok: true, whatsapp: "sent", id: res.id, template: together ? "together" : "single", invoices: invs.length });
 }
 

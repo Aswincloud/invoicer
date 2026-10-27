@@ -948,6 +948,24 @@ section("shipment-combined: several orders, one parcel, ONE WhatsApp");
   b = await (await ingestShipmentCombined(await signedCombo(COMBO({ tracking: "" })), env)).json();
   ok("no tracking → skipped, nothing sent", b.whatsapp === "skipped" && env._wa.length === 0);
   ok("receipts with no invoice → 404", (await ingestShipmentCombined(await signedCombo(COMBO({ receipts: ["AP-00000000", "AP-11111111"] })), env)).status === 404);
+
+  // Review fixes.
+  env = await comboEnv();
+  const r404 = await ingestShipmentCombined(await signedCombo(COMBO({ receipts: ["AP-00000000", "AP-5e6f7a8b", "AP-9c0d1e2f"] })), env);
+  ok("a missing LEAD invoice → 404, nothing written or sent", r404.status === 404 && env._wa.length === 0 && env.DB._db.invoices.every((i) => !i.tracking_id), String(r404.status));
+  const r404b = await ingestShipmentCombined(await signedCombo(COMBO({ receipts: ["AP-1a2b3c4d", "AP-00000000"] })), env);
+  ok("any missing invoice → 404", r404b.status === 404 && env._wa.length === 0);
+
+  env = await comboEnv();
+  await ingestShipmentCombined(await signedCombo(COMBO()), env);
+  const before = env.DB._db.invoices.map((i) => i.tracking_id).join(",");
+  const again2 = await (await ingestShipmentCombined(await signedCombo(COMBO({ tracking: "DIFFERENT999" })), env)).json();
+  ok("already sent: the stored tracking is left matching the sent message", again2.whatsapp === "already_sent" && env.DB._db.invoices.map((i) => i.tracking_id).join(",") === before, env.DB._db.invoices.map((i) => i.tracking_id).join(","));
+
+  env = await comboEnv({ WA_COMBINED_SHIP_ENABLED: "true" });
+  await ingestShipmentCombined(await signedCombo(COMBO({ courier: "" })), env);
+  const pc = env._wa[0]?.body.template.components[0].parameters.map((x) => x.text);
+  ok("no courier given: the combined template says 'the courier', never empty", pc && pc[3] === "the courier" && pc.every((x) => x !== ""), JSON.stringify(pc));
 }
 
 console.log(`\n  ingest: ${pass} passed, ${fail} failed`);
