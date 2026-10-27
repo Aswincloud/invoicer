@@ -25,7 +25,7 @@
 
 import { json, bad, uid, now, sendEmail, hmacHex, timingSafeEqualHex, randToken, baseUrl } from "./lib.js";
 import { waConfigured, toE164, buildPaidMessage, templateKindFor, sendTemplate, buildPendingPaymentMessage, buildComebackMessage } from "./wa.js";
-import { shopCourier, normalizeAwb, buildShippedMessage, buildDeliveredMessage } from "./shipment.js";
+import { shopCourier, normalizeAwb, buildShippedMessage, buildDeliveredMessage, buildShippedTogetherMessage } from "./shipment.js";
 import { renderInvoiceEmail, computeTotals, logoAttachment, qrAttachment,
          signAttachment, payQrAttachment } from "./invoice-html.js";
 import { renderInvoicePdf, toBase64 } from "./invoice-pdf.js";
@@ -396,6 +396,70 @@ export async function ingestShipment(request, env) {
     "UPDATE invoices SET wa_delivered_message_id=?, wa_delivered_at=?, updated_at=? WHERE id=?"
   ).bind(res.id, now(), now(), inv.id).run();
   return json({ ok: true, whatsapp: "sent", id: res.id });
+}
+
+// ── POST /api/ingest/shipment-combined ───────────────────────────────────────
+// Several shop orders from one customer, shipped in one parcel. Body:
+// { ts, receipts: [AP-…] (the first is the order the parcel went to), courier,
+//   tracking }. Records the courier and tracking on every order's invoice and
+// sends ONE WhatsApp to the lead order's phone.
+//
+// The message is orders_shipped_together once WA_COMBINED_SHIP_ENABLED is
+// "true" (set when Meta approves it). Until then it falls back to the approved
+// single-order template, sent once, for the lead order, with the other order
+// numbers named in the courier line — so the customer still gets one message.
+//
+// Idempotent: if any of these invoices already has a shipped WhatsApp, nothing
+// is sent again. Every invoice is scoped exactly as ingestShipment does.
+export async function ingestShipmentCombined(request, env) {
+  const v = await verifyShopRequest(request, env);
+  if (v.response) return v.response;
+  const b = v.body;
+  const receipts = [...new Set((Array.isArray(b?.receipts) ? b.receipts : []).map((r) => String(r || "").trim()).filter((r) => /^AP-[0-9a-zA-Z]{6,20}$/.test(r)))];
+  if (receipts.length < 2 || receipts.length > 10) return bad("2 to 10 receipts required", 400);
+
+  const ownerEmail = String(env.INVOICE_OWNER_EMAIL || "").trim().toLowerCase();
+  if (!ownerEmail) return json({ error: "invoicing is not configured" }, 503);
+  const user = await env.DB.prepare("SELECT * FROM users WHERE lower(email)=?").bind(ownerEmail).first();
+  if (!user) return json({ error: "invoicing is not configured" }, 503);
+
+  const invs = [];
+  for (const r of receipts) {
+    const inv = await env.DB.prepare("SELECT * FROM invoices WHERE source_ref=? AND source='shop' AND user_id=?").bind(r, user.id).first();
+    if (inv) { await attachBusiness(env, inv); invs.push(inv); }
+  }
+  if (!invs.length) return bad("no invoice for those orders", 404);
+
+  const courier = shopCourier(b?.courier);
+  const awb = normalizeAwb(b?.tracking);
+  if (!awb) return json({ ok: true, whatsapp: "skipped", why: "no tracking number" });
+  const t = now();
+  for (const inv of invs) {
+    await env.DB.prepare(`UPDATE invoices SET courier=?, tracking_id=?, shipped_at=COALESCE(shipped_at, ?), updated_at=? WHERE id=?`)
+      .bind(courier.id || courier.name, awb, t, t, inv.id).run();
+  }
+  if (invs.some((i) => i.wa_shipped_message_id)) return json({ ok: true, whatsapp: "already_sent" });
+  if (!waConfigured(env)) return json({ ok: true, whatsapp: "skipped", why: "whatsapp not configured" });
+  const lead = invs[0];
+  const to = toE164(lead.client_phone);
+  if (!to) return json({ ok: true, whatsapp: "skipped", why: "no valid mobile on the order" });
+
+  const together = String(env.WA_COMBINED_SHIP_ENABLED || "").toLowerCase() === "true" && invs.length > 1;
+  const others = invs.slice(1).map((i) => i.number).filter(Boolean).join(", ");
+  const msg = together
+    ? buildShippedTogetherMessage(env, { to, invs, courier: courier.id, courierName: courier.name, awb })
+    : buildShippedMessage(env, { to, inv: lead, courier: courier.id, awb,
+        // {{4}} reads "shipped via {{4}}": the other orders ride along in it.
+        courierName: (courier.name || "the courier") + (others ? ` (packed with ${others})` : "") });
+  const res = await sendTemplate(env, msg);
+  if (!res.ok) {
+    console.error("combined shipped whatsapp failed", receipts.join(","), res.status, res.error);
+    return json({ ok: true, whatsapp: "failed", why: res.error, template: together ? "together" : "single" });
+  }
+  for (const inv of invs) {
+    await env.DB.prepare("UPDATE invoices SET wa_shipped_message_id=?, wa_shipped_at=?, updated_at=? WHERE id=?").bind(res.id, t, t, inv.id).run();
+  }
+  return json({ ok: true, whatsapp: "sent", id: res.id, template: together ? "together" : "single", invoices: invs.length });
 }
 
 // ── mapping a shop order onto an invoice ─────────────────────────────────────
