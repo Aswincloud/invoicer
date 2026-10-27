@@ -73,6 +73,11 @@ PAYLINK_BUSINESS = "AswinCloud"
 # The template a /pay payment's WhatsApp uses — a plain receipt, not the shop's
 # "order confirmed". Created 2026-09-26 on the WABA; see src/wa.js.
 WA_TEMPLATE_RECEIPT = "payment_received"
+# Several shop orders shipped in one parcel send the orders_shipped_together
+# template (approved by Meta 2026-10-27). "false" falls back to the single-order
+# shipped template, sent once and naming the other orders. See
+# ingestShipmentCombined in src/ingest.js.
+WA_COMBINED_SHIP_ENABLED = "true"
 # Pay by UPI (/u/<token>) uses the business's own UPI ID. Razorpay's QR Codes API
 # returns only an image of the QR, no upi:// string, so it cannot open a UPI app
 # directly; with this on, every page open created and closed a QR for nothing
