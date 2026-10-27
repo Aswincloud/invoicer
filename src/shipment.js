@@ -144,6 +144,7 @@ export function deliveredAtFrom(track) {
 // delivered one has no button.
 
 const tplShipped   = (env) => env.WA_TEMPLATE_SHIPPED   || "order_shipped_link";
+const tplShippedTogether = (env) => env.WA_TEMPLATE_SHIPPED_TOGETHER || "orders_shipped_together";
 const tplDelivered = (env) => env.WA_TEMPLATE_DELIVERED || "order_delivered_new";
 const tplOutForDelivery = (env) => env.WA_TEMPLATE_OFD || "order_out_for_delivery";
 const lang = (env) => env[WA_ENV.lang] || "en";
@@ -220,6 +221,28 @@ export function buildShippedMessage(env, { to, inv, courier, awb, courierName = 
                   // The template's one URL button, index 0.
                   { type: "button", sub_type: "url", index: "0",
                     parameters: [{ type: "text", text: shippedButtonParam(env, id, awb) }] },
+                ] },
+  };
+}
+
+/* orders_shipped_together (submitted 2026-10-27): several shop orders in one
+ * parcel. {{1}} customer, {{2}} how many orders, {{3}} business, {{4}} courier,
+ * {{5}} the order numbers, {{6}} tracking id; the Track button as on the
+ * single-order message. `invs` leads with the order the parcel went to. */
+export function shippedTogetherParams(invs, courier, awb, courierName = "") {
+  const lead = invs[0];
+  const numbers = invs.map((i) => String(i.number || "")).filter(Boolean).join(", ").slice(0, 300);
+  return [who(lead), String(invs.length), biz(lead),
+          courierName || carrierName(courier) || String(courier || ""), numbers, String(awb || "")];
+}
+export function buildShippedTogetherMessage(env, { to, invs, courier, awb, courierName = "" }) {
+  return {
+    messaging_product: "whatsapp", to, type: "template",
+    template: { name: tplShippedTogether(env), language: { code: lang(env) },
+                components: [
+                  bodyComponent(shippedTogetherParams(invs, courier, awb, courierName)),
+                  { type: "button", sub_type: "url", index: "0",
+                    parameters: [{ type: "text", text: shippedButtonParam(env, courier || "other", awb) }] },
                 ] },
   };
 }

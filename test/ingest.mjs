@@ -13,7 +13,7 @@
 // support argument. So the total is asserted in paise, as an integer, for every
 // awkward combination of shipping and discount that can occur.
 
-import { ingestOrder, ingestShipment, buildInvoice } from "../src/ingest.js";
+import { ingestOrder, ingestShipment, ingestShipmentCombined, buildInvoice } from "../src/ingest.js";
 import { computeTotals, renderInvoiceEmail, logoAttachment } from "../src/invoice-html.js";
 import { hmacHex } from "../src/lib.js";
 
@@ -903,6 +903,69 @@ section("shipment: no usable mobile → skipped, never guessed");
   const b = await (await ingestShipment(await signedShipment(SHIP()), env)).json();
   ok("skipped for want of a number", b.whatsapp === "skipped" && /mobile/.test(b.why || ""), JSON.stringify(b));
   ok("nothing sent", env._wa.length === 0);
+}
+
+section("shipment-combined: several orders, one parcel, ONE WhatsApp");
+{
+  const COMBO = (over = {}) => ({ ts: Date.now(), receipts: ["AP-1a2b3c4d", "AP-5e6f7a8b", "AP-9c0d1e2f"], courier: "The Professional Couriers", tracking: "PON 700 4549", ...over });
+  const signedCombo = async (bodyObj, { secret = SECRET } = {}) => {
+    const raw = JSON.stringify(bodyObj);
+    return new Request("https://invoicer/api/ingest/shipment-combined", { method: "POST", body: raw, headers: { "x-shop-signature": await hmacHex(raw, secret) } });
+  };
+  const comboEnv = async (over = {}) => {
+    const env = envWith({}, { ...WA, ...over });
+    for (const r of ["AP-1a2b3c4d", "AP-5e6f7a8b", "AP-9c0d1e2f"]) await ingestOrder(await signedRequest({ ...ORDER(), receipt: r }), env);
+    env._wa.length = 0;
+    return env;
+  };
+
+  // Before Meta approves orders_shipped_together: the single-order template, once.
+  let env = await comboEnv();
+  let b = await (await ingestShipmentCombined(await signedCombo(COMBO()), env)).json();
+  ok("fallback: one WhatsApp, the approved single-order template", b.whatsapp === "sent" && b.template === "single" && env._wa.length === 1 && env._wa[0].body.template.name === "order_shipped_link", JSON.stringify(b));
+  const p1 = env._wa[0].body.template.components[0].parameters.map((x) => x.text);
+  ok("fallback names the lead order and lists the others in the courier line", p1[1] === env.DB._db.invoices[0].number && /packed with .*AP-2026-5E6F7A8B.*AP-2026-9C0D1E2F/i.test(p1[3]), JSON.stringify(p1));
+  ok("every invoice gets the tracking and is marked messaged", env.DB._db.invoices.every((i) => i.tracking_id === "PON7004549" && i.wa_shipped_message_id), JSON.stringify(env.DB._db.invoices.map((i) => [i.tracking_id, i.wa_shipped_message_id])));
+  b = await (await ingestShipmentCombined(await signedCombo(COMBO()), env)).json();
+  ok("a repeat sends nothing", b.whatsapp === "already_sent" && env._wa.length === 1, JSON.stringify(b));
+  const single = await (await ingestShipment(await signedShipment(SHIP({ receipt: "AP-5e6f7a8b" })), env)).json();
+  ok("…and a per-order shipped call for one of them sends nothing either", single.whatsapp === "already_sent" && env._wa.length === 1, JSON.stringify(single));
+
+  // After approval.
+  env = await comboEnv({ WA_COMBINED_SHIP_ENABLED: "true" });
+  b = await (await ingestShipmentCombined(await signedCombo(COMBO()), env)).json();
+  const t = env._wa[0]?.body.template;
+  ok("approved: orders_shipped_together, once", b.template === "together" && env._wa.length === 1 && t.name === "orders_shipped_together", JSON.stringify(b));
+  const p2 = t.components[0].parameters.map((x) => x.text);
+  ok("body: name, count, business, courier, all order numbers, tracking", p2.length === 6 && p2[1] === "3" && p2[3] === "The Professional Couriers" && p2[4].split(", ").length === 3 && p2[5] === "PON7004549", JSON.stringify(p2));
+  ok("Track button goes to ShipTrack for the carrier", t.components[1].parameters[0].text === "tpc/PON7004549", t.components[1].parameters[0].text);
+
+  // Refusals.
+  env = await comboEnv();
+  ok("wrong secret → 401, nothing sent", (await ingestShipmentCombined(await signedCombo(COMBO(), { secret: "wrong" }), env)).status === 401 && env._wa.length === 0);
+  ok("one receipt → 400", (await ingestShipmentCombined(await signedCombo(COMBO({ receipts: ["AP-1a2b3c4d"] })), env)).status === 400);
+  ok("junk receipts are dropped (→ 400 when fewer than two remain)", (await ingestShipmentCombined(await signedCombo(COMBO({ receipts: ["AP-1a2b3c4d", "x' OR 1=1"] })), env)).status === 400);
+  b = await (await ingestShipmentCombined(await signedCombo(COMBO({ tracking: "" })), env)).json();
+  ok("no tracking → skipped, nothing sent", b.whatsapp === "skipped" && env._wa.length === 0);
+  ok("receipts with no invoice → 404", (await ingestShipmentCombined(await signedCombo(COMBO({ receipts: ["AP-00000000", "AP-11111111"] })), env)).status === 404);
+
+  // Review fixes.
+  env = await comboEnv();
+  const r404 = await ingestShipmentCombined(await signedCombo(COMBO({ receipts: ["AP-00000000", "AP-5e6f7a8b", "AP-9c0d1e2f"] })), env);
+  ok("a missing LEAD invoice → 404, nothing written or sent", r404.status === 404 && env._wa.length === 0 && env.DB._db.invoices.every((i) => !i.tracking_id), String(r404.status));
+  const r404b = await ingestShipmentCombined(await signedCombo(COMBO({ receipts: ["AP-1a2b3c4d", "AP-00000000"] })), env);
+  ok("any missing invoice → 404", r404b.status === 404 && env._wa.length === 0);
+
+  env = await comboEnv();
+  await ingestShipmentCombined(await signedCombo(COMBO()), env);
+  const before = env.DB._db.invoices.map((i) => i.tracking_id).join(",");
+  const again2 = await (await ingestShipmentCombined(await signedCombo(COMBO({ tracking: "DIFFERENT999" })), env)).json();
+  ok("already sent: the stored tracking is left matching the sent message", again2.whatsapp === "already_sent" && env.DB._db.invoices.map((i) => i.tracking_id).join(",") === before, env.DB._db.invoices.map((i) => i.tracking_id).join(","));
+
+  env = await comboEnv({ WA_COMBINED_SHIP_ENABLED: "true" });
+  await ingestShipmentCombined(await signedCombo(COMBO({ courier: "" })), env);
+  const pc = env._wa[0]?.body.template.components[0].parameters.map((x) => x.text);
+  ok("no courier given: the combined template says 'the courier', never empty", pc && pc[3] === "the courier" && pc.every((x) => x !== ""), JSON.stringify(pc));
 }
 
 console.log(`\n  ingest: ${pass} passed, ${fail} failed`);
