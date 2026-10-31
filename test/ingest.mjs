@@ -833,16 +833,31 @@ section("shipment: shipped sends the tracking message and records the shipment")
 section("shipment: a courier ShipTrack cannot track is still named, honestly buttoned");
 {
   const env = await invoicedEnv();
-  const b = await (await ingestShipment(await signedShipment(SHIP({ courier: "DTDC", tracking: "D456789" })), env)).json();
+  const b = await (await ingestShipment(await signedShipment(SHIP({ courier: "India Post", tracking: "D456789" })), env)).json();
   ok("still sent", b.whatsapp === "sent", JSON.stringify(b));
   ok("reports the button as not tracked", b.tracked === false);
   const msg = env._wa[0]?.body;
   const bodyC = msg?.template?.components?.find((c) => c.type === "body");
-  ok("the body names the courier as typed", bodyC?.parameters?.[3]?.text === "DTDC", bodyC?.parameters?.[3]?.text);
+  ok("the body names the courier as typed", bodyC?.parameters?.[3]?.text === "India Post", bodyC?.parameters?.[3]?.text);
   const btn = msg?.template?.components?.find((c) => c.type === "button");
   ok("the button suffix is other/<awb> — ShipTrack's unknown-carrier page, not a broken link",
      btn?.parameters?.[0]?.text === "other/D456789", btn?.parameters?.[0]?.text);
-  ok("the typed courier is what is recorded", env.DB._db.invoices[0].courier === "DTDC");
+  ok("the typed courier is what is recorded", env.DB._db.invoices[0].courier === "India Post");
+}
+
+section("shipment: DTDC from the shop — named properly, buttoned to its tracking page");
+{
+  const env = await invoicedEnv();
+  const b = await (await ingestShipment(await signedShipment(SHIP({ courier: "DTDC", tracking: "C5000946201" })), env)).json();
+  ok("sent", b.whatsapp === "sent", JSON.stringify(b));
+  ok("reports the button as tracked (it opens DTDC's page via ShipTrack)", b.tracked === true);
+  const msg = env._wa[0]?.body;
+  const bodyC = msg?.template?.components?.find((c) => c.type === "body");
+  ok("the body says DTDC", bodyC?.parameters?.[3]?.text === "DTDC", bodyC?.parameters?.[3]?.text);
+  const btn = msg?.template?.components?.find((c) => c.type === "button");
+  ok("the button suffix is dtdc/<awb>, which ShipTrack forwards to dtdc.com",
+     btn?.parameters?.[0]?.text === "dtdc/C5000946201", btn?.parameters?.[0]?.text);
+  ok("the carrier id is what is recorded", env.DB._db.invoices[0].courier === "dtdc");
 }
 
 section("shipment: sends at most once per kind — a tracking correction must not re-notify");
