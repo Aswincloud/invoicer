@@ -29,10 +29,16 @@ import { balanceOf } from "./invoice-html.js";
 /* ShipTrack's carriers. Ids are what its API and /track/ links take; names are
  * what goes into the customer's message. Kept in step with
  * https://shiptrack.aswincloud.com/api/carriers by hand — it changes rarely, and
- * a dropdown must not depend on a network call to render. */
+ * a dropdown must not depend on a network call to render.
+ *
+ * linkOnly: ShipTrack has no live status for it, only a link. DTDC's tracking is
+ * behind a captcha, so ShipTrack's /track/dtdc/<awb> forwards to DTDC's own
+ * page. The customer still gets a working Track button; the delivery cron never
+ * asks ShipTrack for its status (see checkDeliveries). */
 export const CARRIERS = [
   { id: "bluedart",   name: "Blue Dart" },
   { id: "delhivery",  name: "Delhivery" },
+  { id: "dtdc",       name: "DTDC", linkOnly: true },
   { id: "shiprocket", name: "Shiprocket" },
   { id: "stcourier",  name: "ST Courier" },
   { id: "tpc",        name: "The Professional Couriers" },
@@ -42,6 +48,10 @@ export const carrierName = (id) =>
   (CARRIERS.find((c) => c.id === String(id || "").toLowerCase()) || {}).name || "";
 
 export const isCarrier = (id) => CARRIERS.some((c) => c.id === String(id || "").toLowerCase());
+
+// A carrier with a tracking link but no live status (see CARRIERS).
+export const isLinkOnly = (id) => CARRIERS.some((c) => c.id === String(id || "").toLowerCase() && c.linkOnly);
+const LINK_ONLY_IDS = CARRIERS.filter((c) => c.linkOnly).map((c) => c.id);
 
 /* The shop's courier is FREE TEXT ("Blue Dart", "DTDC", "local courier"); the
  * shipped template needs a display name for {{4}} and, for its Track button, a
@@ -60,6 +70,7 @@ export function shopCourier(raw) {
   const id =
     /^bluedart/.test(key)                   ? "bluedart"  :
     /^delhivery/.test(key)                  ? "delhivery" :
+    /^dtdc/.test(key)                       ? "dtdc"      :
     /^shiprocket/.test(key)                 ? "shiprocket" :
     /^stcourier/.test(key)                  ? "stcourier" :
     (key === "tpc" || /professional/.test(key)) ? "tpc" : "";
@@ -90,6 +101,8 @@ export const trackUrl = (env, carrier, awb) =>
  * tell "the courier does not know this number" from "ShipTrack is down". */
 export async function trackShipment(env, carrier, awb, { timeoutMs = 8000 } = {}) {
   if (!isCarrier(carrier) || !awb) return { ok: false, error: "invalid_input" };
+  // No live status to fetch; ShipTrack would only redirect to the courier's page.
+  if (isLinkOnly(carrier)) return { ok: false, error: "link_only" };
   const url = `${shiptrackBase(env)}/api/track/${encodeURIComponent(carrier)}/${encodeURIComponent(awb)}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -583,12 +596,17 @@ export async function checkDeliveries(env) {
   const owner = await ownerUser(env);
   if (!owner) return summary;
 
+  // Link-only couriers (DTDC) have no status to fetch. Leave them out of the
+  // batch: rows are taken oldest-checked first and a failed check never stamps
+  // track_checked_at, so one would sit at the head of every run. LOWER() because
+  // the shop stores the courier as typed ("DTDC").
   const { results } = await env.DB.prepare(
     `SELECT * FROM invoices
       WHERE user_id = ? AND shipped_at IS NOT NULL AND delivered_at IS NULL
         AND courier <> '' AND tracking_id <> '' AND shipped_at > ?
+        AND LOWER(courier) NOT IN (${LINK_ONLY_IDS.map(() => "?").join(",") || "''"})
       ORDER BY track_checked_at ASC NULLS FIRST LIMIT ?`
-  ).bind(owner.id, now() - IN_TRANSIT_WINDOW_MS, CRON_BATCH).all();
+  ).bind(owner.id, now() - IN_TRANSIT_WINDOW_MS, ...LINK_ONLY_IDS, CRON_BATCH).all();
 
   for (const inv of results || []) {
     summary.checked++;

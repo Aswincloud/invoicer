@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  CARRIERS, carrierName, isCarrier, normalizeAwb, trackUrl, shopCourier,
+  CARRIERS, carrierName, isCarrier, isLinkOnly, normalizeAwb, trackUrl, shopCourier, trackShipment,
   shippedParams, deliveredParams, buildShippedMessage, buildDeliveredMessage, shippedButtonParam,
   previewText, isDelivered, deliveredAtFrom,
 } from "../src/shipment.js";
@@ -19,10 +19,11 @@ const env = { SHIPTRACK_BASE_URL: "https://shiptrack.aswincloud.com" };
 const inv = { number: "INV-AC-2026-3201", client_name: "Priya", biz_name: "Aswin3DPrints", client_phone: "916380157944" };
 
 test("carriers: the ShipTrack ids, with display names for the message", () => {
-  assert.deepEqual(CARRIERS.map((c) => c.id), ["bluedart", "delhivery", "shiprocket", "stcourier", "tpc"]);
+  assert.deepEqual(CARRIERS.map((c) => c.id), ["bluedart", "delhivery", "dtdc", "shiprocket", "stcourier", "tpc"]);
   assert.equal(carrierName("stcourier"), "ST Courier");
   assert.equal(carrierName("STCOURIER"), "ST Courier", "case-insensitive");
-  assert.equal(carrierName("dtdc"), "", "unknown carrier has no name");
+  assert.equal(carrierName("dtdc"), "DTDC");
+  assert.equal(carrierName("indiapost"), "", "unknown carrier has no name");
   assert.equal(isCarrier("tpc"), true);
   assert.equal(isCarrier("India Post"), false, "free text is not a carrier");
 });
@@ -178,18 +179,19 @@ test("shopCourier: what a person typed in the shop, mapped to ShipTrack when it 
     ["Delhivery", "delhivery", "Delhivery"], ["Shiprocket", "shiprocket", "Shiprocket"],
     ["ST Courier", "stcourier", "ST Courier"], ["st courier", "stcourier", "ST Courier"],
     ["TPC", "tpc", "The Professional Couriers"], ["The Professional Couriers", "tpc", "The Professional Couriers"],
+    ["DTDC", "dtdc", "DTDC"], ["dtdc courier", "dtdc", "DTDC"],
   ]) assert.deepEqual(shopCourier(raw), { id, name }, raw);
   // Unknown to ShipTrack: named as typed, no carrier id.
-  assert.deepEqual(shopCourier("DTDC"), { id: "", name: "DTDC" });
+  assert.deepEqual(shopCourier("India Post"), { id: "", name: "India Post" });
   assert.deepEqual(shopCourier("  local courier "), { id: "", name: "local courier" });
   assert.deepEqual(shopCourier(""), { id: "", name: "" });
   assert.deepEqual(shopCourier(null), { id: "", name: "" });
 });
 
 test("buildShippedMessage: an unknown courier is named in the body and buttoned to other/<awb>", () => {
-  const msg = buildShippedMessage(env, { to: "919876543210", inv, courier: "", courierName: "DTDC", awb: "D456" });
+  const msg = buildShippedMessage(env, { to: "919876543210", inv, courier: "", courierName: "India Post", awb: "D456" });
   const body = msg.template.components.find((c) => c.type === "body");
-  assert.equal(body.parameters[3].text, "DTDC", "the courier the customer was told about");
+  assert.equal(body.parameters[3].text, "India Post", "the courier the customer was told about");
   const btn = msg.template.components.find((c) => c.type === "button");
   assert.equal(btn.parameters[0].text, "other/D456",
     "ShipTrack's unknown-carrier page — honest, and never a doubled or broken link");
@@ -197,4 +199,24 @@ test("buildShippedMessage: an unknown courier is named in the body and buttoned 
   const known = buildShippedMessage(env, { to: "919876543210", inv, courier: "bluedart", awb: "BD1" });
   assert.equal(known.template.components.find((c) => c.type === "body").parameters[3].text, "Blue Dart");
   assert.equal(known.template.components.find((c) => c.type === "button").parameters[0].text, "bluedart/BD1");
+});
+
+test("DTDC: link-only — a real Track button, no live status", async () => {
+  assert.equal(isCarrier("dtdc"), true);
+  assert.equal(isLinkOnly("dtdc"), true);
+  assert.equal(isLinkOnly("DTDC"), true, "case-insensitive");
+  assert.equal(isLinkOnly("bluedart"), false);
+  // The button lands on ShipTrack's /track/dtdc/<awb>, which forwards to dtdc.com.
+  assert.equal(trackUrl(env, "dtdc", "C5000946201"), "https://shiptrack.aswincloud.com/track/dtdc/C5000946201");
+  const msg = buildShippedMessage(env, { to: "919876543210", inv, courier: "dtdc", awb: "C5000946201" });
+  assert.equal(msg.template.components.find((c) => c.type === "body").parameters[3].text, "DTDC");
+  assert.equal(msg.template.components.find((c) => c.type === "button").parameters[0].text, "dtdc/C5000946201");
+  // Never asks ShipTrack for status: there is none to get.
+  const realFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = async () => { called = true; throw new Error("must not fetch"); };
+  try {
+    assert.deepEqual(await trackShipment(env, "dtdc", "C5000946201"), { ok: false, error: "link_only" });
+    assert.equal(called, false);
+  } finally { globalThis.fetch = realFetch; }
 });
