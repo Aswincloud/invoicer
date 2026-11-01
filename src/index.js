@@ -22,6 +22,7 @@ import { freeInvoiceNumber } from "./numbering.js";
 import { cleanUpiRef, setUpiRef } from "./upiref.js";
 import { waConfigured, toE164, prettyE164, buildPaidMessage, sendTemplate, canSendWhatsApp, confirmedParams, receiptParams, templateKindFor, balanceParams, canRequestPayment, requestParams, buildPaymentRequestMessage } from "./wa.js";
 import { maySend } from "./access.js";
+import { rememberCustomer, searchCustomers, deleteCustomer } from "./customers.js";
 import { payLinkPage, startPayLink } from "./paylink.js";
 import {
   CARRIERS, carrierName, isCarrier, normalizeAwb, trackUrl,
@@ -186,6 +187,9 @@ async function api(request, env, url, ctx) {
     if (m === "DELETE") return deleteBusiness(env, user, match[1]);
   }
   if (p === "/api/invoices" && m === "GET")  return listInvoices(env, user);
+  // Saved customers, for the client-name search; see src/customers.js.
+  if (p === "/api/customers" && m === "GET") return searchCustomers(env, user, url);
+  if ((match = p.match(/^\/api\/customers\/([^/]+)$/)) && m === "DELETE") return deleteCustomer(env, user, match[1]);
   if (p === "/api/invoices" && m === "POST") return createInvoice(env, user, body);
   if (p === "/api/print"    && m === "POST") return printReceipt(env, user, body);
 
@@ -802,6 +806,7 @@ async function createInvoice(env, user, b) {
 
   await writeLineItems(env, id, items);
   await recordUpiRef(env, id, inv.status, upi.ref);
+  await rememberCustomer(env, user.id, inv);
 
   return json({ ok: true, id, total });
 }
@@ -880,6 +885,7 @@ async function updateInvoice(env, user, id, b) {
 
   await writeLineItems(env, id, items);
   await recordUpiRef(env, id, inv.status, upi.ref);
+  await rememberCustomer(env, user.id, inv, { isNew: false });   // an edit: details only, not another invoice
 
   return json({ ok: true, id, total, updated: true });
 }

@@ -6,7 +6,7 @@
    index.html loads them in this order, and the order matters: they share one
    global scope, exactly as the single file did, so a later file may call
    anything declared earlier and each file's top-level code runs as it loads.
-   core.js → money.js → render.js → assets.js → profile.js → init.js → export.js → receipt.js → backend.js → modals.js
+   core.js → money.js → render.js → assets.js → profile.js → init.js → export.js → receipt.js → backend.js → modals.js → customers.js
    Every file starts with "use strict", as the single file did. */
 "use strict";
 

@@ -465,3 +465,15 @@ table.lines tbody tr:last-child td{border-bottom:1px solid var(--paper-rule)}
 
 /* Inline text buttons, e.g. the delay notice quick fills. */
 .linkbtn{background:none;border:0;padding:0;color:var(--accent,#4f46e5);font:inherit;cursor:pointer;text-decoration:underline}
+
+/* Saved-customer suggestions under Client name (js/customers.js). */
+.cust-wrap{position:relative}
+.cust-list{position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:40;max-height:300px;overflow:auto;
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:4px}
+.cust-item{position:relative;padding:8px 34px 8px 10px;border-radius:7px;cursor:pointer;font-weight:400;text-transform:none;letter-spacing:0}
+.cust-item:hover,.cust-item.active{background:var(--surface-2)}
+.cust-main{font-size:13.5px;color:var(--ink)} .cust-main span{color:var(--muted);font-weight:500;margin-left:6px}
+.cust-sub{font-size:12px;color:var(--muted);margin-top:2px}
+.cust-del{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:transparent;color:var(--muted);
+  font-size:16px;line-height:1;padding:4px 7px;border-radius:6px;cursor:pointer}
+.cust-del:hover{background:var(--line);color:var(--ink)}
