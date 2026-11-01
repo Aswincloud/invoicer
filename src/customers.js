@@ -17,7 +17,7 @@ export function customerKey(name, phone) {
    already E.164 or "". A blank field on the new invoice does not erase what
    the customer gave before; a filled one replaces it. Never throws — a failed
    upsert must not fail the save. */
-export async function rememberCustomer(env, userId, inv) {
+export async function rememberCustomer(env, userId, inv, { isNew = true } = {}) {
   try {
     const name = String(inv.client_name || "").trim();
     const phone = String(inv.client_phone || "");
@@ -26,17 +26,18 @@ export async function rememberCustomer(env, userId, inv) {
     const t = now();
     await env.DB.prepare(
       `INSERT INTO customers (id,user_id,ckey,name,phone,email,addr,gst,invoices,last_used,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,1,?,?,?)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(user_id, ckey) DO UPDATE SET
          name = excluded.name,
          email = CASE WHEN excluded.email<>'' THEN excluded.email ELSE customers.email END,
          addr  = CASE WHEN excluded.addr<>''  THEN excluded.addr  ELSE customers.addr  END,
          gst   = CASE WHEN excluded.gst<>''   THEN excluded.gst   ELSE customers.gst   END,
-         invoices = customers.invoices + 1,
+         -- An edit re-saves the same invoice: counted on creation only.
+         invoices = customers.invoices + excluded.invoices,
          last_used = excluded.last_used, updated_at = excluded.updated_at`
     ).bind(uid(), userId, key, name.slice(0, 120), phone,
            String(inv.client_email || "").slice(0, 160), String(inv.client_addr || "").slice(0, 500),
-           String(inv.client_gst || "").slice(0, 20), t, t, t).run();
+           String(inv.client_gst || "").slice(0, 20), isNew ? 1 : 0, t, t, t).run();
   } catch (e) {
     console.error("remember customer failed", String(e?.message || e));
   }

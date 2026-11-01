@@ -21,20 +21,27 @@ CREATE TABLE IF NOT EXISTS customers (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_key ON customers(user_id, ckey);
 
--- Seed: newest invoice per customer wins for each field. Phone-keyed first.
-INSERT OR IGNORE INTO customers (id, user_id, ckey, name, phone, email, addr, gst, invoices, last_used, created_at, updated_at)
-SELECT lower(hex(randomblob(16))), i.user_id, 'p:' || i.client_phone,
-       i.client_name, i.client_phone, COALESCE(i.client_email,''), COALESCE(i.client_addr,''), COALESCE(i.client_gst,''),
-       (SELECT COUNT(*) FROM invoices j WHERE j.user_id=i.user_id AND j.client_phone=i.client_phone AND j.status<>'VOID'),
-       i.created_at, i.created_at, i.created_at
-  FROM invoices i
- WHERE i.status<>'VOID' AND COALESCE(i.client_phone,'')<>'' AND trim(COALESCE(i.client_name,''))<>''
-   AND i.created_at = (SELECT MAX(k.created_at) FROM invoices k WHERE k.user_id=i.user_id AND k.client_phone=i.client_phone AND k.status<>'VOID');
-INSERT OR IGNORE INTO customers (id, user_id, ckey, name, phone, email, addr, gst, invoices, last_used, created_at, updated_at)
-SELECT lower(hex(randomblob(16))), i.user_id, 'n:' || lower(trim(i.client_name)),
-       trim(i.client_name), '', COALESCE(i.client_email,''), COALESCE(i.client_addr,''), COALESCE(i.client_gst,''),
-       (SELECT COUNT(*) FROM invoices j WHERE j.user_id=i.user_id AND lower(trim(j.client_name))=lower(trim(i.client_name)) AND COALESCE(j.client_phone,'')='' AND j.status<>'VOID'),
-       i.created_at, i.created_at, i.created_at
-  FROM invoices i
- WHERE i.status<>'VOID' AND COALESCE(i.client_phone,'')='' AND trim(COALESCE(i.client_name,''))<>''
-   AND i.created_at = (SELECT MAX(k.created_at) FROM invoices k WHERE k.user_id=i.user_id AND lower(trim(k.client_name))=lower(trim(i.client_name)) AND COALESCE(k.client_phone,'')='' AND k.status<>'VOID');
+-- Seed: replay every saved invoice, oldest first, through the SAME upsert
+-- rememberCustomer() runs on each save (src/customers.js), so the seeded list
+-- is exactly what saving those invoices one by one would have built: the
+-- latest name wins, a blank later field never erases an earlier one, and each
+-- non-void invoice counts once. Name keys collapse internal whitespace the way
+-- customerKey() does; SQLite has no regex, so runs of up to 16 spaces are
+-- folded by repeated replace().
+INSERT INTO customers (id, user_id, ckey, name, phone, email, addr, gst, invoices, last_used, created_at, updated_at)
+SELECT lower(hex(randomblob(16))), user_id,
+       CASE WHEN COALESCE(client_phone,'')<>'' THEN 'p:' || client_phone
+            ELSE 'n:' || lower(replace(replace(replace(replace(replace(trim(client_name),'  ',' '),'  ',' '),'  ',' '),'  ',' '),'  ',' ')) END,
+       substr(trim(client_name),1,120), COALESCE(client_phone,''),
+       substr(COALESCE(client_email,''),1,160), substr(COALESCE(client_addr,''),1,500), substr(COALESCE(client_gst,''),1,20),
+       1, created_at, created_at, created_at
+  FROM invoices
+ WHERE status<>'VOID' AND trim(COALESCE(client_name,''))<>''
+ ORDER BY created_at
+ON CONFLICT(user_id, ckey) DO UPDATE SET
+  name  = excluded.name,
+  email = CASE WHEN excluded.email<>'' THEN excluded.email ELSE customers.email END,
+  addr  = CASE WHEN excluded.addr<>''  THEN excluded.addr  ELSE customers.addr  END,
+  gst   = CASE WHEN excluded.gst<>''   THEN excluded.gst   ELSE customers.gst   END,
+  invoices = customers.invoices + 1,
+  last_used = excluded.last_used, updated_at = excluded.updated_at;

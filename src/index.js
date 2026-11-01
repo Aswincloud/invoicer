@@ -885,7 +885,7 @@ async function updateInvoice(env, user, id, b) {
 
   await writeLineItems(env, id, items);
   await recordUpiRef(env, id, inv.status, upi.ref);
-  await rememberCustomer(env, user.id, inv);
+  await rememberCustomer(env, user.id, inv, { isNew: false });   // an edit: details only, not another invoice
 
   return json({ ok: true, id, total, updated: true });
 }

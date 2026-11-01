@@ -23,13 +23,34 @@ ins.run("b", "u1", "PAID", "Hitesh Ubhe", "919000000001", "h@x.in", "Ubhe Snacks
 ins.run("c", "u1", "VOID", "Cancelled Guy", "919000000002", "", "", "", 3);
 ins.run("d", "u1", "UNPAID", "Walk-in Ravi", "", "", "Counter", "", 4);
 ins.run("e", "u2", "PAID", "Other Account", "919000000003", "", "", "", 5);
+ins.run("f", "u1", "PAID", "Old Name", "919000000004", "o@x.in", "Old address", "29AAAAA0000A1Z5", 6);
+ins.run("g", "u1", "PAID", "", "919000000004", "", "", "", 7);          // newest for that phone has no name
+ins.run("h", "u1", "PAID", "Mira  Das", "", "", "Kolkata", "", 8);   // double space, no phone
+ins.run("i", "u1", "PAID", "Mira Das", "", "m@x.in", "", "", 9);
 db.exec(readFileSync(new URL("../migrations/0027_customers.sql", import.meta.url), "utf8"));
 const all = db.prepare("SELECT user_id, ckey, name, email, addr, invoices FROM customers ORDER BY ckey").all();
-check("seed: one row per customer per account, VOID ignored", all.length === 3, JSON.stringify(all.map((r) => r.ckey)));
+check("seed: one row per customer per account, VOID ignored", all.length === 5, JSON.stringify(all.map((r) => r.ckey)));
+const o = all.find((r) => r.ckey === "p:919000000004");
+check("seed: a newest invoice with no name doesn't hide the customer", o?.name === "Old Name" && o.email === "o@x.in");
+const m = all.find((r) => r.ckey === customerKey("Mira  Das", ""));
+check("seed: name keys collapse spaces exactly as customerKey does (one Mira, not two)", !!m && all.filter((r) => r.ckey.startsWith("n:mira")).length === 1, JSON.stringify(all.map((r) => r.ckey)));
+check("seed: a later blank never erases an earlier detail", m?.addr === "Kolkata" && m.email === "m@x.in", JSON.stringify(m));
 const h = all.find((r) => r.ckey === "p:919000000001");
 check("seed: newest invoice's details win, both invoices counted", h?.name === "Hitesh Ubhe" && h.email === "h@x.in" && h.addr.includes("411030") && h.invoices === 2, JSON.stringify(h));
 check("seed: a customer with no mobile is keyed by name, as the code does", all.some((r) => r.ckey === customerKey("Walk-in Ravi", "")));
 check("seed: another account's customer stays in that account", all.find((r) => r.ckey === "p:919000000003")?.user_id === "u2");
+
+// The seed must equal what rememberCustomer would have built by saving the
+// same invoices one at a time.
+{
+  const db2 = new DatabaseSync(":memory:");
+  db2.exec(readFileSync(new URL("../migrations/0027_customers.sql", import.meta.url), "utf8").replace(/INSERT INTO customers[\s\S]*$/, ""));
+  const e2 = { DB: { prepare(sql) { const st = db2.prepare(sql); const make = (a) => ({ bind: (...x) => make(x), async run() { st.run(...a); return { meta: {} }; } }); return make([]); } } };
+  for (const r of db.prepare("SELECT * FROM invoices WHERE status<>'VOID' ORDER BY created_at").all())
+    await rememberCustomer(e2, r.user_id, r);
+  const pick = (d) => d.prepare("SELECT user_id, ckey, name, phone, email, addr, gst, invoices FROM customers ORDER BY user_id, ckey").all().map((r) => JSON.stringify({ ...r }));
+  check("seed equals replaying every save through rememberCustomer", JSON.stringify(pick(db)) === JSON.stringify(pick(db2)), "\n   seed:   " + pick(db).join("\n           ") + "\n   replay: " + pick(db2).join("\n           "));
+}
 
 // D1-shaped wrapper over node:sqlite for the module under test.
 const env = { DB: { prepare(sql) { const st = db.prepare(sql); const make = (a) => ({ bind: (...x) => make(x),
@@ -42,6 +63,8 @@ const h2 = db.prepare("SELECT * FROM customers WHERE ckey='p:919000000001'").get
 check("save: same mobile updates the one row, name follows the latest", h2.name === "Hitesh U." && h2.invoices === 3);
 check("save: blanks on the new invoice don't erase earlier email/address", h2.email === "h@x.in" && h2.addr.includes("411030"));
 check("save: a newly given GSTIN is stored", h2.gst === "27ABCDE1234F1Z5");
+await rememberCustomer(env, "u1", { client_name: "Hitesh U.", client_phone: "919000000001", status: "PAID" }, { isNew: false });
+check("save: editing an existing invoice doesn't count as another invoice", db.prepare("SELECT invoices FROM customers WHERE ckey='p:919000000001'").get().invoices === 3);
 await rememberCustomer(env, "u1", { client_name: "Priya R", client_phone: "", client_addr: "Chennai", status: "UNPAID" });
 check("save: a new customer without mobile is created by name", !!db.prepare("SELECT 1 FROM customers WHERE ckey='n:priya r'").get());
 await rememberCustomer(env, "u1", { client_name: "Void Me", client_phone: "919000000009", status: "VOID" });

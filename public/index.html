@@ -123,11 +123,11 @@
         <!-- Type a name or mobile to pick a saved customer; see js/customers.js. -->
         <label class="cust-wrap">Client name
           <input id="clName" placeholder="Nova Retail Pvt. Ltd. — or type a saved customer's name or mobile"
-                 autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="custList">
+                 autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="custList" aria-haspopup="listbox">
           <div id="custList" class="cust-list" role="listbox" hidden></div>
         </label>
         <label>Client email<input id="clEmail" type="email" placeholder="priya@novaretail.com"></label>
-        <label>Client mobile <span class="hint">(for WhatsApp)</span><input id="clPhone" type="tel" placeholder="+91 98765 43210" maxlength="20"></label>
+        <label>Client mobile <span class="hint">(for WhatsApp)</span><input id="clPhone" type="tel" placeholder="+91 98765 43210" maxlength="20" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="custList" aria-haspopup="listbox"></label>
         <label class="col2">Client address<textarea id="clAddr" rows="2" placeholder="14 MG Road, Bengaluru 560001"></textarea></label>
         <label>Client GSTIN<input id="clGst" placeholder="29ABCDE1234F1Z5"></label>
       </div>
