@@ -75,8 +75,12 @@
     if(typeof applyInference === "function") applyInference();
     if(typeof update === "function") update();
   }
+  let confirming = false;     // the confirm dialog blurs the box; onBlur must not dismiss
   async function forget(c){
-    if(!confirm(`Forget ${c.name}${c.phone ? " (" + fmtPhone(c.phone) + ")" : ""} from saved customers?\n\nTheir invoices are not affected.`)) return;
+    confirming = true;
+    const ok = confirm(`Forget ${c.name}${c.phone ? " (" + fmtPhone(c.phone) + ")" : ""} from saved customers?\n\nTheir invoices are not affected.`);
+    confirming = false;
+    if(!ok){ owner.focus(); return; }
     try{
       await api("/customers/" + encodeURIComponent(c.id), { method: "DELETE" });
       rows = rows.filter((x) => x.id !== c.id); active = Math.min(active, rows.length - 1); paint(); owner.focus();
@@ -98,7 +102,7 @@
   function onBlur(){
     setTimeout(() => {
       const f = document.activeElement;
-      if(list.contains(f) || f === nameBox || f === phoneBox) return;
+      if(confirming || list.contains(f) || f === nameBox || f === phoneBox) return;
       dismiss();
     }, 120);
   }

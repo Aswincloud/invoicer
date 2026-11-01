@@ -65,6 +65,11 @@ check("save: blanks on the new invoice don't erase earlier email/address", h2.em
 check("save: a newly given GSTIN is stored", h2.gst === "27ABCDE1234F1Z5");
 await rememberCustomer(env, "u1", { client_name: "Hitesh U.", client_phone: "919000000001", status: "PAID" }, { isNew: false });
 check("save: editing an existing invoice doesn't count as another invoice", db.prepare("SELECT invoices FROM customers WHERE ckey='p:919000000001'").get().invoices === 3);
+await rememberCustomer(env, "u1", { client_name: "Draft Later", client_phone: "919000000077", status: "UNPAID" }, { isNew: false });
+check("save: an edit that introduces a customer counts that invoice (starts at 1)", db.prepare("SELECT invoices FROM customers WHERE ckey='p:919000000077'").get().invoices === 1);
+await rememberCustomer(env, "u1", { client_name: "Draft Later", client_phone: "919000000077", status: "UNPAID" }, { isNew: true });
+check("save: …and the next new invoice makes 2", db.prepare("SELECT invoices FROM customers WHERE ckey='p:919000000077'").get().invoices === 2);
+db.prepare("DELETE FROM customers WHERE ckey='p:919000000077'").run();
 await rememberCustomer(env, "u1", { client_name: "Priya R", client_phone: "", client_addr: "Chennai", status: "UNPAID" });
 check("save: a new customer without mobile is created by name", !!db.prepare("SELECT 1 FROM customers WHERE ckey='n:priya r'").get());
 await rememberCustomer(env, "u1", { client_name: "Void Me", client_phone: "919000000009", status: "VOID" });

@@ -26,18 +26,22 @@ export async function rememberCustomer(env, userId, inv, { isNew = true } = {}) 
     const t = now();
     await env.DB.prepare(
       `INSERT INTO customers (id,user_id,ckey,name,phone,email,addr,gst,invoices,last_used,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+       VALUES (?,?,?,?,?,?,?,?,1,?,?,?)
        ON CONFLICT(user_id, ckey) DO UPDATE SET
          name = excluded.name,
          email = CASE WHEN excluded.email<>'' THEN excluded.email ELSE customers.email END,
          addr  = CASE WHEN excluded.addr<>''  THEN excluded.addr  ELSE customers.addr  END,
          gst   = CASE WHEN excluded.gst<>''   THEN excluded.gst   ELSE customers.gst   END,
-         -- An edit re-saves the same invoice: counted on creation only.
-         invoices = customers.invoices + excluded.invoices,
+         -- An edit re-saves an invoice already counted, so it adds nothing to
+         -- an existing customer. A NEW row always starts at 1 (the VALUES
+         -- above): an edit can introduce a customer — a draft saved without
+         -- one, a changed client, a mobile added so the key moves from name to
+         -- phone — and that invoice is theirs.
+         invoices = customers.invoices + ?,
          last_used = excluded.last_used, updated_at = excluded.updated_at`
     ).bind(uid(), userId, key, name.slice(0, 120), phone,
            String(inv.client_email || "").slice(0, 160), String(inv.client_addr || "").slice(0, 500),
-           String(inv.client_gst || "").slice(0, 20), isNew ? 1 : 0, t, t, t).run();
+           String(inv.client_gst || "").slice(0, 20), t, t, t, isNew ? 1 : 0).run();
   } catch (e) {
     console.error("remember customer failed", String(e?.message || e));
   }
